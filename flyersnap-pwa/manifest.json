@@ -1,0 +1,14 @@
+{
+  "name": "FlyerSnap",
+  "short_name": "FlyerSnap",
+  "description": "Snap flyers, track deadlines, run the family.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F7F5F0",
+  "theme_color": "#2D5A4A",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

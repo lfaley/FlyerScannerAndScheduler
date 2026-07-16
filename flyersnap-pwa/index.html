@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2D5A4A">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>FlyerSnap</title>
+<style>
+  :root{
+    --green:#2D5A4A; --green-lt:#E4EEE9; --red:#C0392B; --amber:#B45309;
+    --bg:#F7F5F0; --card:#fff; --ink:#1E2B26; --muted:#5A6B63; --faint:#9AA8A0;
+    --line:#D5DDD8;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg);color:var(--ink);
+    padding-top:env(safe-area-inset-top);padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+  header{position:sticky;top:0;background:var(--green);color:#fff;padding:14px 16px;
+    font-weight:700;font-size:17px;z-index:10;display:flex;align-items:center;gap:10px;
+    padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
+  header .back{background:none;border:none;color:#fff;font-size:20px;padding:0 4px;font-weight:700}
+  main{padding:16px;max-width:640px;margin:0 auto}
+  nav{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;
+    border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);z-index:10}
+  nav button{flex:1;background:none;border:none;padding:8px 0 6px;font-size:11px;font-weight:600;
+    color:var(--faint);display:flex;flex-direction:column;align-items:center;gap:2px}
+  nav button.on{color:var(--green)}
+  nav button .ic{font-size:20px;opacity:.45}
+  nav button.on .ic{opacity:1}
+  .card{background:var(--card);border-radius:12px;padding:14px;margin-bottom:10px;
+    box-shadow:0 1px 4px rgba(0,0,0,.05)}
+  .row{display:flex;align-items:center;gap:12px}
+  .grow{flex:1;min-width:0}
+  .title{font-size:15px;font-weight:700}
+  .meta{font-size:13px;color:var(--muted);margin-top:2px}
+  .notes{font-size:13px;color:var(--faint);font-style:italic;margin-top:3px}
+  .stripe{border-left:5px solid var(--green)}
+  .stripe.deadline{border-left-color:var(--red)}
+  .badge{font-size:12px;font-weight:700;color:var(--green);background:var(--green-lt);
+    padding:4px 8px;border-radius:8px;white-space:nowrap}
+  .badge.urgent{color:#fff;background:var(--red)}
+  .kidtag{display:inline-block;color:#fff;font-size:11px;font-weight:700;
+    padding:3px 8px;border-radius:10px;margin-top:6px}
+  .kindtag{font-size:10px;font-weight:800;letter-spacing:.5px;color:var(--green);
+    background:var(--green-lt);padding:2px 6px;border-radius:4px}
+  .kindtag.deadline{color:#fff;background:var(--red)}
+  .btn{background:var(--green);color:#fff;border:none;border-radius:10px;
+    padding:13px 18px;font-size:15px;font-weight:700;width:100%}
+  .btn.alt{background:#fff;color:var(--green);border:1.5px solid var(--green)}
+  .btn.sm{width:auto;padding:10px 16px;font-size:13px}
+  .btn.danger{background:var(--red)}
+  .btn:disabled{opacity:.5}
+  .fab{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+    width:auto;padding:14px 24px;border-radius:28px;box-shadow:0 3px 10px rgba(0,0,0,.2);z-index:9}
+  .chip{display:inline-block;background:#fff;border:1px solid var(--line);color:var(--muted);
+    border-radius:14px;padding:6px 12px;font-size:12px;font-weight:600;margin:0 6px 6px 0}
+  .chip.on{background:var(--green);border-color:var(--green);color:#fff}
+  .check{width:26px;height:26px;border-radius:13px;border:2px solid #B8C4BE;flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:14px}
+  .check.on{background:var(--green);border-color:var(--green)}
+  input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],textarea{
+    width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;
+    padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
+  textarea{min-height:90px;resize:vertical}
+  .formrow{display:flex;gap:8px;margin-bottom:10px}
+  .label{font-size:12px;font-weight:700;color:var(--muted);margin:12px 0 6px}
+  .empty{text-align:center;padding:50px 24px;color:var(--muted)}
+  .empty .et{font-size:17px;font-weight:700;color:var(--ink);margin-bottom:8px}
+  .empty .eb{font-size:13px;line-height:1.5}
+  .sect{font-size:16px;font-weight:700;margin:18px 0 6px}
+  .help{font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:12px}
+  .filterbar{display:flex;gap:8px;overflow-x:auto;padding-bottom:10px;-webkit-overflow-scrolling:touch}
+  .balance{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid;
+    border-radius:16px;padding:6px 12px;font-size:13px;font-weight:700;white-space:nowrap}
+  .spin{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;gap:14px}
+  .spinner{width:36px;height:36px;border:4px solid var(--green-lt);border-top-color:var(--green);
+    border-radius:50%;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .celebrate{background:var(--green-lt);border-radius:10px;padding:12px;text-align:center;
+    font-weight:700;color:var(--green);margin-bottom:12px}
+  .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+    background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
+    z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none}
+  .toast.show{opacity:1}
+  .strike{text-decoration:line-through;color:var(--faint)}
+  .dim{opacity:.55}
+  .slot{display:flex;align-items:center;gap:10px;padding:6px 0}
+  .slotb{width:24px;height:24px;border-radius:12px;background:var(--green-lt);color:var(--green);
+    font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .slottext{font-size:14px}
+  .slottext.empty{color:#B8C4BE;font-style:italic}
+  .sheet{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:16px 16px 0 0;
+    padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom));z-index:20;
+    box-shadow:0 -2px 12px rgba(0,0,0,.12)}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:15}
+  .linkbtn{background:none;border:none;color:var(--green);font-weight:700;font-size:14px;padding:8px}
+  .linkbtn.red{color:var(--red)}
+  .sheetbtn{display:block;width:100%;background:var(--green-lt);color:var(--green);border:none;
+    border-radius:10px;padding:13px;font-size:15px;font-weight:700;margin-bottom:8px;text-align:center}
+  .sheetbtn.danger{background:#FDEBEA;color:var(--red)}
+  .sheetbtn.cancel{background:none;color:var(--muted);font-weight:600}
+  h3{margin:6px 0 10px;font-size:16px}
+</style>
+</head>
+<body>
+<header id="header">FlyerSnap</header>
+<main id="main"></main>
+<nav id="nav"></nav>
+<div class="toast" id="toast"></div>
+<input type="file" id="fCam" accept="image/*" capture="environment" hidden>
+<input type="file" id="fLib" accept="image/*" multiple hidden>
+<input type="file" id="fPdf" accept="application/pdf" hidden>
+<input type="file" id="fRecipe" accept="image/*" capture="environment" hidden>
+<input type="file" id="fImport" accept="application/json" hidden>
+
+<script>
+'use strict';
+// ============================================================
+// FlyerSnap PWA — single file, zero dependencies.
+// Data: localStorage JSON. Reminders: .ics calendar files w/ alarms.
+// Extraction: Claude API directly from the browser.
+// ============================================================
+
+// ---------- State & storage ----------
+const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA'];
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const SLOTS = ['breakfast','lunch','dinner'];
+
+let S = load();
+function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
+  redemptions:[], lists:[], listItems:[], recipes:[], meals:[], settings:{apiKey:''} }; }
+function load(){
+  try{
+    const raw = localStorage.getItem('flyersnap');
+    if(!raw) return blank();
+    return Object.assign(blank(), JSON.parse(raw));
+  }catch(e){ return blank(); }
+}
+function save(){ localStorage.setItem('flyersnap', JSON.stringify(S)); }
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,9); }
+function todayISO(){ const d=new Date(); return iso(d); }
+function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function parseDate(s){ const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); }
+function friendly(s){ const d=parseDate(s); return DOW[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate(); }
+function daysUntil(s){ const t=new Date(); t.setHours(0,0,0,0); return Math.round((parseDate(s)-t)/864e5); }
+function esc(x){ return String(x??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function kidById(id){ return S.kids.find(k=>k.id===id && !k.deleted); }
+
+let toastTimer;
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+// ---------- Claude API ----------
+const API_URL = 'https://api.anthropic.com/v1/messages';
+const MODEL = 'claude-sonnet-4-6';
+
+async function callClaude(contentBlocks, maxTokens){
+  if(!S.settings.apiKey) throw new Error('NO_API_KEY');
+  const res = await fetch(API_URL, {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'x-api-key': S.settings.apiKey,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true'
+    },
+    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens||2000,
+      messages:[{role:'user', content: contentBlocks}] })
+  });
+  if(!res.ok){
+    const body = await res.text();
+    throw new Error('API error '+res.status+': '+body.slice(0,200));
+  }
+  const data = await res.json();
+  return (data.content||[]).map(b=>b.type==='text'?b.text:'').join('\n')
+    .replace(/```json|```/g,'').trim();
+}
+
+function eventPrompt(){
+  return `You are reading a photo or PDF of paperwork handed out to a parent — school flyers, dance studio notices, volleyball schedules, enrollment forms, permission slips, etc.
+
+Today's date is ${todayISO()}. Use it to resolve dates that omit the year (assume the nearest future occurrence).
+
+Extract EVERY actionable date you can find. Respond with ONLY a JSON array, no markdown fences, no commentary. Each item:
+{"title":"short human-friendly name","date":"YYYY-MM-DD","time":"HH:MM in 24h or null","location":"string or null","kind":"deadline" if it is a due date / registration cutoff / form return date, otherwise "event","notes":"one short useful sentence or null"}
+
+Rules:
+- Registration/signup/payment/form-due dates are "deadline". Performances, games, meetings, picture days are "event".
+- If a date range is given, create one item for the start date and mention the range in notes.
+- If you find a deadline AND its related event, include both.
+- If no dates are found, return [].`;
+}
+
+async function extractEvents(base64, mediaType, isPdf){
+  const block = isPdf
+    ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
+    : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
+  const text = await callClaude([block, {type:'text', text:eventPrompt()}], 3000);
+  return parseExtractedEvents(text);
+}
+
+async function extractEventsFromUrl(url){
+  // Anthropic's servers fetch the URL — no browser CORS, no proxy needed.
+  // Works cleanly for PDFs; HTML pages behind a login will return an error we translate below.
+  const block = {type:'document', source:{type:'url', url}};
+  const text = await callClaude([block, {type:'text', text:eventPrompt()}], 3000);
+  return parseExtractedEvents(text);
+}
+
+function parseExtractedEvents(text){
+  let arr;
+  try{ arr = JSON.parse(text); }catch(e){ throw new Error('Could not read that document. Try a clearer photo or link.'); }
+  return (Array.isArray(arr)?arr:[]).filter(e=>e && e.title && /^\d{4}-\d{2}-\d{2}$/.test(e.date||''))
+    .map(e=>({ title:String(e.title), date:e.date,
+      time:(e.time && /^\d{2}:\d{2}$/.test(e.time))?e.time:null,
+      location:e.location||null, kind:e.kind==='deadline'?'deadline':'event', notes:e.notes||null }));
+}
+
+async function extractRecipeFromImage(base64, mediaType){
+  const prompt = `You are reading a photo of a recipe. Respond with ONLY a JSON object:
+{"title":"dish name","category":"Breakfast"|"Lunch"|"Dinner"|"Snack"|"Other","ingredients":"plain text, one per line","instructions":"numbered plain text steps"}
+If the image is not a recipe, respond with {"title":null}.`;
+  const text = await callClaude([
+    {type:'image', source:{type:'base64', media_type:mediaType, data:base64}},
+    {type:'text', text:prompt}]);
+  const r = JSON.parse(text);
+  if(!r || !r.title) throw new Error('That photo does not look like a recipe.');
+  return r;
+}
+
+// ---------- File reading / image downscale ----------
+function readFile(file){
+  return new Promise((res, rej)=>{
+    const r = new FileReader();
+    r.onload = ()=>res(r.result.split(',')[1]);
+    r.onerror = ()=>rej(new Error('Could not read the file.'));
+    r.readAsDataURL(file);
+  });
+}
+async function readImageDownscaled(file){
+  try{
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((res, rej)=>{
+      const i = new Image();
+      i.onload = ()=>res(i); i.onerror = ()=>rej(new Error('decode'));
+      i.src = url;
+    });
+    const MAX = 1600;
+    const scale = Math.min(1, MAX/Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.width*scale); c.height = Math.round(img.height*scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    return { base64: c.toDataURL('image/jpeg', 0.85).split(',')[1], mediaType:'image/jpeg' };
+  }catch(e){
+    return { base64: await readFile(file), mediaType: file.type||'image/jpeg' };
+  }
+}
+
+// ---------- ICS calendar export (with alarms) ----------
+function icsEscape(s){ return String(s??'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n'); }
+function buildVEVENT(evt){
+  const kid = evt.kidId ? kidById(evt.kidId) : null;
+  const title = (evt.kind==='deadline'?'⏰ ':'') + (kid?kid.name+': ':'') + evt.title;
+  const d = evt.date.replace(/-/g,'');
+  let dt;
+  if(evt.time){
+    const t = evt.time.replace(':','') + '00';
+    const [y,m,day] = evt.date.split('-').map(Number);
+    const [hh,mm] = evt.time.split(':').map(Number);
+    const end = new Date(y,m-1,day,hh,mm+60);
+    const endStr = iso(end).replace(/-/g,'') + 'T' + String(end.getHours()).padStart(2,'0') + String(end.getMinutes()).padStart(2,'0') + '00';
+    dt = 'DTSTART:'+d+'T'+t+'\r\nDTEND:'+endStr;
+  } else {
+    dt = 'DTSTART;VALUE=DATE:'+d;
+  }
+  const alarmDays = evt.kind==='deadline' ? [7,3,1,0] : [2,0];
+  const alarms = alarmDays.map(n=>
+    'BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEscape(title)+'\r\nTRIGGER:'+(n===0?'-PT0M':'-P'+n+'D')+'\r\nEND:VALARM'
+  ).join('\r\n');
+  const stamp = new Date().toISOString().replace(/[-:]/g,'').slice(0,15)+'Z';
+  return ['BEGIN:VEVENT','UID:'+evt.id+'@flyersnap','DTSTAMP:'+stamp, dt,
+    'SUMMARY:'+icsEscape(title),
+    evt.location?'LOCATION:'+icsEscape(evt.location):null,
+    (evt.notes||evt.source)?'DESCRIPTION:'+icsEscape([evt.notes, evt.source?'From: '+evt.source:null].filter(Boolean).join(' — ')):null,
+    alarms,'END:VEVENT'].filter(Boolean).join('\r\n');
+}
+function wrapICS(vevents){
+  return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//FlyerSnap//EN'].concat(vevents).concat(['END:VCALENDAR']).join('\r\n');
+}
+async function deliverICS(ics, filename, msg){
+  const blob = new Blob([ics], {type:'text/calendar'});
+  // Home-screen PWAs handle blob downloads inconsistently on iOS —
+  // prefer the native share sheet when available, fall back to download.
+  try{
+    const file = new File([blob], filename, {type:'text/calendar'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'FlyerSnap events'});
+      toast(msg);
+      return;
+    }
+  }catch(e){
+    if(e && e.name==='AbortError') return; // user closed the share sheet
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  toast(msg);
+}
+function downloadICS(evt){
+  deliverICS(wrapICS([buildVEVENT(evt)]),
+    evt.title.replace(/[^\w ]/g,'').slice(0,40)+'.ics',
+    'Calendar file ready — open it and tap "Add All" 📆');
+  evt.exported = true; save(); render();
+}
+function exportAllICS(){
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
+  if(!evts.length){ toast('No upcoming events to export'); return; }
+  deliverICS(wrapICS(evts.map(e=>buildVEVENT(e))), 'flyersnap-events.ics',
+    evts.length+' event'+(evts.length===1?'':'s')+' in one file — open it and tap "Add All" 📆');
+  evts.forEach(e=>e.exported=true); save(); render();
+}
+
+// ---------- Navigation ----------
+const TABS = [
+  {id:'events', label:'Events', ic:'📅', title:'FlyerSnap'},
+  {id:'chores', label:'Chores', ic:'✅', title:'Chores & Routines'},
+  {id:'lists',  label:'Lists',  ic:'🛒', title:'Lists'},
+  {id:'meals',  label:'Meals',  ic:'🍽️', title:'Meal Plan'},
+  {id:'settings', label:'Settings', ic:'⚙️', title:'Settings'},
+];
+let view = {tab:'events', sub:null, data:null};
+let lastViewKey = '';
+
+function nav(tab){ closeSheet(); view = {tab, sub:null, data:null}; render(); }
+function sub(name, data){ closeSheet(); view.sub = name; view.data = data||null; render(); }
+function back(){ closeSheet(); view.sub = null; view.data = null; render(); }
+
+function renderNav(){
+  document.getElementById('nav').innerHTML = TABS.map(t=>
+    `<button class="${view.tab===t.id?'on':''}" onclick="nav('${t.id}')">
+      <span class="ic">${t.ic}</span>${t.label}</button>`).join('');
+}
+function setHeader(title, showBack){
+  document.getElementById('header').innerHTML =
+    (showBack?`<button class="back" onclick="back()">‹</button>`:'') + esc(title);
+}
+
+function render(){
+  const key = view.tab + '|' + (view.sub||'');
+  const y = window.scrollY;
+  renderNav();
+  const m = document.getElementById('main');
+  const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
+    listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
+    busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger};
+  const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
+    meals:renderMeals, settings:renderSettings};
+  (view.sub ? subs[view.sub] : tabs[view.tab])(m);
+  if(key === lastViewKey) window.scrollTo(0, y); else window.scrollTo(0, 0);
+  lastViewKey = key;
+}
+
+function renderBusy(m){
+  setHeader('Working…', false);
+  m.innerHTML = `<div class="spin"><div class="spinner"></div>
+    <div style="font-weight:700">${esc(view.data?.msg||'Working…')}</div>
+    <div class="meta">${esc(view.data?.hint||'')}</div></div>`;
+}
+
+// ---------- Action sheet (replaces prompt() dialogs) ----------
+let sheetEls = null;
+function closeSheet(){ if(sheetEls){ sheetEls.ov.remove(); sheetEls.sh.remove(); sheetEls = null; } }
+function showSheet(title, subtitle, buttons){
+  closeSheet();
+  const ov = document.createElement('div'); ov.className = 'overlay'; ov.onclick = closeSheet;
+  const sh = document.createElement('div'); sh.className = 'sheet';
+  sh.innerHTML = `<div style="font-weight:800">${esc(title)}</div>` +
+    (subtitle ? `<div class="meta" style="margin-bottom:12px">${esc(subtitle)}</div>` : '<div style="height:10px"></div>');
+  for(const b of buttons){
+    const btn = document.createElement('button');
+    btn.className = 'sheetbtn' + (b.style ? ' ' + b.style : '');
+    btn.textContent = b.label;
+    btn.onclick = () => { closeSheet(); if(b.fn) b.fn(); };
+    sh.appendChild(btn);
+  }
+  const c = document.createElement('button');
+  c.className = 'sheetbtn cancel'; c.textContent = 'Cancel'; c.onclick = closeSheet;
+  sh.appendChild(c);
+  document.body.append(ov, sh);
+  sheetEls = {ov, sh};
+}
+
+// ---------- Events tab ----------
+let eventFilter = null;
+let showPast = false;
+function upcomingEvents(){
+  const t = todayISO();
+  return S.events.filter(e=>!e.deleted && e.date>=t && (!eventFilter || e.kidId===eventFilter))
+    .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
+}
+function pastEvents(){
+  const t = todayISO();
+  return S.events.filter(e=>!e.deleted && e.date<t && (!eventFilter || e.kidId===eventFilter))
+    .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
+}
+function backupNudge(){
+  const count = S.events.length + S.chores.length + S.recipes.length + S.listItems.length;
+  if(count < 6) return '';
+  const last = S.settings.lastBackup;
+  const snooze = S.settings.nudgeSnooze;
+  const stale = !last || daysUntil(last) <= -30;
+  const snoozed = snooze && daysUntil(snooze) > -7;
+  if(!stale || snoozed) return '';
+  return `<div class="card" style="background:var(--green-lt)">
+    <div class="title" style="font-size:14px">💾 Time for a backup</div>
+    <div class="meta">Your data lives only on this phone. ${last?'Last backup: '+friendly(last)+'.':'No backup yet.'}</div>
+    <div class="formrow" style="margin:10px 0 0">
+      <button class="btn sm" onclick="exportBackup()">Export now</button>
+      <button class="btn alt sm" onclick="S.settings.nudgeSnooze=todayISO();save();render()">Later</button>
+    </div></div>`;
+}
+function evtCard(e, isPast){
+  const days = daysUntil(e.date);
+  const urgent = !isPast && e.kind==='deadline' && days<=3;
+  const kid = e.kidId ? kidById(e.kidId) : null;
+  const badge = isPast ? 'past' : (days===0?'Today':days===1?'1 day':days+' days');
+  return `<div class="card stripe ${e.kind} ${isPast?'dim':''}" onclick="eventActions('${e.id}')">
+    <div class="row">
+      <div class="grow">
+        <div class="title">${esc(e.title)} ${e.exported?'📆':''}</div>
+        <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
+        ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
+        ${kid?`<span class="kidtag" style="background:${kid.color}">${esc(kid.name)}</span>`:''}
+      </div>
+      <span class="badge ${urgent?'urgent':''}">${badge}</span>
+    </div></div>`;
+}
+function renderEvents(m){
+  setHeader('FlyerSnap', false);
+  const kids = S.kids.filter(k=>!k.deleted);
+  const evts = upcomingEvents();
+  const past = pastEvents();
+  let html = '';
+  if(kids.length){
+    html += `<div class="filterbar">
+      <span class="chip ${eventFilter===null?'on':''}" onclick="eventFilter=null;render()">All</span>` +
+      kids.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+        onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
+  }
+  html += backupNudge();
+  if(!evts.length){
+    html += `<div class="empty"><div class="et">Nothing tracked yet</div>
+      <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
+  } else {
+    html += `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="exportAllICS()">📆 Export all to calendar</button></div>`;
+    html += evts.map(e=>evtCard(e, false)).join('');
+  }
+  if(past.length){
+    html += `<div style="text-align:center;margin-top:6px">
+      <button class="linkbtn" onclick="showPast=!showPast;render()">${showPast?'▾':'▸'} Past events (${past.length})</button></div>`;
+    if(showPast) html += past.map(e=>evtCard(e, true)).join('');
+  }
+  html += `<button class="btn fab" onclick="captureAppend=false;sub('capture')">＋ Add paperwork</button>
+    <div style="height:70px"></div>`;
+  m.innerHTML = html;
+}
+function eventActions(id){
+  const e = S.events.find(x=>x.id===id);
+  if(!e) return;
+  showSheet(e.title, friendly(e.date) + (e.time?' · '+e.time:''), [
+    {label: e.exported ? '📆 Calendar file again' : '📆 Add to calendar (with alerts)', fn:()=>downloadICS(e)},
+    {label:'✏️ Edit event', fn:()=>openEventEdit(e.id)},
+    {label:'🗑 Remove event', style:'danger', fn:()=>{
+      if(confirm(`Remove "${e.title}"?`)){ e.deleted=true; save(); render(); }
+    }},
+  ]);
+}
+
+// ---------- Capture & Review ----------
+let pendingEvents = [], pendingSource = '', captureAppend = false;
+
+function renderCapture(m){
+  setHeader('Add Paperwork', true);
+  m.innerHTML = `
+    <div style="font-size:18px;font-weight:700;margin-bottom:14px">Where is the paperwork?</div>
+    <div class="card row" onclick="document.getElementById('fCam').click()">
+      <span style="font-size:28px">📷</span>
+      <div class="grow"><div class="title">Take a photo</div><div class="meta">Flyer in hand — snap it now</div></div></div>
+    <div class="card row" onclick="document.getElementById('fLib').click()">
+      <span style="font-size:28px">🖼️</span>
+      <div class="grow"><div class="title">Choose from Photos</div><div class="meta">Pick one or several pages at once</div></div></div>
+    <div class="card row" onclick="document.getElementById('fPdf').click()">
+      <span style="font-size:28px">📄</span>
+      <div class="grow"><div class="title">Import a PDF</div><div class="meta">Saved from an email attachment</div></div></div>
+    <div class="card row" onclick="openLinkSheet()">
+      <span style="font-size:28px">🔗</span>
+      <div class="grow"><div class="title">Paste a link</div><div class="meta">Flyer URL from ParentSquare, an email, or a school site</div></div></div>
+    <div class="help">Tip: on ParentSquare links, long-press the link in your email and pick "Open in Safari" — otherwise iOS opens the app instead of the flyer.</div>`;
+}
+
+function dupKey(t, d){ return String(t).toLowerCase().trim() + '|' + d; }
+
+async function handleCapture(fileList, isPdf){
+  const files = Array.from(fileList||[]).filter(Boolean);
+  if(!files.length) return;
+  if(!S.settings.apiKey){
+    alert('Add your Anthropic API key in Settings first.'); nav('settings'); return;
+  }
+  const append = captureAppend && pendingEvents.length > 0;
+  captureAppend = false;
+  sub('busy', {msg:'Reading the document…', hint:'Claude is finding dates, times, and deadlines'});
+  try{
+    let found = [];
+    for(let i=0; i<files.length; i++){
+      if(files.length>1) sub('busy', {msg:`Reading page ${i+1} of ${files.length}…`, hint:'Claude is finding dates, times, and deadlines'});
+      const f = files[i];
+      let base64, mediaType;
+      if(isPdf){ base64 = await readFile(f); mediaType='application/pdf'; }
+      else { const r = await readImageDownscaled(f); base64=r.base64; mediaType=r.mediaType; }
+      found = found.concat(await extractEvents(base64, mediaType, isPdf));
+    }
+    if(!found.length){
+      alert('No dates found. Try a clearer photo or a different page.');
+      append ? sub('review') : back();
+      return;
+    }
+    // Duplicate detection: against saved events, prior pending items, and within this batch
+    const seen = new Set(S.events.filter(e=>!e.deleted).map(e=>dupKey(e.title, e.date)));
+    if(append) for(const p of pendingEvents) seen.add(dupKey(p.title, p.date));
+    const items = [];
+    for(const e of found){
+      const key = dupKey(e.title, e.date);
+      const dup = seen.has(key);
+      seen.add(key);
+      items.push({...e, selected:!dup, dup, kidId:null});
+    }
+    if(append){ pendingEvents = pendingEvents.concat(items); }
+    else {
+      pendingEvents = items;
+      pendingSource = isPdf ? (files[0].name||'PDF import') : 'Photo '+todayISO();
+    }
+    sub('review');
+  }catch(err){
+    alert(err.message==='NO_API_KEY' ? 'Add your Anthropic API key in Settings first.' : 'Extraction failed: '+err.message);
+    append ? sub('review') : back();
+  }
+}
+
+function scanAnother(){ captureAppend = true; document.getElementById('fCam').click(); }
+
+function openLinkSheet(){
+  const overlay = document.createElement('div'); overlay.className='overlay';
+  const sh = document.createElement('div'); sh.className='sheet';
+  sh.innerHTML = `<div style="font-weight:800">Paste a flyer link</div>
+    <div class="meta" style="margin-bottom:12px">Direct PDF links work best. Login-protected pages (e.g. some ParentSquare posts) won't work — save the PDF and use Import instead.</div>
+    <input type="text" id="linkUrl" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <div style="height:10px"></div>
+    <button class="sheetbtn" style="background:var(--green);color:#fff" onclick="submitLink()">Read this link</button>
+    <button class="sheetbtn cancel" onclick="closeLinkSheet()">Cancel</button>`;
+  overlay.onclick = closeLinkSheet;
+  document.body.append(overlay, sh);
+  window._linkSheet = {overlay, sh};
+  setTimeout(()=>{ const i = document.getElementById('linkUrl'); if(i) i.focus(); }, 50);
+}
+function closeLinkSheet(){
+  if(window._linkSheet){ window._linkSheet.overlay.remove(); window._linkSheet.sh.remove(); window._linkSheet=null; }
+}
+function submitLink(){
+  const url = (document.getElementById('linkUrl').value||'').trim();
+  if(!/^https?:\/\//i.test(url)){ alert('Paste a full URL that starts with http:// or https://'); return; }
+  closeLinkSheet();
+  handleLinkCapture(url);
+}
+
+async function handleLinkCapture(url){
+  if(!S.settings.apiKey){
+    alert('Add your Anthropic API key in Settings first.'); nav('settings'); return;
+  }
+  const append = captureAppend && pendingEvents.length > 0;
+  captureAppend = false;
+  sub('busy', {msg:'Fetching the link…', hint:'Claude is finding dates, times, and deadlines'});
+  try{
+    const found = await extractEventsFromUrl(url);
+    if(!found.length){
+      alert('No dates found at that link. If it needed a login, try opening it in Safari, saving the PDF, and importing it.');
+      append ? sub('review') : back();
+      return;
+    }
+    const seen = new Set(S.events.filter(e=>!e.deleted).map(e=>dupKey(e.title, e.date)));
+    if(append) for(const p of pendingEvents) seen.add(dupKey(p.title, p.date));
+    const items = [];
+    for(const e of found){
+      const key = dupKey(e.title, e.date);
+      const dup = seen.has(key); seen.add(key);
+      items.push({...e, selected:!dup, dup, kidId:null});
+    }
+    let host = url; try{ host = new URL(url).hostname.replace(/^www\./,''); }catch(e){}
+    if(append){ pendingEvents = pendingEvents.concat(items); }
+    else { pendingEvents = items; pendingSource = 'Link · ' + host; }
+    sub('review');
+  }catch(err){
+    if(err.message === 'NO_API_KEY'){ alert('Add your Anthropic API key in Settings first.'); }
+    else if(/40\d|fetch|url|access|forbidden|unauth/i.test(err.message)){
+      alert('Could not fetch that link — it likely needs a login. Open it in Safari, save the PDF, and use Import instead.');
+    } else {
+      alert('Extraction failed: ' + err.message);
+    }
+    append ? sub('review') : back();
+  }
+}
+
+function renderReview(m){
+  setHeader('Found Events', true);
+  const kids = S.kids.filter(k=>!k.deleted);
+  const n = pendingEvents.filter(e=>e.selected).length;
+  const dups = pendingEvents.filter(e=>e.dup).length;
+  let html = `<div class="help">Found ${pendingEvents.length} item${pendingEvents.length===1?'':'s'}. Tap to include or skip.${dups?` ${dups} already tracked (unchecked for you).`:''}</div>`;
+  if(kids.length>1){
+    html += `<div style="margin-bottom:10px"><span class="label" style="margin-right:6px">Tag all as:</span>` +
+      kids.map(k=>`<span class="chip" onclick="tagAll('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
+  }
+  if(!kids.length) html += `<div class="help" style="font-style:italic">Tip: add your kids in Settings to tag events per kid.</div>`;
+  html += pendingEvents.map((e,i)=>`
+    <div class="card ${e.selected?'':'dim'}" style="${e.selected?'border:2px solid var(--green)':'border:2px solid transparent'}">
+      <div class="row" onclick="toggleReview(${i})">
+        <div class="check ${e.selected?'on':''}">${e.selected?'✓':''}</div>
+        <div class="grow">
+          <div class="row"><div class="title grow">${esc(e.title)}</div>
+            ${e.dup?`<span class="kindtag" style="background:#FDEBEA;color:var(--red)">TRACKED</span>`:''}
+            <span class="kindtag ${e.kind}">${e.kind==='deadline'?'DEADLINE':'EVENT'}</span>
+            <button class="linkbtn" style="padding:2px 4px" onclick="event.stopPropagation();openPendingEdit(${i})">✏️</button></div>
+          <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
+          ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
+        </div>
+      </div>
+      ${e.selected && kids.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #EEF2EF">
+        <span class="label" style="margin-right:6px">Who:</span>` +
+        kids.map(k=>`<span class="chip" style="${e.kidId===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+          onclick="setReviewKid(${i},'${k.id}')">${esc(k.name)}</span>`).join('') + `</div>` : ''}
+    </div>`).join('');
+  html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">＋ Scan another page</button></div>
+    <button class="btn fab" onclick="saveReview()">Track ${n} item${n===1?'':'s'}</button>
+    <div style="height:70px"></div>`;
+  m.innerHTML = html;
+}
+function toggleReview(i){ pendingEvents[i].selected = !pendingEvents[i].selected; render(); }
+function setReviewKid(i,kid){ pendingEvents[i].kidId = pendingEvents[i].kidId===kid?null:kid; render(); }
+function tagAll(kid){ pendingEvents.forEach(e=>{ if(e.selected) e.kidId=kid; }); render(); }
+function saveReview(){
+  const chosen = pendingEvents.filter(e=>e.selected);
+  if(!chosen.length){ alert('Tap the events you want to track, then save.'); return; }
+  for(const e of chosen){
+    S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
+      kind:e.kind, notes:e.notes, kidId:e.kidId, source:pendingSource, exported:false, deleted:false });
+  }
+  save();
+  toast(`Tracking ${chosen.length} item${chosen.length===1?'':'s'} — tap any event to add calendar alerts`);
+  pendingEvents = [];
+  view = {tab:'events', sub:null, data:null}; render();
+}
+
+// ---------- Event editing ----------
+let eventForm = null;
+function openEventEdit(id){
+  const e = S.events.find(x=>x.id===id);
+  eventForm = { saved:true, ref:id, title:e.title, date:e.date, time:e.time||'',
+    location:e.location||'', notes:e.notes||'', kind:e.kind, kidId:e.kidId||null };
+  sub('eventEdit');
+}
+function openPendingEdit(i){
+  const e = pendingEvents[i];
+  eventForm = { saved:false, ref:i, title:e.title, date:e.date, time:e.time||'',
+    location:e.location||'', notes:e.notes||'', kind:e.kind, kidId:e.kidId||null };
+  sub('eventEdit');
+}
+function renderEventEdit(m){
+  document.getElementById('header').innerHTML =
+    `<button class="back" onclick="cancelEventEdit()">‹</button>Edit Event`;
+  const f = eventForm;
+  const kids = S.kids.filter(k=>!k.deleted);
+  m.innerHTML = `
+    <div class="label" style="margin-top:0">Title</div>
+    <input type="text" id="efTitle" value="${esc(f.title)}">
+    <div class="formrow" style="margin-top:10px;margin-bottom:0">
+      <div style="flex:1"><div class="label" style="margin-top:0">Date</div>
+        <input type="date" id="efDate" value="${esc(f.date)}"></div>
+      <div style="flex:1"><div class="label" style="margin-top:0">Time (optional)</div>
+        <input type="time" id="efTime" value="${esc(f.time)}"></div>
+    </div>
+    <div class="label">Type</div>
+    <span class="chip ${f.kind==='event'?'on':''}" onclick="syncEventForm();eventForm.kind='event';render()">Event</span>
+    <span class="chip ${f.kind==='deadline'?'on':''}" onclick="syncEventForm();eventForm.kind='deadline';render()">Deadline</span>
+    ${kids.length ? `<div class="label">Who</div>
+      <span class="chip ${!f.kidId?'on':''}" onclick="syncEventForm();eventForm.kidId=null;render()">No one</span>` +
+      kids.map(k=>`<span class="chip" style="${f.kidId===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+        onclick="syncEventForm();eventForm.kidId='${k.id}';render()">${esc(k.name)}</span>`).join('') : ''}
+    <div class="label">Location</div>
+    <input type="text" id="efLoc" value="${esc(f.location)}">
+    <div class="label">Notes</div>
+    <input type="text" id="efNotes" value="${esc(f.notes)}">
+    <div style="height:14px"></div>
+    <button class="btn" onclick="saveEventEdit()">Save changes</button>
+    <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="cancelEventEdit()">Cancel</button></div>`;
+}
+function syncEventForm(){
+  const g = id => document.getElementById(id);
+  if(g('efTitle')) eventForm.title = g('efTitle').value;
+  if(g('efDate')) eventForm.date = g('efDate').value;
+  if(g('efTime')) eventForm.time = g('efTime').value;
+  if(g('efLoc')) eventForm.location = g('efLoc').value;
+  if(g('efNotes')) eventForm.notes = g('efNotes').value;
+}
+function saveEventEdit(){
+  syncEventForm();
+  const f = eventForm;
+  if(!f.title.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(f.date)){
+    alert('The event needs a title and a valid date.'); return;
+  }
+  const fields = { title:f.title.trim(), date:f.date, time:f.time||null,
+    location:(f.location||'').trim()||null, notes:(f.notes||'').trim()||null,
+    kind:f.kind, kidId:f.kidId };
+  if(f.saved){
+    const e = S.events.find(x=>x.id===f.ref);
+    const timingChanged = e.date!==fields.date || (e.time||'')!==(f.time||'');
+    Object.assign(e, fields);
+    if(timingChanged && e.exported){ e.exported = false; }
+    save();
+    eventForm = null;
+    view = {tab:'events', sub:null, data:null}; render();
+    toast(timingChanged ? 'Event updated — re-add to calendar for new alerts' : 'Event updated');
+  } else {
+    Object.assign(pendingEvents[f.ref], fields);
+    eventForm = null;
+    sub('review');
+  }
+}
+function cancelEventEdit(){
+  const wasSaved = eventForm && eventForm.saved;
+  eventForm = null;
+  if(wasSaved){ view = {tab:'events', sub:null, data:null}; render(); }
+  else sub('review');
+}
+
+// ---------- Chores tab ----------
+let choreForm = null;
+function choresForToday(){
+  const dow = new Date().getDay();
+  return S.chores.filter(c=>!c.deleted && (c.frequency==='daily' ||
+    (c.daysOfWeek||'').split(',').filter(Boolean).map(Number).includes(dow)));
+}
+function completionFor(choreId, date){
+  return S.completions.find(c=>c.choreId===choreId && c.date===date);
+}
+function starBalances(){
+  const bal = {};
+  for(const c of S.completions){ if(c.kidId) bal[c.kidId]=(bal[c.kidId]||0)+(c.stars||0); }
+  for(const r of S.redemptions){ bal[r.kidId]=(bal[r.kidId]||0)-r.stars; }
+  return bal;
+}
+function renderChores(m){
+  setHeader('Chores & Routines', false);
+  const kids = S.kids.filter(k=>!k.deleted);
+  const chores = choresForToday();
+  const bal = starBalances();
+  const t = todayISO();
+  let html = '';
+  if(kids.length){
+    html += `<div class="filterbar">` + kids.map(k=>
+      `<span class="balance" style="border-color:${k.color}">
+        <span style="color:${k.color}">${esc(k.name)}</span> ⭐ ${bal[k.id]||0}</span>`).join('') +
+      `<button class="btn sm" style="border-radius:16px" onclick="sub('rewards')">🎁 Rewards</button></div>`;
+  }
+  const allDone = chores.length>0 && chores.every(c=>completionFor(c.id,t));
+  if(allDone) html += `<div class="celebrate">🎉 All chores done today!</div>`;
+  if(!chores.length){
+    html += `<div class="empty"><div class="et">No chores due today</div>
+      <div class="eb">Add daily routines or weekly chores — tag them to a kid and set star values.</div></div>`;
+  } else {
+    html += chores.map(c=>{
+      const done = completionFor(c.id, t);
+      const kid = c.kidId ? kidById(c.kidId) : null;
+      const when = c.frequency==='weekly'
+        ? (c.daysOfWeek||'').split(',').filter(Boolean).map(d=>DOW[Number(d)]).join(' ')
+        : 'Every day';
+      return `<div class="card row ${done?'dim':''}" onclick="toggleChore('${c.id}')" oncontextmenu="return delChore(event,'${c.id}')">
+        <div class="check ${done?'on':''}">${done?'✓':''}</div>
+        <div class="grow"><div class="title ${done?'strike':''}">${esc(c.title)}</div>
+          <div class="meta">${kid?esc(kid.name):'Anyone'} · ${when}</div></div>
+        ${c.stars>0?`<span style="font-size:12px">${'⭐'.repeat(Math.min(c.stars,5))}</span>`:''}
+        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delChoreById('${c.id}')">✕</button>
+      </div>`;
+    }).join('');
+  }
+  if(choreForm){
+    html += renderChoreForm();
+  } else {
+    html += `<button class="btn fab" onclick="choreForm={title:'',kidId:null,frequency:'daily',days:[],stars:1};render()">＋ Add chore</button>`;
+  }
+  html += `<div style="height:70px"></div>`;
+  m.innerHTML = html;
+  if(choreForm){ const inp=document.getElementById('choreTitle'); if(inp && !choreForm.title) inp.focus(); }
+}
+function renderChoreForm(){
+  const kids = S.kids.filter(k=>!k.deleted);
+  const f = choreForm;
+  return `<div class="card" style="border:2px solid var(--green)">
+    <input type="text" id="choreTitle" placeholder="Chore (emoji ok, e.g. 🦷 Brush teeth)" value="${esc(f.title)}"
+      oninput="choreForm.title=this.value">
+    <div class="label">Who</div>
+    <span class="chip ${f.kidId===null?'on':''}" onclick="choreForm.kidId=null;syncChoreTitle();render()">Anyone</span>` +
+    kids.map(k=>`<span class="chip" style="${f.kidId===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+      onclick="choreForm.kidId='${k.id}';syncChoreTitle();render()">${esc(k.name)}</span>`).join('') + `
+    <div class="label">When</div>
+    <span class="chip ${f.frequency==='daily'?'on':''}" onclick="choreForm.frequency='daily';syncChoreTitle();render()">Daily</span>
+    <span class="chip ${f.frequency==='weekly'?'on':''}" onclick="choreForm.frequency='weekly';syncChoreTitle();render()">Weekly</span>
+    ${f.frequency==='weekly' ? `<div style="margin-top:6px">` + DOW.map((d,i)=>
+      `<span class="chip ${f.days.includes(i)?'on':''}" onclick="toggleChoreDay(${i})">${d}</span>`).join('') + `</div>` : ''}
+    <div class="label">Stars</div>` +
+    [0,1,2,3,5].map(s=>`<span class="chip ${f.stars===s?'on':''}" onclick="choreForm.stars=${s};syncChoreTitle();render()">${s===0?'None':s+' ⭐'}</span>`).join('') + `
+    <div class="formrow" style="margin-top:12px">
+      <button class="btn" onclick="saveChoreForm()">Save chore</button>
+      <button class="btn alt" style="width:auto" onclick="choreForm=null;render()">Cancel</button>
+    </div></div>`;
+}
+function syncChoreTitle(){ const i=document.getElementById('choreTitle'); if(i) choreForm.title=i.value; }
+function toggleChoreDay(d){
+  syncChoreTitle();
+  const i = choreForm.days.indexOf(d);
+  i>=0 ? choreForm.days.splice(i,1) : choreForm.days.push(d);
+  render();
+}
+function saveChoreForm(){
+  syncChoreTitle();
+  const f = choreForm;
+  if(!f.title.trim()) return;
+  if(f.frequency==='weekly' && !f.days.length){ alert('Choose at least one day of the week.'); return; }
+  S.chores.push({ id:uid(), title:f.title.trim(), kidId:f.kidId, frequency:f.frequency,
+    daysOfWeek:f.frequency==='weekly'?f.days.join(','):null, stars:f.stars, deleted:false });
+  choreForm = null; save(); render();
+}
+function toggleChore(id){
+  const c = S.chores.find(x=>x.id===id);
+  const t = todayISO();
+  const done = completionFor(id, t);
+  if(done){ S.completions = S.completions.filter(x=>x!==done); save(); render(); return; }
+  const kids = S.kids.filter(k=>!k.deleted);
+  // "Anyone" chores with star value: ask who did it so the stars land somewhere
+  if(!c.kidId && c.stars>0 && kids.length){
+    showSheet(c.title, 'Who did it?',
+      kids.map(k=>({label:'⭐ '+k.name, fn:()=>completeChore(c, k.id)}))
+        .concat([{label:'Just check it off (no stars)', fn:()=>completeChore(c, null)}]));
+    return;
+  }
+  completeChore(c, c.kidId);
+}
+function completeChore(c, kidId){
+  S.completions.push({ id:uid(), choreId:c.id, kidId:kidId||null, date:todayISO(), stars:kidId?(c.stars||0):0 });
+  if(kidId && c.stars>0){
+    const kid = kidById(kidId);
+    if(kid) toast(`⭐ ${kid.name} earned ${c.stars} star${c.stars>1?'s':''} — now at ${starBalances()[kid.id]||0}`);
+  }
+  save(); render();
+}
+function delChoreById(id){
+  const c = S.chores.find(x=>x.id===id);
+  if(confirm(`Delete "${c.title}"? Past stars are kept.`)){ c.deleted=true; save(); render(); }
+}
+function delChore(ev,id){ ev.preventDefault(); delChoreById(id); return false; }
+
+// ---------- Rewards ----------
+function renderRewards(m){
+  setHeader('Rewards', true);
+  const kids = S.kids.filter(k=>!k.deleted);
+  const bal = starBalances();
+  const rewards = S.rewards.filter(r=>!r.deleted).sort((a,b)=>a.cost-b.cost);
+  let html = `<div class="filterbar">` + kids.map(k=>
+    `<span class="balance" style="border-color:${k.color}">
+      <span style="color:${k.color}">${esc(k.name)}</span> ⭐ ${bal[k.id]||0}</span>`).join('') +
+    `<button class="btn sm alt" style="border-radius:16px;white-space:nowrap" onclick="sub('ledger')">📜 History</button></div>`;
+  if(!rewards.length){
+    html += `<div class="empty"><div class="et">No rewards yet</div>
+      <div class="eb">Add things worth working toward — movie night, ice cream run, extra screen time — and set the star cost.</div></div>`;
+  } else {
+    html += rewards.map(r=>`<div class="card row" onclick="redeem('${r.id}')">
+      <span style="font-size:24px">🎁</span>
+      <div class="grow"><div class="title">${esc(r.title)}</div>
+        <div class="meta" style="font-size:11px">Tap to redeem</div></div>
+      <span style="font-weight:700;color:var(--amber)">⭐ ${r.cost}</span>
+      <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delReward('${r.id}')">✕</button>
+    </div>`).join('');
+  }
+  html += `<div class="card"><div class="formrow" style="margin:0">
+    <input type="text" id="rwTitle" placeholder="New reward (e.g. Movie night)">
+    <input type="number" id="rwCost" placeholder="⭐" value="10" style="width:70px;text-align:center">
+    <button class="btn sm" onclick="addReward()">Add</button></div></div>`;
+  m.innerHTML = html;
+}
+function addReward(){
+  const t = document.getElementById('rwTitle').value.trim();
+  const c = parseInt(document.getElementById('rwCost').value,10);
+  if(!t || !c || c<1){ alert('Give the reward a name and a star cost of at least 1.'); return; }
+  S.rewards.push({id:uid(), title:t, cost:c, deleted:false});
+  save(); render();
+}
+function delReward(id){
+  const r = S.rewards.find(x=>x.id===id);
+  if(confirm(`Delete "${r.title}"? Past redemptions are kept.`)){ r.deleted=true; save(); render(); }
+}
+function redeem(id){
+  const r = S.rewards.find(x=>x.id===id);
+  const kids = S.kids.filter(k=>!k.deleted);
+  if(!kids.length){ alert('Add kids in Settings first.'); return; }
+  const bal = starBalances();
+  showSheet(`Redeem "${r.title}"`, `Costs ⭐ ${r.cost} — who is redeeming?`,
+    kids.map(k=>({label:`${k.name} (⭐ ${bal[k.id]||0})`, fn:()=>{
+      const has = bal[k.id]||0;
+      if(has < r.cost){ alert(`${k.name} has ${has} of ${r.cost} stars needed. Keep going!`); return; }
+      S.redemptions.push({id:uid(), rewardId:r.id, kidId:k.id, stars:r.cost, date:todayISO()});
+      save(); render();
+      toast(`🎁 ${k.name} traded ${r.cost} stars for "${r.title}". Enjoy!`);
+    }})));
+}
+
+// ---------- Star ledger ----------
+let ledgerKid = null;
+function renderLedger(m){
+  setHeader('Star History', true);
+  const kids = S.kids.filter(k=>!k.deleted);
+  const choreById = {}; S.chores.forEach(c=>choreById[c.id]=c);
+  const rewardById = {}; S.rewards.forEach(r=>rewardById[r.id]=r);
+  let entries = [];
+  for(const c of S.completions){
+    if(c.kidId && c.stars>0)
+      entries.push({date:c.date, kidId:c.kidId, label:(choreById[c.choreId]||{}).title||'Chore', delta:c.stars});
+  }
+  for(const r of S.redemptions){
+    entries.push({date:r.date||'', kidId:r.kidId, label:(rewardById[r.rewardId]||{}).title||'Reward', delta:-r.stars});
+  }
+  if(ledgerKid) entries = entries.filter(e=>e.kidId===ledgerKid);
+  entries.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  let html = '';
+  if(kids.length>1){
+    html += `<div class="filterbar">
+      <span class="chip ${ledgerKid===null?'on':''}" onclick="ledgerKid=null;render()">All</span>` +
+      kids.map(k=>`<span class="chip" style="${ledgerKid===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+        onclick="ledgerKid='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
+  }
+  if(!entries.length){
+    html += `<div class="empty"><div class="eb">No star activity yet — stars show up here as chores get checked off.</div></div>`;
+  } else {
+    html += entries.slice(0,200).map(e=>{
+      const kid = kidById(e.kidId);
+      return `<div class="card row" style="padding:12px">
+        <div class="grow"><div style="font-weight:600;font-size:14px">${esc(e.label)}</div>
+          <div class="meta" style="font-size:12px">${kid?esc(kid.name)+' · ':''}${e.date?friendly(e.date):'—'}</div></div>
+        <span style="font-weight:800;color:${e.delta>0?'var(--green)':'var(--red)'}">${e.delta>0?'+':''}${e.delta} ⭐</span>
+      </div>`;
+    }).join('');
+  }
+  m.innerHTML = html;
+}
+
+// ---------- Lists tab ----------
+function renderLists(m){
+  setHeader('Lists', false);
+  const lists = S.lists.filter(l=>!l.deleted);
+  let html = '';
+  if(!lists.length){
+    html += `<div class="empty"><div class="et">No lists yet</div>
+      <div class="eb">Groceries, packing lists for dance competitions, back-to-school shopping — make as many as you need.</div></div>`;
+  } else {
+    html += lists.map(l=>{
+      const open = S.listItems.filter(i=>i.listId===l.id && !i.deleted && !i.checked).length;
+      const emoji = /grocer|shop|store/i.test(l.name)?'🛒':'📝';
+      return `<div class="card row" onclick="sub('listDetail',{id:'${l.id}'})">
+        <span style="font-size:20px">${emoji}</span>
+        <div class="title grow">${esc(l.name)}</div>
+        <span class="meta">${open===0?'done':open+' open'}</span>
+        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delList('${l.id}')">✕</button>
+      </div>`;
+    }).join('');
+  }
+  html += `<div class="card"><div class="formrow" style="margin:0">
+    <input type="text" id="newList" placeholder="New list (e.g. Groceries)" onkeydown="if(event.key==='Enter')addList()">
+    <button class="btn sm" onclick="addList()">Add</button></div></div>`;
+  m.innerHTML = html;
+}
+function addList(){
+  const t = document.getElementById('newList').value.trim();
+  if(!t) return;
+  S.lists.push({id:uid(), name:t, deleted:false});
+  save(); render();
+}
+function delList(id){
+  const l = S.lists.find(x=>x.id===id);
+  if(confirm(`Delete "${l.name}" and its items?`)){ l.deleted=true; save(); render(); }
+}
+function renderListDetail(m){
+  const list = S.lists.find(l=>l.id===view.data.id);
+  setHeader(list.name, true);
+  const items = S.listItems.filter(i=>i.listId===list.id && !i.deleted)
+    .sort((a,b)=>(a.checked?1:0)-(b.checked?1:0));
+  const anyChecked = items.some(i=>i.checked);
+  let html = items.length ? items.map(i=>`
+    <div class="card row" style="padding:12px" onclick="toggleItem('${i.id}')">
+      <div class="check ${i.checked?'on':''}" style="width:24px;height:24px">${i.checked?'✓':''}</div>
+      <div class="grow ${i.checked?'strike':''}" style="font-size:15px">${esc(i.text)}</div>
+    </div>`).join('')
+    : `<div class="empty"><div class="eb">Nothing here yet — add the first item below.</div></div>`;
+  if(anyChecked) html += `<div style="text-align:center"><button class="linkbtn red" onclick="clearChecked('${list.id}')">Clear checked items</button></div>`;
+  html += `<div class="card"><div class="formrow" style="margin:0">
+    <input type="text" id="newItem" placeholder="Add item" onkeydown="if(event.key==='Enter')addItem('${list.id}')">
+    <button class="btn sm" onclick="addItem('${list.id}')">Add</button></div></div>`;
+  m.innerHTML = html;
+}
+function addItem(listId){
+  const inp = document.getElementById('newItem');
+  const t = inp.value.trim();
+  if(!t) return;
+  S.listItems.push({id:uid(), listId, text:t, checked:false, deleted:false});
+  save(); render();
+  const again = document.getElementById('newItem'); if(again) again.focus();
+}
+function toggleItem(id){
+  const i = S.listItems.find(x=>x.id===id);
+  i.checked = !i.checked; save(); render();
+}
+function clearChecked(listId){
+  S.listItems.forEach(i=>{ if(i.listId===listId && i.checked) i.deleted=true; });
+  save(); render();
+}
+
+// ---------- Meals tab ----------
+let mealEdit = null;
+function next7(){
+  const out=[]; const d=new Date();
+  for(let i=0;i<7;i++) out.push(iso(new Date(d.getFullYear(),d.getMonth(),d.getDate()+i)));
+  return out;
+}
+function renderMeals(m){
+  setHeader('Meal Plan', false);
+  const days = next7();
+  const recipes = S.recipes.filter(r=>!r.deleted);
+  let html = `<button class="btn alt" onclick="sub('recipeBox')">📖 Recipe Box (${recipes.length})</button><div style="height:12px"></div>`;
+  html += days.map((d,idx)=>`<div class="card">
+    <div style="font-size:14px;font-weight:800;margin-bottom:6px">${idx===0?'Today':idx===1?'Tomorrow':friendly(d)}</div>` +
+    SLOTS.map(slot=>{
+      const meal = S.meals.find(x=>x.date===d && x.slot===slot && !x.deleted);
+      return `<div class="slot" onclick="openMealEdit('${d}','${slot}')">
+        <span class="slotb">${slot[0].toUpperCase()}</span>
+        <span class="slottext ${meal?'':'empty'}">${meal?esc(meal.title):'Tap to plan'}</span></div>`;
+    }).join('') + `</div>`).join('');
+  m.innerHTML = html;
+  if(mealEdit) showMealSheet();
+}
+function openMealEdit(date, slot){
+  const meal = S.meals.find(x=>x.date===date && x.slot===slot && !x.deleted);
+  mealEdit = {date, slot, text: meal?meal.title:''};
+  render();
+}
+function showMealSheet(){
+  const recipes = S.recipes.filter(r=>!r.deleted);
+  const ov = document.createElement('div'); ov.className='overlay'; ov.onclick=()=>{mealEdit=null;render();};
+  const sh = document.createElement('div'); sh.className='sheet';
+  sh.innerHTML = `<div class="label" style="margin-top:0">${mealEdit.slot.toUpperCase()} · ${friendly(mealEdit.date)}</div>
+    <div class="formrow">
+      <input type="text" id="mealText" placeholder="What's the plan? (empty to clear)" value="${esc(mealEdit.text)}">
+      <button class="btn sm" onclick="saveMeal()">Save</button>
+    </div>` +
+    (recipes.length ? `<div class="filterbar" style="padding-bottom:0">` +
+      recipes.map(r=>`<span class="chip" style="background:var(--green-lt);border-color:var(--green-lt);color:var(--green)"
+        onclick="saveMeal('${r.id}')">${esc(r.title)}</span>`).join('') + `</div>` : '');
+  document.getElementById('main').append(ov, sh);
+  document.getElementById('mealText').focus();
+}
+function saveMeal(recipeId){
+  const r = recipeId ? S.recipes.find(x=>x.id===recipeId) : null;
+  const text = r ? r.title : document.getElementById('mealText').value.trim();
+  S.meals = S.meals.filter(x=>!(x.date===mealEdit.date && x.slot===mealEdit.slot));
+  if(text) S.meals.push({id:uid(), date:mealEdit.date, slot:mealEdit.slot, title:text, recipeId:recipeId||null, deleted:false});
+  mealEdit = null; save(); render();
+}
+
+// ---------- Recipe Box ----------
+let recipeForm = null;
+function renderRecipeBox(m){
+  setHeader('Recipe Box', true);
+  const recipes = S.recipes.filter(r=>!r.deleted).sort((a,b)=>a.title.localeCompare(b.title));
+  let html = `<div class="formrow">
+    <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
+    <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
+  </div>`;
+  if(!recipes.length){
+    html += `<div class="empty"><div class="eb">The recipe box is empty. Photograph a recipe card or cookbook page and Claude will type it up for you.</div></div>`;
+  } else {
+    html += recipes.map(r=>`<div class="card row" onclick="showRecipe('${r.id}')">
+      <div class="grow"><div class="title">${esc(r.title)}</div>
+        ${r.category?`<div class="meta" style="font-size:11px">${esc(r.category)}</div>`:''}</div>
+      <span class="meta" style="font-size:11px">tap to view</span>
+      <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delRecipe('${r.id}')">✕</button>
+    </div>`).join('');
+  }
+  m.innerHTML = html;
+}
+function showRecipe(id){
+  const r = S.recipes.find(x=>x.id===id);
+  alert(r.title + (r.category?'\nCategory: '+r.category:'') +
+    (r.ingredients?'\n\nIngredients:\n'+r.ingredients:'') +
+    (r.instructions?'\n\nInstructions:\n'+r.instructions:''));
+}
+function delRecipe(id){
+  const r = S.recipes.find(x=>x.id===id);
+  if(confirm(`Delete "${r.title}"?`)){ r.deleted=true; save(); render(); }
+}
+function renderRecipeForm(m){
+  setHeader('New Recipe', true);
+  const f = recipeForm;
+  m.innerHTML = `
+    <input type="text" id="rTitle" placeholder="Recipe name" value="${esc(f.title)}" style="margin-bottom:10px">
+    <div>` + ['Breakfast','Lunch','Dinner','Snack','Other'].map(c=>
+      `<span class="chip ${f.category===c?'on':''}" onclick="syncRecipeForm();recipeForm.category='${c}';render()">${c}</span>`).join('') + `</div>
+    <div class="label">Ingredients (one per line)</div>
+    <textarea id="rIng">${esc(f.ingredients)}</textarea>
+    <div class="label">Instructions</div>
+    <textarea id="rIns">${esc(f.instructions)}</textarea>
+    <div style="height:12px"></div>
+    <button class="btn" onclick="saveRecipe()">Save recipe</button>
+    <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="back();sub('recipeBox')">Cancel</button></div>`;
+}
+function syncRecipeForm(){
+  const t=document.getElementById('rTitle'), i=document.getElementById('rIng'), n=document.getElementById('rIns');
+  if(t) recipeForm.title=t.value;
+  if(i) recipeForm.ingredients=i.value;
+  if(n) recipeForm.instructions=n.value;
+}
+function saveRecipe(){
+  syncRecipeForm();
+  if(!recipeForm.title.trim()) return;
+  S.recipes.push({ id:uid(), title:recipeForm.title.trim(), category:recipeForm.category,
+    ingredients:recipeForm.ingredients, instructions:recipeForm.instructions, deleted:false });
+  recipeForm = null; save(); sub('recipeBox');
+}
+async function handleRecipeScan(file){
+  if(!file) return;
+  if(!S.settings.apiKey){ alert('Add your Anthropic API key in Settings first.'); nav('settings'); return; }
+  sub('busy', {msg:'Reading the recipe…', hint:''});
+  try{
+    const {base64, mediaType} = await readImageDownscaled(file);
+    const r = await extractRecipeFromImage(base64, mediaType);
+    recipeForm = { title:r.title||'', category:['Breakfast','Lunch','Dinner','Snack','Other'].includes(r.category)?r.category:'Other',
+      ingredients:r.ingredients||'', instructions:r.instructions||'' };
+    sub('recipeForm');
+  }catch(err){
+    alert('Scan failed: '+err.message);
+    sub('recipeBox');
+  }
+}
+
+// ---------- Settings tab ----------
+function renderSettings(m){
+  setHeader('Settings', false);
+  const kids = S.kids.filter(k=>!k.deleted);
+  m.innerHTML = `
+    <div class="sect">Kids</div>
+    <div class="help">Add your kids to tag events and chores per kid.</div>
+    <div class="formrow">
+      <input type="text" id="kidName" placeholder="Kid's name" onkeydown="if(event.key==='Enter')addKid()">
+      <button class="btn sm" onclick="addKid()">Add</button>
+    </div>` +
+    kids.map(k=>`<div class="card row" style="padding:12px">
+      <span style="width:12px;height:12px;border-radius:6px;background:${k.color};flex-shrink:0"></span>
+      <div class="grow" style="font-weight:600">${esc(k.name)}</div>
+      <button class="linkbtn red" onclick="delKid('${k.id}')">Remove</button></div>`).join('') + `
+
+    <div class="sect">Anthropic API key</div>
+    <div class="help">${S.settings.apiKey
+      ? 'A key is saved on this device. Paste a new one to replace it.'
+      : 'FlyerSnap sends your photos to the Claude API to read them. Create a key at console.anthropic.com and paste it here. It is stored only in this phone\u2019s browser.'}</div>
+    <div class="formrow">
+      <input type="password" id="apiKey" placeholder="sk-ant-...">
+      <button class="btn sm" onclick="saveKey()">Save</button>
+    </div>
+
+    <div class="sect">Backup</div>
+    <div class="help">Your data lives in this phone's browser storage. Export a backup now and then — especially before clearing Safari data.</div>
+    <div class="formrow">
+      <button class="btn alt" onclick="exportBackup()">⬇️ Export backup</button>
+      <button class="btn alt" onclick="document.getElementById('fImport').click()">⬆️ Restore</button>
+    </div>
+
+    <div class="sect">Reminders</div>
+    <div class="help">Tap any event → "Add to calendar" downloads a calendar file with alerts baked in
+      (deadlines: 7/3/1 days before + day of; events: 2 days before + day of). Open it and tap "Add All" —
+      the iPhone Calendar app delivers the reminders from there.</div>`;
+}
+function addKid(){
+  const inp = document.getElementById('kidName');
+  const name = inp.value.trim();
+  if(!name) return;
+  if(S.kids.some(k=>!k.deleted && k.name.toLowerCase()===name.toLowerCase())){
+    alert(name+' is already on the list.'); return;
+  }
+  const color = KID_COLORS[S.kids.filter(k=>!k.deleted).length % KID_COLORS.length];
+  S.kids.push({id:uid(), name, color, deleted:false});
+  save(); render();
+}
+function delKid(id){
+  const k = kidById(id);
+  if(!confirm(`Remove ${k.name}? Their events and chores stay but lose the tag.`)) return;
+  k.deleted = true;
+  S.events.forEach(e=>{ if(e.kidId===id) e.kidId=null; });
+  S.chores.forEach(c=>{ if(c.kidId===id) c.kidId=null; });
+  save(); render();
+}
+function saveKey(){
+  const v = document.getElementById('apiKey').value.trim();
+  if(!v.startsWith('sk-ant-')){ alert('Anthropic API keys start with "sk-ant-".'); return; }
+  S.settings.apiKey = v; save(); render();
+  toast('API key saved on this device');
+}
+function exportBackup(){
+  S.settings.lastBackup = todayISO();
+  save();
+  const blob = new Blob([JSON.stringify(S, null, 1)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'flyersnap-backup-'+todayISO()+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('Backup downloaded');
+  render();
+}
+function importBackup(file){
+  if(!file) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    try{
+      const data = JSON.parse(r.result);
+      if(!data.events || !data.settings) throw new Error('bad');
+      if(!confirm('Replace everything in the app with this backup?')) return;
+      S = Object.assign(blank(), data); save(); render();
+      toast('Backup restored');
+    }catch(e){ alert('That file is not a FlyerSnap backup.'); }
+  };
+  r.readAsText(file);
+}
+
+// ---------- File input wiring ----------
+document.getElementById('fCam').addEventListener('change', e=>{ handleCapture(e.target.files, false); e.target.value=''; });
+document.getElementById('fLib').addEventListener('change', e=>{ handleCapture(e.target.files, false); e.target.value=''; });
+document.getElementById('fPdf').addEventListener('change', e=>{ handleCapture(e.target.files, true); e.target.value=''; });
+document.getElementById('fRecipe').addEventListener('change', e=>{ handleRecipeScan(e.target.files[0]); e.target.value=''; });
+document.getElementById('fImport').addEventListener('change', e=>{ importBackup(e.target.files[0]); e.target.value=''; });
+
+// ---------- Boot ----------
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+// Ask iOS to protect this app's storage from eviction
+if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+render();
+</script>
+</body>
+</html>
