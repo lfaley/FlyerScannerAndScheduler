@@ -317,18 +317,74 @@ async function deliverICS(ics, filename, msg){
   document.body.appendChild(a); a.click(); a.remove();
   toast(msg);
 }
-function downloadICS(evt){
+function downloadICS(evt, customMsg){
   deliverICS(wrapICS([buildVEVENT(evt)]),
     evt.title.replace(/[^\w ]/g,'').slice(0,40)+'.ics',
-    'Calendar file ready — open it and tap "Add All" 📆');
+    customMsg || 'Sent to Calendar — tap Add there to save it 📆');
   evt.exported = true; save(); render();
 }
-function exportAllICS(){
-  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
-  if(!evts.length){ toast('No upcoming events to export'); return; }
-  deliverICS(wrapICS(evts.map(e=>buildVEVENT(e))), 'flyersnap-events.ics',
-    evts.length+' event'+(evts.length===1?'':'s')+' in one file — open it and tap "Add All" 📆');
-  evts.forEach(e=>e.exported=true); save(); render();
+
+// iOS strips the "Add All" button from multi-event .ics files, so batching them
+// into one file is a dead-end. Instead we queue events and send them one at a
+// time — iOS handles single-event files smoothly.
+function startExportQueue(){
+  const evts = S.events.filter(e=>!e.deleted && !e.exported && e.date>=todayISO());
+  if(!evts.length){
+    const already = S.events.filter(e=>!e.deleted && e.exported && e.date>=todayISO()).length;
+    toast(already ? 'All upcoming events already in Calendar' : 'No upcoming events to add');
+    return;
+  }
+  S.settings.exportQueue = evts.map(e=>e.id);
+  save(); render();
+}
+function exportNextInQueue(){
+  const q = S.settings.exportQueue || [];
+  if(!q.length) return;
+  const id = q[0];
+  S.settings.exportQueue = q.slice(1);
+  save();
+  const evt = S.events.find(x=>x.id===id);
+  if(!evt || evt.deleted){ render(); return; }
+  const remaining = S.settings.exportQueue.length;
+  const msg = remaining > 0
+    ? `Sent to Calendar — tap Add, then come back for ${remaining} more`
+    : 'Last one! Tap Add in Calendar to finish';
+  downloadICS(evt, msg);
+}
+function skipNextInQueue(){
+  const q = S.settings.exportQueue || [];
+  if(!q.length) return;
+  S.settings.exportQueue = q.slice(1);
+  save(); render();
+}
+function cancelExportQueue(){
+  if(!confirm('Cancel adding the rest to Calendar?')) return;
+  S.settings.exportQueue = [];
+  save(); render();
+}
+function exportQueueBanner(){
+  const q = S.settings.exportQueue || [];
+  if(!q.length) return '';
+  const next = S.events.find(x=>x.id===q[0] && !x.deleted);
+  if(!next){
+    S.settings.exportQueue = q.slice(1); save();
+    return exportQueueBanner();
+  }
+  const alreadyDone = S.events.filter(e=>!e.deleted && e.exported && e.date>=todayISO()).length;
+  const total = q.length + alreadyDone;
+  const done = alreadyDone;
+  return `<div class="card" style="background:var(--green);color:#fff">
+    <div style="font-weight:800;margin-bottom:4px">Adding events to Calendar</div>
+    <div style="font-size:13px;opacity:0.92;margin-bottom:4px">${done+1} of ${total}: ${esc(next.title)}</div>
+    <div style="font-size:12px;opacity:0.85;line-height:1.45;margin-bottom:10px">
+      Tap <b>Add next</b> → Calendar opens → tap <b>Add</b> → come back and repeat.
+    </div>
+    <button class="btn" style="background:#fff;color:var(--green);margin-bottom:2px" onclick="exportNextInQueue()">Add next event →</button>
+    <div style="display:flex;gap:8px;margin-top:2px">
+      <button class="linkbtn" style="color:#fff;flex:1" onclick="skipNextInQueue()">Skip this one</button>
+      <button class="linkbtn" style="color:#fff;flex:1" onclick="cancelExportQueue()">Cancel</button>
+    </div>
+  </div>`;
 }
 
 // ---------- Navigation ----------
@@ -459,11 +515,15 @@ function renderEvents(m){
         onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
   }
   html += backupNudge();
+  html += exportQueueBanner();
   if(!evts.length){
     html += `<div class="empty"><div class="et">Nothing tracked yet</div>
       <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
   } else {
-    html += `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="exportAllICS()">📆 Export all to calendar</button></div>`;
+    const unexported = evts.filter(e=>!e.exported).length;
+    if(unexported > 0 && !(S.settings.exportQueue||[]).length){
+      html += `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="startExportQueue()">📆 Add ${unexported} to Calendar</button></div>`;
+    }
     html += evts.map(e=>evtCard(e, false)).join('');
   }
   if(past.length){
