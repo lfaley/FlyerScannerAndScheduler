@@ -327,13 +327,9 @@ function downloadICS(evt, customMsg){
 // iOS strips the "Add All" button from multi-event .ics files, so batching them
 // into one file is a dead-end. Instead we queue events and send them one at a
 // time — iOS handles single-event files smoothly.
-function startExportQueue(){
-  const evts = S.events.filter(e=>!e.deleted && !e.exported && e.date>=todayISO());
-  if(!evts.length){
-    const already = S.events.filter(e=>!e.deleted && e.exported && e.date>=todayISO()).length;
-    toast(already ? 'All upcoming events already in Calendar' : 'No upcoming events to add');
-    return;
-  }
+function startExportQueue(force){
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO() && (force || !e.exported));
+  if(!evts.length){ toast('No upcoming events to add'); return; }
   S.settings.exportQueue = evts.map(e=>e.id);
   save(); render();
 }
@@ -521,8 +517,10 @@ function renderEvents(m){
       <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
   } else {
     const unexported = evts.filter(e=>!e.exported).length;
-    if(unexported > 0 && !(S.settings.exportQueue||[]).length){
-      html += `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="startExportQueue()">📆 Add ${unexported} to Calendar</button></div>`;
+    if(!(S.settings.exportQueue||[]).length){
+      html += unexported > 0
+        ? `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="startExportQueue()">📆 Add ${unexported} to Calendar</button></div>`
+        : `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="startExportQueue(true)">📆 Re-add all ${evts.length} to Calendar</button></div>`;
     }
     html += evts.map(e=>evtCard(e, false)).join('');
   }
@@ -560,6 +558,9 @@ function renderCapture(m){
     <div class="card row" onclick="document.getElementById('fLib').click()">
       <span style="font-size:28px">🖼️</span>
       <div class="grow"><div class="title">Choose from Photos</div><div class="meta">Pick one or several pages at once</div></div></div>
+    <div class="card row" onclick="pasteFromClipboard()">
+      <span style="font-size:28px">📋</span>
+      <div class="grow"><div class="title">Paste an image</div><div class="meta">Uses whatever image is on your clipboard</div></div></div>
     <div class="card row" onclick="document.getElementById('fPdf').click()">
       <span style="font-size:28px">📄</span>
       <div class="grow"><div class="title">Import a PDF</div><div class="meta">Saved from an email attachment</div></div></div>
@@ -618,6 +619,33 @@ async function handleCapture(fileList, isPdf){
 }
 
 function scanAnother(){ captureAppend = true; document.getElementById('fCam').click(); }
+
+async function pasteFromClipboard(){
+  if(!navigator.clipboard || !navigator.clipboard.read){
+    alert('This iOS version does not support paste. Use Choose from Photos instead.');
+    return;
+  }
+  try{
+    const items = await navigator.clipboard.read();
+    for(const item of items){
+      for(const type of item.types){
+        if(type.startsWith('image/')){
+          const blob = await item.getType(type);
+          const file = new File([blob], 'pasted.'+type.split('/')[1], {type});
+          handleCapture([file], false);
+          return;
+        }
+      }
+    }
+    alert('No image on your clipboard. Copy an image first (long-press it in Mail, Photos, or Safari and tap Copy), then come back and tap Paste an image.');
+  }catch(err){
+    if(err.name === 'NotAllowedError'){
+      alert('Paste blocked. When you tap Paste an image, iOS will ask "Allow paste?" — tap Allow.');
+    } else {
+      alert('Could not read the clipboard: ' + err.message);
+    }
+  }
+}
 
 function openLinkSheet(){
   const overlay = document.createElement('div'); overlay.className='overlay';
@@ -1260,9 +1288,9 @@ function renderSettings(m){
     </div>
 
     <div class="sect">Reminders</div>
-    <div class="help">Tap any event → "Add to calendar" downloads a calendar file with alerts baked in
-      (deadlines: 7/3/1 days before + day of; events: 2 days before + day of). Open it and tap "Add All" —
-      the iPhone Calendar app delivers the reminders from there.</div>`;
+    <div class="help">Tap "📆 Add N to Calendar" on the Events tab to send events to your iPhone Calendar one at a time (works around iOS's missing "Add All" button). Each event carries alerts: deadlines 7/3/1 days + day of; events 2 days + day of.</div>
+
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.4 · queue export + paste</div>`;
 }
 function addKid(){
   const inp = document.getElementById('kidName');
