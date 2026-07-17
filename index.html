@@ -133,12 +133,20 @@ const SLOTS = ['breakfast','lunch','dinner'];
 
 let S = load();
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
-  redemptions:[], lists:[], listItems:[], recipes:[], meals:[], settings:{apiKey:''} }; }
+  redemptions:[], lists:[], listItems:[], recipes:[], meals:[],
+  settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false } }; }
 function load(){
+  const base = blank();
   try{
     const raw = localStorage.getItem('flyersnap');
-    if(!raw) return blank();
-    return Object.assign(blank(), JSON.parse(raw));
+    if(!raw) return base;
+    const parsed = JSON.parse(raw);
+    const defaults = base.settings;
+    const s = Object.assign(base, parsed);
+    // settings is nested, so merge it rather than letting old saves drop new keys
+    s.settings = Object.assign({}, defaults, parsed.settings||{});
+    s.settings.alerts = Object.assign({}, defaults.alerts, (parsed.settings||{}).alerts||{});
+    return s;
   }catch(e){ return blank(); }
 }
 function save(){ localStorage.setItem('flyersnap', JSON.stringify(S)); }
@@ -268,9 +276,29 @@ async function readImageDownscaled(file){
 
 // ---------- ICS calendar export (with alarms) ----------
 function icsEscape(s){ return String(s??'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n'); }
-function buildVEVENT(evt){
+const ALERT_CHOICES = [14, 7, 3, 2, 1, 0];
+function alertLabel(n){ return n===0 ? 'Day of' : n===1 ? '1 day' : n+' days'; }
+
+// Apple Calendar honors only two alerts per event, so the two NEAREST offsets
+// become real alarms; anything earlier can optionally become its own entry.
+function alertPlan(kind){
+  const chosen = ((S.settings.alerts||{})[kind] || []).slice().sort((x,y)=>x-y);
+  return { alarms: chosen.slice(0,2), extras: S.settings.extraReminders ? chosen.slice(2) : [] };
+}
+
+function eventTitle(evt){
   const kid = evt.kidId ? kidById(evt.kidId) : null;
-  const title = (evt.kind==='deadline'?'⏰ ':'') + (kid?kid.name+': ':'') + evt.title;
+  return (evt.kind==='deadline'?'\u23f0 ':'') + (kid?kid.name+': ':'') + evt.title;
+}
+function icsStamp(){ return new Date().toISOString().replace(/[-:]/g,'').slice(0,15)+'Z'; }
+function valarm(title, daysBefore){
+  return 'BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEscape(title)+
+    '\r\nTRIGGER:'+(daysBefore===0?'-PT0M':'-P'+daysBefore+'D')+'\r\nEND:VALARM';
+}
+
+function buildVEVENT(evt){
+  const plan = alertPlan(evt.kind);
+  const title = eventTitle(evt);
   const d = evt.date.replace(/-/g,'');
   let dt;
   if(evt.time){
@@ -283,17 +311,32 @@ function buildVEVENT(evt){
   } else {
     dt = 'DTSTART;VALUE=DATE:'+d;
   }
-  const alarmDays = evt.kind==='deadline' ? [7,3,1,0] : [2,0];
-  const alarms = alarmDays.map(n=>
-    'BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEscape(title)+'\r\nTRIGGER:'+(n===0?'-PT0M':'-P'+n+'D')+'\r\nEND:VALARM'
-  ).join('\r\n');
-  const stamp = new Date().toISOString().replace(/[-:]/g,'').slice(0,15)+'Z';
-  return ['BEGIN:VEVENT','UID:'+evt.id+'@flyersnap','DTSTAMP:'+stamp, dt,
+  const alarms = plan.alarms.map(n=>valarm(title, n)).join('\r\n');
+  return ['BEGIN:VEVENT','UID:'+evt.id+'@flyersnap','DTSTAMP:'+icsStamp(), dt,
     'SUMMARY:'+icsEscape(title),
     evt.location?'LOCATION:'+icsEscape(evt.location):null,
-    (evt.notes||evt.source)?'DESCRIPTION:'+icsEscape([evt.notes, evt.source?'From: '+evt.source:null].filter(Boolean).join(' — ')):null,
-    alarms,'END:VEVENT'].filter(Boolean).join('\r\n');
+    (evt.notes||evt.source)?'DESCRIPTION:'+icsEscape([evt.notes, evt.source?'From: '+evt.source:null].filter(Boolean).join(' \u2014 ')):null,
+    alarms || null,'END:VEVENT'].filter(Boolean).join('\r\n');
 }
+
+// A standalone 8:00 AM nudge entry, for lead times past Apple's 2-alert cap.
+function buildReminderVEVENT(evt, daysBefore){
+  const [y,m,day] = evt.date.split('-').map(Number);
+  const dt = new Date(y, m-1, day - daysBefore, 8, 0);
+  const ds = iso(dt).replace(/-/g,'');
+  const title = '\u23f0 ' + alertLabel(daysBefore) + ' until: ' + eventTitle(evt).replace(/^\u23f0 /,'');
+  return ['BEGIN:VEVENT','UID:'+evt.id+'-r'+daysBefore+'@flyersnap','DTSTAMP:'+icsStamp(),
+    'DTSTART:'+ds+'T080000','DTEND:'+ds+'T081500',
+    'SUMMARY:'+icsEscape(title),
+    'DESCRIPTION:'+icsEscape('Actual date: '+friendly(evt.date)+(evt.time?' at '+evt.time:'')),
+    valarm(title, 0),'END:VEVENT'].join('\r\n');
+}
+
+function buildVEVENTs(evt){
+  const plan = alertPlan(evt.kind);
+  return [buildVEVENT(evt)].concat(plan.extras.map(n=>buildReminderVEVENT(evt, n)));
+}
+
 function wrapICS(vevents){
   return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//FlyerSnap//EN'].concat(vevents).concat(['END:VCALENDAR']).join('\r\n');
 }
@@ -333,7 +376,9 @@ async function shareICSFile(ics, filename){
 function addAllAtOnce(){
   const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
   if(!evts.length){ toast('No upcoming events'); return; }
-  deliverICS(wrapICS(evts.map(e=>buildVEVENT(e))), 'flyersnap-events.ics',
+  const veh = [];
+  evts.forEach(e=>veh.push(...buildVEVENTs(e)));
+  deliverICS(wrapICS(veh), 'flyersnap-events.ics',
     'Tap "Add All" in the Calendar screen that opens 📆');
   evts.forEach(e=>e.exported=true); save();
 }
@@ -341,12 +386,14 @@ function addAllAtOnce(){
 function emailAllToSelf(){
   const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
   if(!evts.length){ toast('No upcoming events'); return; }
-  shareICSFile(wrapICS(evts.map(e=>buildVEVENT(e))), 'flyersnap-events.ics');
+  const veh2 = [];
+  evts.forEach(e=>veh2.push(...buildVEVENTs(e)));
+  shareICSFile(wrapICS(veh2), 'flyersnap-events.ics');
   toast('Pick Mail, send it to yourself, then tap the attachment');
 }
 
 function downloadICS(evt, customMsg){
-  deliverICS(wrapICS([buildVEVENT(evt)]),
+  deliverICS(wrapICS(buildVEVENTs(evt)),
     evt.title.replace(/[^\w ]/g,'').slice(0,40)+'.ics',
     customMsg || 'Sent to Calendar — tap Add there to save it 📆');
   evt.exported = true; save(); render();
@@ -1321,10 +1368,57 @@ function renderSettings(m){
       <button class="btn alt" onclick="document.getElementById('fImport').click()">⬆️ Restore</button>
     </div>
 
-    <div class="sect">Reminders</div>
-    <div class="help">Tap "📆 Add N to Calendar" on the Events tab to send events to your iPhone Calendar one at a time (works around iOS's missing "Add All" button). Each event carries alerts: deadlines 7/3/1 days + day of; events 2 days + day of.</div>
+    <div class="sect">Alerts</div>
+    <div class="help">Pick when you want to be warned. <b>iPhone Calendar only keeps 2 alerts per event</b> — the two closest to the date become the event's alerts.</div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.5 · calendar fix</div>`;
+    <div class="label">Deadlines (registration, forms due)</div>
+    <div>${ALERT_CHOICES.map(n=>`<span class="chip ${(S.settings.alerts.deadline||[]).includes(n)?'on':''}"
+      onclick="toggleAlert('deadline',${n})">${alertLabel(n)}</span>`).join('')}</div>
+    ${alertSummary('deadline')}
+
+    <div class="label">Events (recitals, games, meetings)</div>
+    <div>${ALERT_CHOICES.map(n=>`<span class="chip ${(S.settings.alerts.event||[]).includes(n)?'on':''}"
+      onclick="toggleAlert('event',${n})">${alertLabel(n)}</span>`).join('')}</div>
+    ${alertSummary('event')}
+
+    <div class="card" style="margin-top:12px">
+      <div class="row">
+        <div class="grow">
+          <div class="title" style="font-size:14px">Extra reminder entries</div>
+          <div class="meta">Turn any lead times past the first two into their own 8:00 AM calendar entries, so nothing gets dropped.</div>
+        </div>
+        <span class="chip ${S.settings.extraReminders?'on':''}" onclick="toggleExtraReminders()">${S.settings.extraReminders?'On':'Off'}</span>
+      </div>
+    </div>
+
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.6 · custom alerts</div>`;
+}
+function alertSummary(kind){
+  const plan = alertPlan(kind);
+  if(!plan.alarms.length) return `<div class="help" style="color:var(--red)">No alerts — pick at least one.</div>`;
+  let s = `Calendar alerts: ${plan.alarms.map(alertLabel).join(' and ')}.`;
+  const chosen = ((S.settings.alerts||{})[kind]||[]).slice().sort((x,y)=>x-y);
+  const overflow = chosen.slice(2);
+  if(overflow.length){
+    s += S.settings.extraReminders
+      ? ` Plus separate entries at ${overflow.map(alertLabel).join(', ')}.`
+      : ` ${overflow.map(alertLabel).join(', ')} won't fit — turn on extra entries below to keep them.`;
+  }
+  return `<div class="help">${s}</div>`;
+}
+function toggleAlert(kind, n){
+  const cur = (S.settings.alerts[kind] || []).slice();
+  const i = cur.indexOf(n);
+  if(i >= 0){
+    if(cur.length === 1){ toast('Keep at least one alert'); return; }
+    cur.splice(i,1);
+  } else cur.push(n);
+  S.settings.alerts[kind] = cur;
+  save(); render();
+}
+function toggleExtraReminders(){
+  S.settings.extraReminders = !S.settings.extraReminders;
+  save(); render();
 }
 function addKid(){
   const inp = document.getElementById('kidName');
