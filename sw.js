@@ -1,6 +1,6 @@
 // FlyerSnap service worker — network-first so git pushes show up immediately,
 // with cache fallback so the app still opens offline.
-const CACHE = 'flyersnap-v5';
+const CACHE = 'flyersnap-v6';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

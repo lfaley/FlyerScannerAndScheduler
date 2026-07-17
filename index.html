@@ -297,26 +297,54 @@ function buildVEVENT(evt){
 function wrapICS(vevents){
   return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//FlyerSnap//EN'].concat(vevents).concat(['END:VCALENDAR']).join('\r\n');
 }
-async function deliverICS(ics, filename, msg){
+function deliverICS(ics, filename, msg){
+  // iOS never offers Calendar in the share sheet. But Safari DOES render a
+  // text/calendar URL with an Add / Add All button. So we navigate to a blob
+  // URL instead of sharing a file.
   const blob = new Blob([ics], {type:'text/calendar'});
-  // Home-screen PWAs handle blob downloads inconsistently on iOS —
-  // prefer the native share sheet when available, fall back to download.
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if(!win){
+    // Popup blocked (rare inside a tap handler) — fall back to a download.
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
+  if(msg) toast(msg);
+}
+
+// Last-resort path: hand the file to the share sheet so it can be mailed to
+// yourself — Mail's ICS attachments import with one tap.
+async function shareICSFile(ics, filename){
+  const blob = new Blob([ics], {type:'text/calendar'});
   try{
     const file = new File([blob], filename, {type:'text/calendar'});
     if(navigator.canShare && navigator.canShare({files:[file]})){
       await navigator.share({files:[file], title:'FlyerSnap events'});
-      toast(msg);
       return;
     }
-  }catch(e){
-    if(e && e.name==='AbortError') return; // user closed the share sheet
-  }
+  }catch(e){ if(e && e.name==='AbortError') return; }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
+  a.href = URL.createObjectURL(blob); a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
-  toast(msg);
 }
+
+function addAllAtOnce(){
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
+  if(!evts.length){ toast('No upcoming events'); return; }
+  deliverICS(wrapICS(evts.map(e=>buildVEVENT(e))), 'flyersnap-events.ics',
+    'Tap "Add All" in the Calendar screen that opens 📆');
+  evts.forEach(e=>e.exported=true); save();
+}
+
+function emailAllToSelf(){
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
+  if(!evts.length){ toast('No upcoming events'); return; }
+  shareICSFile(wrapICS(evts.map(e=>buildVEVENT(e))), 'flyersnap-events.ics');
+  toast('Pick Mail, send it to yourself, then tap the attachment');
+}
+
 function downloadICS(evt, customMsg){
   deliverICS(wrapICS([buildVEVENT(evt)]),
     evt.title.replace(/[^\w ]/g,'').slice(0,40)+'.ics',
@@ -516,11 +544,8 @@ function renderEvents(m){
     html += `<div class="empty"><div class="et">Nothing tracked yet</div>
       <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
   } else {
-    const unexported = evts.filter(e=>!e.exported).length;
     if(!(S.settings.exportQueue||[]).length){
-      html += unexported > 0
-        ? `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="startExportQueue()">📆 Add ${unexported} to Calendar</button></div>`
-        : `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="startExportQueue(true)">📆 Re-add all ${evts.length} to Calendar</button></div>`;
+      html += `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
     }
     html += evts.map(e=>evtCard(e, false)).join('');
   }
@@ -533,6 +558,15 @@ function renderEvents(m){
     <div style="height:70px"></div>`;
   m.innerHTML = html;
 }
+function calendarOptions(){
+  const n = S.events.filter(e=>!e.deleted && e.date>=todayISO()).length;
+  showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
+    {label:'📆 Open all ' + n + ' now (tap "Add All")', fn:()=>addAllAtOnce()},
+    {label:'✉️ Email them to myself', fn:()=>emailAllToSelf()},
+    {label:'1️⃣ One at a time', fn:()=>startExportQueue(true)},
+  ]);
+}
+
 function eventActions(id){
   const e = S.events.find(x=>x.id===id);
   if(!e) return;
@@ -1290,7 +1324,7 @@ function renderSettings(m){
     <div class="sect">Reminders</div>
     <div class="help">Tap "📆 Add N to Calendar" on the Events tab to send events to your iPhone Calendar one at a time (works around iOS's missing "Add All" button). Each event carries alerts: deadlines 7/3/1 days + day of; events 2 days + day of.</div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.4 · queue export + paste</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.5 · calendar fix</div>`;
 }
 function addKid(){
   const inp = document.getElementById('kidName');
