@@ -490,7 +490,8 @@ function render(){
   const m = document.getElementById('main');
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
-    busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger};
+    busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
+    shareEvents:renderShareEvents};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
@@ -592,7 +593,9 @@ function renderEvents(m){
       <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
   } else {
     if(!(S.settings.exportQueue||[]).length){
-      html += `<div style="text-align:right"><button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
+      html += `<div style="display:flex;justify-content:flex-end">
+        <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">↗ Share</button>
+        <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
     }
     html += evts.map(e=>evtCard(e, false)).join('');
   }
@@ -605,6 +608,74 @@ function renderEvents(m){
     <div style="height:70px"></div>`;
   m.innerHTML = html;
 }
+// ---------- Share selected events ----------
+// Deliberately one-way and stateless: pick specific events, hand them over,
+// nothing links back to this app and nothing is shared that wasn't ticked.
+let shareSel = null;
+
+function openShareEvents(){ shareSel = new Set(); sub('shareEvents'); }
+function toggleShare(id){ shareSel.has(id) ? shareSel.delete(id) : shareSel.add(id); render(); }
+function shareSelectAll(){
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
+  shareSel = shareSel.size === evts.length ? new Set() : new Set(evts.map(e=>e.id));
+  render();
+}
+function selectedShareEvents(){
+  return S.events.filter(e=>!e.deleted && e.date>=todayISO() && shareSel.has(e.id))
+    .sort((a,b)=>a.date.localeCompare(b.date));
+}
+function shareAsCalendar(){
+  const evts = selectedShareEvents();
+  if(!evts.length){ toast('Tap the events you want to send'); return; }
+  // source is stripped — no need to reveal which flyer or app this came from
+  shareICSFile(wrapICS(evts.map(e=>buildVEVENT({...e, source:null, kidId:null}))), 'events.ics');
+  toast('Pick Messages or Mail to send it');
+}
+function shareAsText(){
+  const evts = selectedShareEvents();
+  if(!evts.length){ toast('Tap the events you want to send'); return; }
+  const text = evts.map(e=>
+    '• ' + friendly(e.date) + (e.time?' · '+e.time:'') + ' — ' + e.title +
+    (e.location?' ('+e.location+')':'')
+  ).join('\n');
+  if(navigator.share){
+    navigator.share({text}).catch(()=>{});
+  } else if(navigator.clipboard){
+    navigator.clipboard.writeText(text).then(()=>toast('Copied — paste it wherever you like'));
+  }
+}
+function renderShareEvents(m){
+  setHeader('Share Events', true);
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO())
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  const n = shareSel.size;
+  let html = `<div class="help">Tick only what you want to send. Nothing else goes with it — no notes about where it came from, no access to anything in this app.</div>`;
+  if(!evts.length){
+    html += `<div class="empty"><div class="eb">No upcoming events to share.</div></div>`;
+    m.innerHTML = html; return;
+  }
+  html += `<div style="text-align:right;margin-bottom:6px">
+    <button class="linkbtn" style="padding:2px 8px" onclick="shareSelectAll()">${n===evts.length?'Clear all':'Select all'}</button></div>`;
+  html += evts.map(e=>{
+    const on = shareSel.has(e.id);
+    return `<div class="card ${on?'':'dim'}" style="${on?'border:2px solid var(--green)':'border:2px solid transparent'}"
+      onclick="toggleShare('${e.id}')">
+      <div class="row">
+        <div class="check ${on?'on':''}">${on?'✓':''}</div>
+        <div class="grow">
+          <div class="title">${esc(e.title)}</div>
+          <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
+        </div>
+      </div></div>`;
+  }).join('');
+  html += `<div class="card" style="position:sticky;bottom:76px">
+    <button class="btn" style="margin-bottom:8px" onclick="shareAsCalendar()">📆 Send ${n} as calendar file</button>
+    <button class="btn alt" onclick="shareAsText()">💬 Send ${n} as a text list</button>
+    <div class="help" style="margin:8px 0 0;text-align:center">Calendar file adds them to their calendar. Text list works for anyone.</div>
+  </div><div style="height:70px"></div>`;
+  m.innerHTML = html;
+}
+
 function calendarOptions(){
   const n = S.events.filter(e=>!e.deleted && e.date>=todayISO()).length;
   showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
@@ -1391,7 +1462,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.6 · custom alerts</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.7 · share events</div>`;
 }
 function alertSummary(kind){
   const plan = alertPlan(kind);
