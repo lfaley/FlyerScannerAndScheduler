@@ -131,25 +131,147 @@ const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const SLOTS = ['breakfast','lunch','dinner'];
 
+let loadError = null;
+let storageWarned = false;
 let S = load();
+
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
   redemptions:[], lists:[], listItems:[], recipes:[], meals:[],
-  settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false } }; }
+  settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
+    watcherUrl:'', watcherToken:'', seenMsgs:[] } }; }
 function load(){
   const base = blank();
+  let raw = null;
   try{
-    const raw = localStorage.getItem('flyersnap');
+    raw = localStorage.getItem('flyersnap');
     if(!raw) return base;
     const parsed = JSON.parse(raw);
+    // Shape check — a JSON blob that parses but isn't ours is still unusable
+    if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.events)){
+      throw new Error('Saved data is not in the expected format');
+    }
     const defaults = base.settings;
     const s = Object.assign(base, parsed);
     // settings is nested, so merge it rather than letting old saves drop new keys
     s.settings = Object.assign({}, defaults, parsed.settings||{});
     s.settings.alerts = Object.assign({}, defaults.alerts, (parsed.settings||{}).alerts||{});
     return s;
-  }catch(e){ return blank(); }
+  }catch(e){
+    // NEVER silently start empty — that would let the next save() overwrite the
+    // only copy. Quarantine the bytes, lock writes, and let the user decide.
+    loadError = e.message || String(e);
+    try{
+      if(raw) localStorage.setItem('flyersnap-quarantine', raw);
+    }catch(_){}
+    const locked = blank();
+    locked.__locked = true;
+    return locked;
+  }
 }
-function save(){ localStorage.setItem('flyersnap', JSON.stringify(S)); }
+
+function save(){
+  if(S.__locked){ console.warn('save blocked: data is locked pending recovery'); return; }
+  try{
+    snapshot();                    // stash the last known good copy first
+    localStorage.setItem('flyersnap', JSON.stringify(S));
+    storageWarned = false;
+  }catch(e){
+    // Quota exceeded, private mode, etc. Silence here would lose edits invisibly.
+    if(!storageWarned){
+      storageWarned = true;
+      alert('Could not save — storage on this phone is full.\n\nExport a backup from Settings now, then clear out old past events or recipes.');
+    }
+  }
+}
+
+// ---------- Rolling local snapshots ----------
+// Protects against corruption and fat-finger deletes. Does NOT protect against
+// iOS evicting site data — only an exported file does that.
+const SNAP_PREFIX = 'flyersnap-snap-';
+const SNAP_KEEP = 3;
+
+function snapshotKeys(){
+  const out = [];
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.indexOf(SNAP_PREFIX) === 0) out.push(k);
+    }
+  }catch(e){}
+  return out.sort();
+}
+function snapshot(){
+  try{
+    const now = Date.now();
+    const last = Number(localStorage.getItem('flyersnap-lastsnapshot') || 0);
+    if(now - last < 24*3600*1000) return;      // at most one a day
+    const raw = localStorage.getItem('flyersnap');
+    if(!raw) return;
+    localStorage.setItem(SNAP_PREFIX + new Date().toISOString().slice(0,10), raw);
+    localStorage.setItem('flyersnap-lastsnapshot', String(now));
+    const keys = snapshotKeys();
+    while(keys.length > SNAP_KEEP) localStorage.removeItem(keys.shift());
+  }catch(e){ /* snapshots are best-effort; never block a save */ }
+}
+function restoreSnapshot(key){
+  const raw = localStorage.getItem(key);
+  if(!raw){ alert('That snapshot is gone.'); return; }
+  let parsed;
+  try{
+    parsed = JSON.parse(raw);
+    if(!parsed || !Array.isArray(parsed.events)) throw new Error('bad shape');
+  }catch(e){ alert('That snapshot is unreadable too.'); return; }
+  if(!confirm('Restore the snapshot from ' + key.replace(SNAP_PREFIX,'') + '?\n\nAnything added since then will be replaced.')) return;
+  S = Object.assign(blank(), parsed);
+  const defaults = blank().settings;
+  S.settings = Object.assign({}, defaults, parsed.settings||{});
+  loadError = null;
+  localStorage.setItem('flyersnap', JSON.stringify(S));
+  view = {tab:'events', sub:null, data:null};
+  render();
+  toast('Snapshot restored');
+}
+function storageBytes(){
+  let n = 0;
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      n += k.length + (localStorage.getItem(k)||'').length;
+    }
+  }catch(e){}
+  return n;
+}
+function downloadQuarantine(){
+  const dump = {};
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.indexOf('flyersnap') === 0) dump[k] = localStorage.getItem(k);
+    }
+  }catch(e){}
+  const blob = new Blob([JSON.stringify(dump, null, 1)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'flyersnap-rescue-' + todayISO() + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('Rescue file downloaded — keep it safe');
+}
+function startFresh(){
+  if(!confirm('Erase everything and start over?\n\nThis cannot be undone. Download the rescue file first if you have not.')) return;
+  if(!confirm('Really erase all events, chores, stars, lists and recipes?')) return;
+  try{
+    const keys = [];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.indexOf('flyersnap') === 0) keys.push(k);
+    }
+    keys.forEach(k=>localStorage.removeItem(k));
+  }catch(e){}
+  S = blank();
+  loadError = null;
+  view = {tab:'events', sub:null, data:null};
+  save(); render();
+}
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,9); }
 function todayISO(){ const d=new Date(); return iso(d); }
 function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -484,6 +606,7 @@ function setHeader(title, showBack){
 }
 
 function render(){
+  if(S.__locked){ renderRecovery(document.getElementById('main')); return; }
   const key = view.tab + '|' + (view.sub||'');
   const y = window.scrollY;
   renderNav();
@@ -491,12 +614,41 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents};
+    shareEvents:renderShareEvents, groceryBuild:renderGroceryBuild};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
   if(key === lastViewKey) window.scrollTo(0, y); else window.scrollTo(0, 0);
   lastViewKey = key;
+}
+
+function renderRecovery(m){
+  document.getElementById('header').innerHTML = 'Data problem';
+  document.getElementById('nav').innerHTML = '';
+  const snaps = snapshotKeys().reverse();
+  m.innerHTML = `
+    <div class="card" style="border-left:5px solid var(--red)">
+      <div class="title">FlyerSnap couldn't read your saved data</div>
+      <div class="help" style="margin:8px 0 4px">Nothing has been deleted. Your original data is still on this phone —
+        the app has stopped writing so it can't overwrite it. Pick a way forward.</div>
+      <div class="meta" style="font-size:11px">${esc(loadError||'unknown error')}</div>
+    </div>
+
+    <div class="sect">Try this first</div>
+    ${snaps.length
+      ? snaps.map(k=>`<button class="btn alt" style="margin-bottom:8px" onclick="restoreSnapshot('${k}')">
+          Restore snapshot from ${k.replace(SNAP_PREFIX,'')}</button>`).join('')
+      : `<div class="help">No snapshots on this phone.</div>`}
+    <button class="btn alt" style="margin-bottom:8px" onclick="document.getElementById('fImport').click()">Restore from a backup file</button>
+
+    <div class="sect">Rescue the raw data</div>
+    <div class="help">Download exactly what's stored, unreadable as it is, so it can be repaired by hand.</div>
+    <button class="btn alt" onclick="downloadQuarantine()">⬇️ Download rescue file</button>
+
+    <div class="sect">Last resort</div>
+    <div class="help">Only after you've downloaded the rescue file.</div>
+    <button class="btn danger" onclick="startFresh()">Erase everything and start over</button>
+    <div style="height:40px"></div>`;
 }
 
 function renderBusy(m){
@@ -547,12 +699,12 @@ function backupNudge(){
   if(count < 6) return '';
   const last = S.settings.lastBackup;
   const snooze = S.settings.nudgeSnooze;
-  const stale = !last || daysUntil(last) <= -30;
+  const stale = !last || daysUntil(last) <= -7;
   const snoozed = snooze && daysUntil(snooze) > -7;
   if(!stale || snoozed) return '';
   return `<div class="card" style="background:var(--green-lt)">
     <div class="title" style="font-size:14px">💾 Time for a backup</div>
-    <div class="meta">Your data lives only on this phone. ${last?'Last backup: '+friendly(last)+'.':'No backup yet.'}</div>
+    <div class="meta">Your data lives only on this phone, and iOS can clear it without warning. ${last?'Last backup: '+friendly(last)+'.':'No backup yet.'}</div>
     <div class="formrow" style="margin:10px 0 0">
       <button class="btn sm" onclick="exportBackup()">Export now</button>
       <button class="btn alt sm" onclick="S.settings.nudgeSnooze=todayISO();save();render()">Later</button>
@@ -586,6 +738,7 @@ function renderEvents(m){
       kids.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
         onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
   }
+  html += emailBanner();
   html += backupNudge();
   html += exportQueueBanner();
   if(!evts.length){
@@ -608,6 +761,79 @@ function renderEvents(m){
     <div style="height:70px"></div>`;
   m.innerHTML = html;
 }
+// ---------- Gmail watcher ----------
+// A Google Apps Script reads matching emails on Google's servers every 15 min
+// and holds extracted events in a queue. We just fetch and review them.
+let pendingMsgIds = [];
+
+function watcherConfigured(){ return !!(S.settings.watcherUrl && S.settings.watcherToken); }
+
+async function fetchEmailQueue(){
+  const url = S.settings.watcherUrl.trim();
+  const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'token=' +
+    encodeURIComponent(S.settings.watcherToken.trim()));
+  if(!res.ok) throw new Error('Watcher returned ' + res.status);
+  const data = await res.json();
+  if(data.error) throw new Error(data.error === 'unauthorized'
+    ? 'Token rejected — check the secret matches the script.' : data.error);
+  const seen = new Set(S.settings.seenMsgs || []);
+  const fresh = (data.items || []).filter(i => i.msgId && !seen.has(i.msgId) && i.date >= todayISO());
+  return { fresh, lastRun: data.lastRun };
+}
+
+async function checkEmail(silent){
+  if(!watcherConfigured()){
+    if(!silent){ alert('Set up the Gmail watcher in Settings first.'); nav('settings'); }
+    return;
+  }
+  if(!silent) sub('busy', {msg:'Checking email…', hint:'Looking for new flyers'});
+  try{
+    const { fresh } = await fetchEmailQueue();
+    S.settings.lastEmailCheck = new Date().toISOString();
+    if(!fresh.length){
+      save();
+      if(silent){ render(); } else { toast('No new events in your email'); back(); }
+      return;
+    }
+    if(silent){
+      // Don't hijack the screen — just flag it on the Events tab.
+      S.settings.pendingEmailCount = fresh.length;
+      save(); render();
+      return;
+    }
+    openEmailReview(fresh);
+  }catch(err){
+    if(silent){ console.log('Email check failed: ' + err.message); return; }
+    alert('Could not reach the watcher: ' + err.message);
+    back();
+  }
+}
+
+async function openEmailReviewNow(){
+  sub('busy', {msg:'Loading…', hint:''});
+  try{
+    const { fresh } = await fetchEmailQueue();
+    if(!fresh.length){ toast('Nothing new'); S.settings.pendingEmailCount = 0; save(); nav('events'); return; }
+    openEmailReview(fresh);
+  }catch(err){ alert('Could not reach the watcher: ' + err.message); back(); }
+}
+
+function openEmailReview(fresh){
+  const seenTitles = new Set(S.events.filter(e=>!e.deleted).map(e=>dupKey(e.title, e.date)));
+  pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
+  pendingEvents = fresh.map(i=>{
+    const key = dupKey(i.title, i.date);
+    const dup = seenTitles.has(key);
+    seenTitles.add(key);
+    return { title:i.title, date:i.date, time:i.time, location:i.location, kind:i.kind,
+      notes:i.notes, selected:!dup, dup, kidId:null, source:i.source };
+  });
+  pendingSource = 'Email';
+  S.settings.pendingEmailCount = 0;
+  save();
+  sub('review');
+}
+
 // ---------- Share selected events ----------
 // Deliberately one-way and stateless: pick specific events, hand them over,
 // nothing links back to this app and nothing is shared that wasn't ticked.
@@ -676,6 +902,20 @@ function renderShareEvents(m){
   m.innerHTML = html;
 }
 
+function emailBanner(){
+  if(!watcherConfigured()) return '';
+  const n = S.settings.pendingEmailCount || 0;
+  if(!n) return '';
+  return `<div class="card" style="background:var(--green);color:#fff">
+    <div class="row">
+      <div class="grow">
+        <div style="font-weight:800">📧 ${n} new ${n===1?'event':'events'} from your email</div>
+        <div style="font-size:12px;opacity:.85;margin-top:2px">Pulled in automatically — tap to review.</div>
+      </div>
+      <button class="btn sm" style="background:#fff;color:var(--green)" onclick="openEmailReviewNow()">Review</button>
+    </div></div>`;
+}
+
 function calendarOptions(){
   const n = S.events.filter(e=>!e.deleted && e.date>=todayISO()).length;
   showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
@@ -719,6 +959,9 @@ function renderCapture(m){
     <div class="card row" onclick="openLinkSheet()">
       <span style="font-size:28px">🔗</span>
       <div class="grow"><div class="title">Paste a link</div><div class="meta">Flyer URL from ParentSquare, an email, or a school site</div></div></div>
+    ${watcherConfigured() ? `<div class="card row" onclick="checkEmail(false)">
+      <span style="font-size:28px">📧</span>
+      <div class="grow"><div class="title">Check my email now</div><div class="meta">Looks for flyers from your watched senders</div></div></div>` : ''}
     <div class="help">Tip: on ParentSquare links, long-press the link in your email and pick "Open in Safari" — otherwise iOS opens the app instead of the flyer.</div>`;
 }
 
@@ -903,6 +1146,12 @@ function saveReview(){
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
       kind:e.kind, notes:e.notes, kidId:e.kidId, source:pendingSource, exported:false, deleted:false });
+  }
+  // Only mark emails handled once they've actually been reviewed — abandoning
+  // the screen leaves them in the queue for next time.
+  if(pendingMsgIds.length){
+    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs||[]).concat(pendingMsgIds))].slice(-400);
+    pendingMsgIds = [];
   }
   save();
   toast(`Tracking ${chosen.length} item${chosen.length===1?'':'s'} — tap any event to add calendar alerts`);
@@ -1292,7 +1541,10 @@ function renderMeals(m){
   setHeader('Meal Plan', false);
   const days = next7();
   const recipes = S.recipes.filter(r=>!r.deleted);
-  let html = `<button class="btn alt" onclick="sub('recipeBox')">📖 Recipe Box (${recipes.length})</button><div style="height:12px"></div>`;
+  let html = `<div class="formrow">
+    <button class="btn alt" onclick="sub('recipeBox')">📖 Recipe Box (${recipes.length})</button>
+    <button class="btn alt" onclick="openGroceryBuilder()">🛒 Ingredients</button>
+  </div>`;
   html += days.map((d,idx)=>`<div class="card">
     <div style="font-size:14px;font-weight:800;margin-bottom:6px">${idx===0?'Today':idx===1?'Tomorrow':friendly(d)}</div>` +
     SLOTS.map(slot=>{
@@ -1330,6 +1582,123 @@ function saveMeal(recipeId){
   S.meals = S.meals.filter(x=>!(x.date===mealEdit.date && x.slot===mealEdit.slot));
   if(text) S.meals.push({id:uid(), date:mealEdit.date, slot:mealEdit.slot, title:text, recipeId:recipeId||null, deleted:false});
   mealEdit = null; save(); render();
+}
+
+// ---------- Meal plan -> grocery list ----------
+// Recipes carry ingredients and the week carries recipes, so the grocery list
+// can just be assembled instead of retyped.
+//
+// Pantry model: an ingredient is "covered" from the moment it lands on the list
+// until the meal that needed it has passed. Ticking it off means you BOUGHT it,
+// not that you used it — so it stays covered until its meal date goes by.
+let groceryItems = [], grocerySel = null;
+
+function normIng(s){
+  return String(s).toLowerCase().replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+}
+function groceryList(){ return S.lists.find(l=>!l.deleted && /grocer|shop|store/i.test(l.name)); }
+
+function coveredIngredients(){
+  const today = todayISO();
+  const list = groceryList();
+  const held = new Set();
+  if(!list) return held;
+  S.listItems.filter(i=>i.listId===list.id && !i.deleted).forEach(i=>{
+    const key = i.ingKey || normIng(i.text);
+    if(!key) return;
+    if(!i.checked){ held.add(key); return; }            // still on the list to buy
+    if(i.forDate && i.forDate >= today) held.add(key);  // bought, meal not cooked yet
+    // bought and the meal has passed -> eaten, buy it again
+  });
+  return held;
+}
+
+function openGroceryBuilder(){
+  const days = next7();
+  const planned = S.meals
+    .filter(m=>!m.deleted && m.recipeId && days.includes(m.date))
+    .sort((a,b)=>a.date.localeCompare(b.date));
+
+  // Roll up by ingredient rather than by recipe — you shop by ingredient.
+  const byIng = new Map();
+  for(const meal of planned){
+    const r = S.recipes.find(x=>x.id===meal.recipeId && !x.deleted);
+    if(!r || !r.ingredients) continue;
+    r.ingredients.split('\n').map(s=>s.trim()).filter(Boolean).forEach(line=>{
+      const key = normIng(line);
+      if(!key) return;
+      if(!byIng.has(key)) byIng.set(key, { text:line, key, recipes:[], count:0, forDate:meal.date });
+      const g = byIng.get(key);
+      if(!g.recipes.includes(r.title)) g.recipes.push(r.title);
+      g.count++;                                   // needed twice = say so
+      if(meal.date < g.forDate) g.forDate = meal.date;
+    });
+  }
+
+  const held = coveredIngredients();
+  groceryItems = [...byIng.values()]
+    .sort((x,y)=>x.key.localeCompare(y.key))
+    .map(g=>({ ...g, dup: held.has(g.key) }));
+  grocerySel = new Set(groceryItems.map((_,i)=>i).filter(i=>!groceryItems[i].dup));
+  sub('groceryBuild');
+}
+
+function toggleGrocery(i){ grocerySel.has(i) ? grocerySel.delete(i) : grocerySel.add(i); render(); }
+function groceryToggleAll(){
+  grocerySel = grocerySel.size === groceryItems.length
+    ? new Set()
+    : new Set(groceryItems.map((_,i)=>i));
+  render();
+}
+function addToGrocery(){
+  const chosen = [...grocerySel].sort((a,b)=>a-b).map(i=>groceryItems[i]);
+  if(!chosen.length){ toast('Tick the ingredients you need'); return; }
+  let list = groceryList();
+  if(!list){ list = { id:uid(), name:'Groceries', deleted:false }; S.lists.push(list); }
+  chosen.forEach(it=>{
+    S.listItems.push({
+      id:uid(), listId:list.id,
+      text: it.text + (it.count > 1 ? ' ×' + it.count : ''),
+      ingKey: it.key,        // survives the ×N suffix so matching still works
+      forDate: it.forDate,   // when it gets eaten
+      checked:false, deleted:false
+    });
+  });
+  save();
+  toast(`Added ${chosen.length} item${chosen.length===1?'':'s'} to ${list.name}`);
+  view = { tab:'lists', sub:'listDetail', data:{ id:list.id } };
+  render();
+}
+
+function renderGroceryBuild(m){
+  setHeader('Ingredients → Groceries', true);
+  if(!groceryItems.length){
+    m.innerHTML = `<div class="empty"><div class="et">No recipe ingredients this week</div>
+      <div class="eb">Plan a meal from your Recipe Box — tap any slot on the Meals tab and pick a recipe chip — and its ingredients show up here ready to shop.</div></div>`;
+    return;
+  }
+  const n = grocerySel.size;
+  const dupCount = groceryItems.filter(i=>i.dup).length;
+  let html = `<div class="help">Everything this week's planned meals call for.${dupCount?` ${dupCount} already covered — unticked. Those come back once the meal has passed.`:''}</div>
+    <div style="text-align:right;margin-bottom:6px">
+      <button class="linkbtn" style="padding:2px 8px" onclick="groceryToggleAll()">${n===groceryItems.length?'Clear all':'Select all'}</button></div>`;
+
+  html += groceryItems.map((it,i)=>{
+    const on = grocerySel.has(i);
+    return `<div class="card row ${on?'':'dim'}" style="padding:11px;margin-bottom:6px" onclick="toggleGrocery(${i})">
+      <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px">${on?'✓':''}</div>
+      <div class="grow">
+        <div style="font-size:14px">${esc(it.text)}${it.count>1?` <b>×${it.count}</b>`:''}</div>
+        <div class="meta" style="font-size:11px">${esc(it.recipes.join(', '))}</div>
+      </div>
+      ${it.dup?`<span class="meta" style="font-size:10px">covered</span>`:''}
+    </div>`;
+  }).join('');
+
+  html += `<div class="card" style="position:sticky;bottom:76px;margin-top:12px">
+    <button class="btn" onclick="addToGrocery()">🛒 Add ${n} to grocery list</button>
+  </div><div style="height:70px"></div>`;
+  m.innerHTML = html;
 }
 
 // ---------- Recipe Box ----------
@@ -1432,12 +1801,35 @@ function renderSettings(m){
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
 
+    <div class="sect">Gmail watcher</div>
+    <div class="help">${watcherConfigured()
+      ? 'Connected. Your Apps Script checks email every 15 minutes and FlyerSnap picks up anything new when you open it.'
+      : 'Optional. A Google Apps Script running in your own account watches chosen senders and pulls out dates automatically. See gmail-watcher.gs in the repo for setup.'}</div>
+    <div class="label">Web app URL</div>
+    <input type="text" id="watcherUrl" placeholder="https://script.google.com/macros/s/…/exec"
+      value="${esc(S.settings.watcherUrl||'')}" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <div class="label">Secret token</div>
+    <input type="password" id="watcherToken" placeholder="the SECRET from your script"
+      value="${esc(S.settings.watcherToken||'')}" autocapitalize="none" autocorrect="off">
+    <div class="formrow" style="margin-top:10px">
+      <button class="btn" onclick="saveWatcher()">Save</button>
+      ${watcherConfigured() ? `<button class="btn alt" style="width:auto" onclick="testWatcher()">Test</button>` : ''}
+    </div>
+
     <div class="sect">Backup</div>
-    <div class="help">Your data lives in this phone's browser storage. Export a backup now and then — especially before clearing Safari data.</div>
+    <div class="help">Everything lives in this phone's browser storage — there is no server holding a copy.
+      iOS can clear that storage on its own, so an exported file is the only real safety net.
+      ${S.settings.lastBackup ? 'Last export: '+friendly(S.settings.lastBackup)+'.' : '<b>You have never exported one.</b>'}</div>
     <div class="formrow">
       <button class="btn alt" onclick="exportBackup()">⬇️ Export backup</button>
       <button class="btn alt" onclick="document.getElementById('fImport').click()">⬆️ Restore</button>
     </div>
+    <div class="help" style="margin-top:10px">Automatic snapshots (kept on this phone, once a day, last ${SNAP_KEEP}):</div>
+    ${snapshotKeys().reverse().map(k=>`<div class="card row" style="padding:10px">
+      <div class="grow" style="font-size:13px">${k.replace(SNAP_PREFIX,'')}</div>
+      <button class="linkbtn" onclick="restoreSnapshot('${k}')">Restore</button></div>`).join('')
+      || `<div class="help" style="font-style:italic">None yet — the first appears after a day of use.</div>`}
+    <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.</div>
 
     <div class="sect">Alerts</div>
     <div class="help">Pick when you want to be warned. <b>iPhone Calendar only keeps 2 alerts per event</b> — the two closest to the date become the event's alerts.</div>
@@ -1462,8 +1854,32 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v1.7 · share events</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.0 · data safety</div>`;
 }
+function saveWatcher(){
+  const u = (document.getElementById('watcherUrl').value||'').trim();
+  const t = (document.getElementById('watcherToken').value||'').trim();
+  if(u && !/^https:\/\/script\.google\.com\//.test(u)){
+    alert('That should be the /exec URL from your Apps Script deployment.'); return;
+  }
+  S.settings.watcherUrl = u;
+  S.settings.watcherToken = t;
+  save(); render();
+  toast(u ? 'Watcher saved — tap Test to check it' : 'Watcher disconnected');
+}
+async function testWatcher(){
+  sub('busy', {msg:'Testing the watcher…', hint:''});
+  try{
+    const { fresh, lastRun } = await fetchEmailQueue();
+    nav('settings');
+    const when = lastRun ? new Date(lastRun).toLocaleString() : 'never (trigger may not be set)';
+    alert('Connected!\n\nLast script run: ' + when + '\nNew events waiting: ' + fresh.length);
+  }catch(err){
+    nav('settings');
+    alert('Could not reach the watcher:\n\n' + err.message);
+  }
+}
+
 function alertSummary(kind){
   const plan = alertPlan(kind);
   if(!plan.alarms.length) return `<div class="help" style="color:var(--red)">No alerts — pick at least one.</div>`;
@@ -1533,9 +1949,15 @@ function importBackup(file){
   r.onload = ()=>{
     try{
       const data = JSON.parse(r.result);
-      if(!data.events || !data.settings) throw new Error('bad');
+      if(!data || !Array.isArray(data.events)) throw new Error('bad');
       if(!confirm('Replace everything in the app with this backup?')) return;
-      S = Object.assign(blank(), data); save(); render();
+      const defaults = blank().settings;
+      S = Object.assign(blank(), data);
+      S.settings = Object.assign({}, defaults, data.settings||{});
+      delete S.__locked;               // a good file clears the lock
+      loadError = null;
+      view = {tab:'events', sub:null, data:null};
+      save(); render();
       toast('Backup restored');
     }catch(e){ alert('That file is not a FlyerSnap backup.'); }
   };
@@ -1554,6 +1976,16 @@ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch
 // Ask iOS to protect this app's storage from eviction
 if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
 render();
+
+// Quietly look for new email-sourced events on open (at most every 20 minutes)
+function maybeCheckEmail(){
+  if(!watcherConfigured()) return;
+  const last = S.settings.lastEmailCheck ? Date.parse(S.settings.lastEmailCheck) : 0;
+  if(Date.now() - last < 20 * 60 * 1000) return;
+  checkEmail(true);
+}
+maybeCheckEmail();
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeCheckEmail(); });
 </script>
 </body>
 </html>
