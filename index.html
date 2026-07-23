@@ -822,13 +822,24 @@ let eventFilter = null;
 let showPast = false;
 function upcomingEvents(){
   const t = todayISO();
-  return S.events.filter(e=>!e.deleted && e.date>=t && (!eventFilter || e.kidId===eventFilter))
+  return S.events.filter(e=>!e.deleted && e.date>=t && (!eventFilter || e.kidId===eventFilter) && matchesSearch(e))
     .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
 }
+let eventSearch = '';
+let pastLimit = 30;               // grows on demand; pruning bounds the data at 2 years
+
+function matchesSearch(e){
+  const q = eventSearch.trim().toLowerCase();
+  if(!q) return true;
+  const kid = e.kidId ? kidById(e.kidId) : null;
+  return [e.title, e.location, e.notes, e.source, kid && kid.name, friendly(e.date)]
+    .filter(Boolean).join(' ').toLowerCase().includes(q);
+}
+
 function pastEvents(){
   const t = todayISO();
-  return S.events.filter(e=>!e.deleted && e.date<t && (!eventFilter || e.kidId===eventFilter))
-    .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
+  return S.events.filter(e=>!e.deleted && e.date<t && (!eventFilter || e.kidId===eventFilter) && matchesSearch(e))
+    .sort((a,b)=>b.date.localeCompare(a.date));
 }
 function backupNudge(){
   const count = S.events.length + S.chores.length + S.listItems.length;
@@ -874,12 +885,31 @@ function renderEvents(m){
       kids.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
         onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
   }
+  // Search only earns its space once there's enough to sift through.
+  const totalEvents = S.events.filter(e=>!e.deleted).length;
+  if(totalEvents > 8 || eventSearch){
+    html += `<div class="formrow" style="margin-bottom:10px">
+      <input type="text" id="evSearch" placeholder="Search events, past and upcoming"
+        value="${esc(eventSearch)}" oninput="onEventSearch(this.value)" autocapitalize="none">
+      ${eventSearch ? `<button class="btn alt" style="width:auto" onclick="clearEventSearch()">Clear</button>` : ''}
+    </div>`;
+  }
+
   html += emailBanner();
   html += backupNudge();
   html += exportQueueBanner();
   if(!evts.length){
-    html += `<div class="empty"><div class="et">Nothing tracked yet</div>
-      <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
+    if(eventSearch){
+      html += `<div class="empty"><div class="et">No upcoming matches</div>
+        <div class="eb">Nothing upcoming matches "${esc(eventSearch)}". Past events are below if there are matches there.</div></div>`;
+    } else if(totalEvents > 0){
+      // Data exists but nothing is showing — almost always a stuck kid filter.
+      html += `<div class="empty"><div class="et">Nothing upcoming to show</div>
+        <div class="eb">You have ${totalEvents} event${totalEvents===1?'':'s'} saved${eventFilter?', but the filter above is limiting this list':''}. ${eventFilter?'Tap <b>All</b> to see everything.':'They may all be in the past — check below.'}</div></div>`;
+    } else {
+      html += `<div class="empty"><div class="et">Nothing tracked yet</div>
+        <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
+    }
   } else {
     if(!(S.settings.exportQueue||[]).length){
       html += `<div style="display:flex;justify-content:flex-end">
@@ -889,9 +919,17 @@ function renderEvents(m){
     html += evts.map(e=>evtCard(e, false)).join('');
   }
   if(past.length){
+    const open = showPast || !!eventSearch;      // a search should look everywhere
     html += `<div style="text-align:center;margin-top:6px">
-      <button class="linkbtn" onclick="showPast=!showPast;render()">${showPast?'▾':'▸'} Past events (${past.length})</button></div>`;
-    if(showPast) html += past.map(e=>evtCard(e, true)).join('');
+      <button class="linkbtn" onclick="showPast=!showPast;render()">${open?'▾':'▸'} Past events (${past.length})</button></div>`;
+    if(open){
+      const shown = past.slice(0, pastLimit);
+      html += shown.map(e=>evtCard(e, true)).join('');
+      if(past.length > shown.length){
+        html += `<div style="text-align:center"><button class="linkbtn" onclick="pastLimit+=60;render()">
+          Show ${Math.min(60, past.length - shown.length)} more (${past.length - shown.length} older)</button></div>`;
+      }
+    }
   }
   html += `<button class="btn fab" onclick="captureAppend=false;sub('capture')">＋ Add paperwork</button>
     <div style="height:70px"></div>`;
@@ -1060,6 +1098,21 @@ function calendarOptions(){
     {label:'1️⃣ One at a time', fn:()=>startExportQueue(true)},
   ]);
 }
+
+function onEventSearch(v){
+  eventSearch = v;
+  pastLimit = 30;
+  const m = document.getElementById('main');
+  const box = document.getElementById('evSearch');
+  const caret = box ? box.selectionStart : null;
+  renderEvents(m);
+  const again = document.getElementById('evSearch');
+  if(again){
+    again.focus();
+    if(caret !== null){ try{ again.setSelectionRange(caret, caret); }catch(e){} }
+  }
+}
+function clearEventSearch(){ eventSearch = ''; pastLimit = 30; render(); }
 
 function eventActions(id){
   const e = S.events.find(x=>x.id===id);
@@ -2027,7 +2080,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.3 · legacy recipe rescue</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.4 · event search</div>`;
 }
 function manualPrune(){
   const n = pruneData();

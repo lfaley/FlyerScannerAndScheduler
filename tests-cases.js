@@ -339,6 +339,75 @@ test('deleted legacy recipes are skipped', () => {
   assert.deepStrictEqual(legacyRecipes().map(r => r.title), ['Keep']);
 });
 
+console.log('\nEvent search & history');
+
+function seedEvents(){
+  boot(GOOD);
+  S.kids.push({ id:'k2', name:'Sam', color:'#0E7490', deleted:false });
+  S.events = [
+    { id:'a', title:'Dance Competition', date:dayAhead(5), kind:'event', location:'Kansas City', kidId:'k1', deleted:false },
+    { id:'b', title:'Volleyball Tryouts', date:dayAhead(2), kind:'event', location:'Gym', kidId:'k2', deleted:false },
+    { id:'c', title:'Spring Recital', date:dayAhead(-40), kind:'event', location:'Auditorium', kidId:'k1', deleted:false },
+    { id:'d', title:'Picture Day', date:dayAhead(-10), kind:'event', notes:'order form due', deleted:false }
+  ];
+  eventSearch = ''; eventFilter = null; pastLimit = 30;
+}
+
+test('search finds upcoming events by title', () => {
+  seedEvents();
+  eventSearch = 'volleyball';
+  assert.deepStrictEqual(upcomingEvents().map(e => e.title), ['Volleyball Tryouts']);
+});
+
+test('search reaches into past events too', () => {
+  seedEvents();
+  eventSearch = 'recital';
+  assert.strictEqual(upcomingEvents().length, 0);
+  assert.deepStrictEqual(pastEvents().map(e => e.title), ['Spring Recital']);
+});
+
+test('search matches location, notes and kid name', () => {
+  seedEvents();
+  eventSearch = 'kansas city';
+  assert.deepStrictEqual(upcomingEvents().map(e => e.title), ['Dance Competition']);
+  eventSearch = 'order form';
+  assert.deepStrictEqual(pastEvents().map(e => e.title), ['Picture Day']);
+  eventSearch = 'sam';
+  assert.deepStrictEqual(upcomingEvents().map(e => e.title), ['Volleyball Tryouts']);
+});
+
+test('search is case-insensitive and ignores surrounding space', () => {
+  seedEvents();
+  eventSearch = '  DANCE  ';
+  assert.strictEqual(upcomingEvents().length, 1);
+});
+
+test('search and kid filter combine rather than fight', () => {
+  seedEvents();
+  eventFilter = 'k1';
+  eventSearch = 'volleyball';
+  assert.strictEqual(upcomingEvents().length, 0, "Sam's event is excluded by the kid filter");
+  eventFilter = null;
+});
+
+test('past events are no longer capped at 30', () => {
+  boot(GOOD);
+  S.events = [];
+  for(let i = 1; i <= 75; i++){
+    S.events.push({ id:'p'+i, title:'Old '+i, date:dayAhead(-i), kind:'event', deleted:false });
+  }
+  eventSearch = '';
+  assert.strictEqual(pastEvents().length, 75, 'all history is reachable');
+});
+
+test('events persist across a reload', () => {
+  seedEvents();
+  save();
+  S = load();
+  assert.strictEqual(S.events.length, 4, 'events survive a fresh load');
+  assert.ok(!S.__locked);
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
