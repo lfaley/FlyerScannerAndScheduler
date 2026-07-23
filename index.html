@@ -131,14 +131,40 @@ const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const SLOTS = ['breakfast','lunch','dinner'];
 
+// Bump when the saved shape changes, and add a migration step below.
+// v1 = everything up to and including v2.1 (implicit; no version field was stored).
+// v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
+// NOTE: must be declared before load() runs, since blank() reads it at startup.
+const SCHEMA_VERSION = 2;
+
 let loadError = null;
 let storageWarned = false;
 let S = load();
 
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
-  redemptions:[], lists:[], listItems:[], recipes:[], meals:[],
+  redemptions:[], lists:[], listItems:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
-    watcherUrl:'', watcherToken:'', seenMsgs:[] } }; }
+    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{} },
+  schemaVersion: SCHEMA_VERSION }; }
+
+function migrate(s, fromVersion){
+  const from = Number(fromVersion) || 1;
+  if(from >= SCHEMA_VERSION){ s.schemaVersion = SCHEMA_VERSION; return s; }
+
+  if(from < 2){
+    // FlyerSnap no longer owns recipes or meal plans — the recipe app does.
+    // Keep the rows (harmless, and a user may want them exported) but stop
+    // treating them as live data. Nothing is deleted here on purpose: a
+    // migration that destroys data is the thing we most want to avoid.
+    s.legacyRecipes = Array.isArray(s.recipes) ? s.recipes : [];
+    s.legacyMeals   = Array.isArray(s.meals)   ? s.meals   : [];
+    delete s.recipes;
+    delete s.meals;
+  }
+
+  s.schemaVersion = SCHEMA_VERSION;
+  return s;
+}
 function load(){
   const base = blank();
   let raw = null;
@@ -155,7 +181,10 @@ function load(){
     // settings is nested, so merge it rather than letting old saves drop new keys
     s.settings = Object.assign({}, defaults, parsed.settings||{});
     s.settings.alerts = Object.assign({}, defaults.alerts, (parsed.settings||{}).alerts||{});
-    return s;
+    s.settings.starCarry = Object.assign({}, (parsed.settings||{}).starCarry||{});
+    // Version comes from the SAVED data — blank() already stamped the current
+    // one onto the merge target, so reading it from `s` would skip migration.
+    return migrate(s, parsed.schemaVersion);
   }catch(e){
     // NEVER silently start empty — that would let the next save() overwrite the
     // only copy. Quarantine the bytes, lock writes, and let the user decide.
@@ -182,6 +211,77 @@ function save(){
       alert('Could not save — storage on this phone is full.\n\nExport a backup from Settings now, then clear out old past events or recipes.');
     }
   }
+}
+
+// ---------- Pruning ----------
+// Storage is ~5MB and these arrays otherwise grow forever. Rules are deliberately
+// conservative: nothing recent goes, and anything that would change a visible
+// number (star balances) is rolled forward rather than dropped.
+
+const KEEP_COMPLETIONS_DAYS = 365;   // a year of chore history stays browsable
+const KEEP_SOFT_DELETED_DAYS = 90;   // tombstones for deleted rows
+const KEEP_PAST_EVENTS_DAYS = 730;   // two years of past events
+
+function daysAgoISO(n){
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return iso(d);
+}
+
+function pruneData(){
+  if(S.__locked) return 0;
+  let removed = 0;
+  const completionCutoff = daysAgoISO(KEEP_COMPLETIONS_DAYS);
+  const deletedCutoff = daysAgoISO(KEEP_SOFT_DELETED_DAYS);
+  const eventCutoff = daysAgoISO(KEEP_PAST_EVENTS_DAYS);
+
+  // Chore completions: roll old ones into a carried balance BEFORE dropping them,
+  // so a kid's star total never changes just because time passed.
+  const carry = Object.assign({}, S.settings.starCarry || {});
+  const keptCompletions = [];
+  for(const c of S.completions){
+    if(c.date && c.date < completionCutoff){
+      if(c.kidId && c.stars) carry[c.kidId] = (carry[c.kidId] || 0) + c.stars;
+      removed++;
+    } else keptCompletions.push(c);
+  }
+  // Same for redemptions (they subtract).
+  const keptRedemptions = [];
+  for(const r of S.redemptions){
+    if(r.date && r.date < completionCutoff){
+      if(r.kidId && r.stars) carry[r.kidId] = (carry[r.kidId] || 0) - r.stars;
+      removed++;
+    } else keptRedemptions.push(r);
+  }
+  S.completions = keptCompletions;
+  S.redemptions = keptRedemptions;
+  S.settings.starCarry = carry;
+
+  // Soft-deleted rows: once they're old, actually drop them.
+  const before = S.events.length + S.listItems.length + S.lists.length +
+                 S.chores.length + S.rewards.length + S.kids.length;
+  const oldDeleted = row => row.deleted && (!row.date || row.date < deletedCutoff);
+  S.events = S.events.filter(e => !(e.deleted && (e.date || '') < deletedCutoff));
+  S.listItems = S.listItems.filter(i => !i.deleted);          // no date; drop on prune
+  S.lists = S.lists.filter(l => !l.deleted);
+  S.chores = S.chores.filter(c => !c.deleted);
+  S.rewards = S.rewards.filter(r => !r.deleted);
+  S.kids = S.kids.filter(k => !k.deleted);
+  removed += before - (S.events.length + S.listItems.length + S.lists.length +
+                       S.chores.length + S.rewards.length + S.kids.length);
+
+  // Very old past events.
+  const beforeEvents = S.events.length;
+  S.events = S.events.filter(e => !e.date || e.date >= eventCutoff);
+  removed += beforeEvents - S.events.length;
+
+  // Watcher message ids don't need to be remembered forever.
+  if(S.settings.seenMsgs && S.settings.seenMsgs.length > 400){
+    S.settings.seenMsgs = S.settings.seenMsgs.slice(-400);
+  }
+
+  if(removed) save();
+  return removed;
 }
 
 // ---------- Rolling local snapshots ----------
@@ -731,7 +831,7 @@ function pastEvents(){
     .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
 }
 function backupNudge(){
-  const count = S.events.length + S.chores.length + S.recipes.length + S.listItems.length;
+  const count = S.events.length + S.chores.length + S.listItems.length;
   if(count < 6) return '';
   const last = S.settings.lastBackup;
   const snooze = S.settings.nudgeSnooze;
@@ -1311,7 +1411,9 @@ function completionFor(choreId, date){
   return S.completions.find(c=>c.choreId===choreId && c.date===date);
 }
 function starBalances(){
-  const bal = {};
+  // Start from stars carried forward when old history was pruned, so balances
+  // survive pruning unchanged.
+  const bal = Object.assign({}, S.settings.starCarry || {});
   for(const c of S.completions){ if(c.kidId) bal[c.kidId]=(bal[c.kidId]||0)+(c.stars||0); }
   for(const r of S.redemptions){ bal[r.kidId]=(bal[r.kidId]||0)-r.stars; }
   return bal;
@@ -1665,6 +1767,35 @@ function queueScannedRecipe(r){
     return true;
   }catch(e){ return false; }
 }
+// Recipes from FlyerSnap's retired Recipe Box. The migration stashed them
+// rather than deleting them; this is their way out to the library of record.
+function legacyRecipes(){
+  return (S.legacyRecipes || []).filter(r => r && r.title && !r.deleted && !r.sentToRecipeApp);
+}
+
+function sendLegacyRecipes(){
+  const pending = legacyRecipes();
+  if(!pending.length){ toast('No old recipes left to send'); return; }
+  let sent = 0;
+  for(const r of pending){
+    const ok = queueScannedRecipe({
+      title: r.title,
+      category: r.category,
+      ingredients: r.ingredients || '',
+      instructions: r.instructions || ''
+    });
+    if(!ok) break;                       // storage full — stop, keep the rest for a retry
+    r.sentToRecipeApp = true;
+    sent++;
+  }
+  save(); render();
+  if(sent){
+    toast(`Sent ${sent} recipe${sent===1?'':'s'} — confirm them in the Recipe app`);
+  } else {
+    toast('Could not send: storage is full');
+  }
+}
+
 function scannedCount(){
   try{
     const env = JSON.parse(localStorage.getItem(SCANNED_KEY) || 'null');
@@ -1749,6 +1880,11 @@ function renderRecipeBox(m){
       <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
       <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
     </div>
+    ${legacyRecipes().length ? `<div class="card" style="border-left:5px solid var(--amber)">
+        <div class="title" style="font-size:14px">${legacyRecipes().length} recipe${legacyRecipes().length===1?'':'s'} from FlyerSnap's old Recipe Box</div>
+        <div class="meta">Recipes now live in the Recipe app. Send these over so they're all in one place — nothing is deleted here either way.</div>
+        <button class="btn" style="margin-top:10px" onclick="sendLegacyRecipes()">Send them to the Recipe app</button>
+      </div>` : ''}
     ${n ? `<div class="card" style="background:var(--green-lt)">
         <div class="title" style="font-size:14px">${n} recipe${n===1?'':'s'} waiting in the Recipe app</div>
         <div class="meta">Open the Recipe app and confirm them from the review banner to add them to your library.</div>
@@ -1862,7 +1998,11 @@ function renderSettings(m){
       <div class="grow" style="font-size:13px">${k.replace(SNAP_PREFIX,'')}</div>
       <button class="linkbtn" onclick="restoreSnapshot('${k}')">Restore</button></div>`).join('')
       || `<div class="help" style="font-style:italic">None yet — the first appears after a day of use.</div>`}
-    <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.</div>
+    <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.
+      ${S.settings.lastPrune ? 'Last cleanup: '+friendly(S.settings.lastPrune)+'.' : ''}</div>
+    <button class="btn alt" onclick="manualPrune()">🧹 Clean up old data</button>
+    <div class="help" style="font-size:12px;margin-top:6px">Removes chore history over a year old (star totals are kept),
+      deleted items over 90 days old, and events over two years old.</div>
 
     <div class="sect">Alerts</div>
     <div class="help">Pick when you want to be warned. <b>iPhone Calendar only keeps 2 alerts per event</b> — the two closest to the date become the event's alerts.</div>
@@ -1887,8 +2027,15 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.1 · recipe app link</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.3 · legacy recipe rescue</div>`;
 }
+function manualPrune(){
+  const n = pruneData();
+  S.settings.lastPrune = todayISO();
+  save(); render();
+  toast(n ? `Cleaned up ${n} old record${n===1?'':'s'}` : 'Nothing old enough to clean up');
+}
+
 function saveWatcher(){
   const u = (document.getElementById('watcherUrl').value||'').trim();
   const t = (document.getElementById('watcherToken').value||'').trim();
@@ -2018,6 +2165,17 @@ function maybeCheckEmail(){
   checkEmail(true);
 }
 maybeCheckEmail();
+
+// Quiet monthly tidy so storage never creeps toward the cap unnoticed.
+(function autoPrune(){
+  if(S.__locked) return;
+  const last = S.settings.lastPrune;
+  if(last && daysUntil(last) > -30) return;
+  pruneData();
+  S.settings.lastPrune = todayISO();
+  save();
+})();
+
 document.addEventListener('visibilitychange', ()=>{
   if(document.hidden) return;
   maybeCheckEmail();

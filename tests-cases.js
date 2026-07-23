@@ -225,6 +225,120 @@ test('FlyerSnap never writes the recipe app\'s keys', () => {
   assert.ok(!ours.some(k => /^mealplanner-/.test(k)), 'mealplanner-* namespace untouched');
 });
 
+console.log('\nPruning & schema');
+
+test('star balances survive pruning unchanged', () => {
+  boot(GOOD);
+  S.kids.push({ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false });
+  // 400 days ago (prunable) and yesterday (kept)
+  S.completions.push({ id:'c1', choreId:'x', kidId:'k1', date: dayAhead(-400), stars: 10 });
+  S.completions.push({ id:'c2', choreId:'x', kidId:'k1', date: dayAhead(-1), stars: 3 });
+  S.redemptions.push({ id:'r1', rewardId:'w', kidId:'k1', stars: 5, date: dayAhead(-400) });
+  const before = starBalances()['k1'];
+  assert.strictEqual(before, 8, '10 + 3 - 5');
+
+  pruneData();
+  assert.strictEqual(starBalances()['k1'], before, 'balance identical after pruning');
+  assert.strictEqual(S.completions.length, 1, 'old completion dropped');
+  assert.strictEqual(S.redemptions.length, 0, 'old redemption dropped');
+  assert.strictEqual(S.settings.starCarry['k1'], 5, 'net of pruned rows carried forward');
+});
+
+test('pruning twice does not double-count the carry', () => {
+  const balance = starBalances()['k1'];
+  pruneData();
+  pruneData();
+  assert.strictEqual(starBalances()['k1'], balance, 'idempotent');
+});
+
+test('recent history is never pruned', () => {
+  boot(GOOD);
+  S.completions.push({ id:'c1', choreId:'x', kidId:'k1', date: dayAhead(-10), stars: 2 });
+  S.events.push({ id:'e9', title:'Recent past', date: dayAhead(-5), kind:'event', deleted:false });
+  pruneData();
+  assert.strictEqual(S.completions.length, 1, 'ten-day-old chore kept');
+  assert.ok(S.events.some(e => e.id === 'e9'), 'recent past event kept');
+});
+
+test('old soft-deleted rows are actually removed', () => {
+  boot(GOOD);
+  S.events.push({ id:'d1', title:'Deleted long ago', date: dayAhead(-200), kind:'event', deleted:true });
+  S.chores.push({ id:'ch1', title:'Gone', deleted:true });
+  pruneData();
+  assert.ok(!S.events.some(e => e.id === 'd1'), 'stale tombstone cleared');
+  assert.ok(!S.chores.some(c => c.id === 'ch1'));
+});
+
+test('live rows are never touched by pruning', () => {
+  boot(GOOD);
+  S.events.push({ id:'live', title:'Upcoming', date: dayAhead(30), kind:'event', deleted:false });
+  S.chores.push({ id:'ch2', title:'Daily', frequency:'daily', stars:1, deleted:false });
+  pruneData();
+  assert.ok(S.events.some(e => e.id === 'live'));
+  assert.ok(S.chores.some(c => c.id === 'ch2'));
+});
+
+test('a v1 save migrates without losing anything', () => {
+  const v1 = JSON.parse(GOOD);
+  v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
+  v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
+  boot(JSON.stringify(v1));
+  assert.strictEqual(S.schemaVersion, 2, 'stamped with the current version');
+  assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
+  assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
+  assert.strictEqual(S.events.length, 1, 'real data untouched');
+});
+
+test('migration is not re-run on an already-current save', () => {
+  boot(GOOD);
+  S.legacyRecipes = [{ id:'keep' }];
+  save();
+  const raw = localStorage.getItem('flyersnap');
+  S = load();
+  assert.strictEqual(S.schemaVersion, 2);
+  assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
+});
+
+test('pruning refuses to run on locked data', () => {
+  boot('broken{');
+  assert.strictEqual(S.__locked, true);
+  assert.strictEqual(pruneData(), 0, 'no writes while locked');
+});
+
+console.log('\nLegacy recipe rescue');
+
+test('recipes from the retired Recipe Box can be sent to the recipe app', () => {
+  boot(GOOD);
+  localStorage.removeItem('flyersnap-scanned-out');
+  S.legacyRecipes = [
+    { id:'old1', title:'Grandma Chili', category:'Dinner', ingredients:'beef\nbeans', instructions:'cook' },
+    { id:'old2', title:'Pancakes', category:'Breakfast', ingredients:'flour', instructions:'mix' }
+  ];
+  assert.strictEqual(legacyRecipes().length, 2);
+  sendLegacyRecipes();
+  const env = JSON.parse(localStorage.getItem('flyersnap-scanned-out'));
+  assert.strictEqual(env.recipes.length, 2);
+  assert.ok(env.recipes.every(r => /^fs_/.test(r.id)), 'sent with fs_ ids');
+});
+
+test('sent recipes are not offered again', () => {
+  assert.strictEqual(legacyRecipes().length, 0, 'all marked sent');
+  sendLegacyRecipes();
+  const env = JSON.parse(localStorage.getItem('flyersnap-scanned-out'));
+  assert.strictEqual(env.recipes.length, 2, 'no duplicates queued');
+});
+
+test('legacy recipes are never deleted, only marked', () => {
+  assert.strictEqual(S.legacyRecipes.length, 2, 'originals still present');
+  assert.ok(S.legacyRecipes.every(r => r.sentToRecipeApp === true));
+});
+
+test('deleted legacy recipes are skipped', () => {
+  boot(GOOD);
+  S.legacyRecipes = [{ id:'x', title:'Gone', deleted:true }, { id:'y', title:'Keep' }];
+  assert.deepStrictEqual(legacyRecipes().map(r => r.title), ['Keep']);
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
