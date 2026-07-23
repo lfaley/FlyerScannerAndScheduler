@@ -20,6 +20,14 @@ const GOOD = JSON.stringify({
 });
 function boot(raw){ localStorage._d = raw ? { flyersnap: raw } : {}; S = load(); }
 
+// next7() retired along with FlyerSnap's meal planner; tests need their own
+// forward-dated helper so they don't depend on app internals that may move.
+function dayAhead(n){
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
 console.log('\nData safety');
 
 test('unreadable data locks the app instead of starting empty', () => {
@@ -119,36 +127,102 @@ test('a corrupt snapshot is refused rather than swallowed', () => {
   assert.strictEqual(S.__locked, true, 'stays locked rather than pretending');
 });
 
-console.log('\nGroceries (pantry model)');
+console.log('\nRecipe app exchange');
 
-test('bought ingredients stay covered until their meal has passed', () => {
+test('reads a valid meal plan envelope', () => {
   boot(GOOD);
-  const days = next7();
-  S.recipes.push({ id:'r1', title:'Tacos', ingredients:'1 lb ground beef\ntortillas', deleted:false });
-  S.meals.push({ id:'m1', date:days[2], slot:'dinner', title:'Tacos', recipeId:'r1', deleted:false });
-  openGroceryBuilder();
-  assert.strictEqual(grocerySel.size, 2, 'nothing bought yet');
-  addToGrocery();
-
-  S.listItems.forEach(i => { i.checked = true; });          // bought it
-  openGroceryBuilder();
-  assert.strictEqual(grocerySel.size, 0, 'in the fridge, do not buy again');
-
-  S.listItems.forEach(i => { i.forDate = '2020-01-01'; });  // meal came and went
-  openGroceryBuilder();
-  assert.strictEqual(grocerySel.size, 2, 'eaten, so buy it again');
+  const future = dayAhead(2);
+  localStorage.setItem('mealplan-out', JSON.stringify({
+    schema: 'mealplan-exchange.v1',
+    updatedAt: '2026-07-22T14:00:00.000Z',
+    recipeUrlTemplate: 'https://lfaley.github.io/meal-planner-shoppin/#/recipe/{id}',
+    shoppingListUrl: 'https://lfaley.github.io/meal-planner-shoppin/#/shopping',
+    meals: [{ date: future, slot:'dinner', recipeId:'rb_logbot-1234', title:'Chili' }]
+  }));
+  const meals = plannedMeals();
+  assert.strictEqual(meals.length, 1);
+  assert.strictEqual(meals[0].title, 'Chili');
 });
 
-test('quantities are not silently collapsed', () => {
+test('recipe deep-link keeps the rb_ prefix verbatim', () => {
+  const meal = plannedMeals()[0];
+  assert.strictEqual(recipeUrl(meal),
+    'https://lfaley.github.io/meal-planner-shoppin/#/recipe/rb_logbot-1234');
+});
+
+test('unknown schema is ignored, not treated as an error', () => {
+  localStorage.setItem('mealplan-out', JSON.stringify({ schema:'mealplan-exchange.v9', meals:[] }));
+  assert.strictEqual(readMealPlan(), null);
+  assert.deepStrictEqual(plannedMeals(), []);
+});
+
+test('unreadable plan data is ignored, not fatal', () => {
+  localStorage.setItem('mealplan-out', 'not json{');
+  assert.strictEqual(readMealPlan(), null);
+});
+
+test('past meals and non-standard slots are filtered out', () => {
+  const future = dayAhead(1);
+  localStorage.setItem('mealplan-out', JSON.stringify({
+    schema:'mealplan-exchange.v1', meals:[
+      { date:'2020-01-01', slot:'dinner', recipeId:'rb_a', title:'Old' },
+      { date:future, slot:'dessert', recipeId:'rb_b', title:'Cake' },
+      { date:future, slot:'lunch', recipeId:'rb_c', title:'Soup' }
+    ]
+  }));
+  const meals = plannedMeals();
+  assert.strictEqual(meals.length, 1);
+  assert.strictEqual(meals[0].title, 'Soup');
+});
+
+test('meals sort by date then breakfast/lunch/dinner', () => {
+  const d0 = dayAhead(0), d1 = dayAhead(1);
+  localStorage.setItem('mealplan-out', JSON.stringify({
+    schema:'mealplan-exchange.v1', meals:[
+      { date:d1, slot:'breakfast', recipeId:'rb_x', title:'Eggs' },
+      { date:d0, slot:'dinner', recipeId:'rb_y', title:'Tacos' },
+      { date:d0, slot:'breakfast', recipeId:'rb_z', title:'Oats' }
+    ]
+  }));
+  assert.deepStrictEqual(plannedMeals().map(m => m.title), ['Oats','Tacos','Eggs']);
+});
+
+test('scanned recipes go out with an fs_ id (their collision guard)', () => {
   boot(GOOD);
-  const days = next7();
-  S.recipes.push({ id:'r1', title:'Tacos', ingredients:'1 lb ground beef', deleted:false });
-  S.recipes.push({ id:'r2', title:'Chili', ingredients:'1 lb ground beef', deleted:false });
-  S.meals.push({ id:'m1', date:days[1], slot:'dinner', title:'Tacos', recipeId:'r1', deleted:false });
-  S.meals.push({ id:'m2', date:days[3], slot:'dinner', title:'Chili', recipeId:'r2', deleted:false });
-  openGroceryBuilder();
-  assert.strictEqual(groceryItems.length, 1, 'one line for beef');
-  assert.strictEqual(groceryItems[0].count, 2, 'but two pounds of it');
+  localStorage.removeItem('flyersnap-scanned-out');
+  queueScannedRecipe({ title:"Grandma's Chili", category:'Dinner',
+    ingredients:'1 lb ground beef\n1 onion', instructions:'1. Brown the beef' });
+  const env = JSON.parse(localStorage.getItem('flyersnap-scanned-out'));
+  assert.strictEqual(env.schema, 'recipe-exchange.v1');
+  assert.strictEqual(env.recipes.length, 1);
+  assert.ok(/^fs_/.test(env.recipes[0].id), 'id must be fs_ namespaced');
+  assert.strictEqual(env.recipes[0].source, 'Scanned in FlyerSnap');
+  assert.ok(env.recipes[0].ingredients.includes('\n'), 'ingredients stay newline-delimited');
+});
+
+test('the outbox is a rolling window, not unbounded', () => {
+  localStorage.removeItem('flyersnap-scanned-out');
+  for(let i = 0; i < SCANNED_KEEP + 5; i++) queueScannedRecipe({ title:'R' + i, ingredients:'x' });
+  const env = JSON.parse(localStorage.getItem('flyersnap-scanned-out'));
+  assert.strictEqual(env.recipes.length, SCANNED_KEEP);
+  assert.strictEqual(env.recipes[env.recipes.length - 1].title, 'R' + (SCANNED_KEEP + 4), 'keeps newest');
+});
+
+test('a corrupt outbox is rebuilt rather than throwing', () => {
+  localStorage.setItem('flyersnap-scanned-out', 'garbage{');
+  assert.strictEqual(queueScannedRecipe({ title:'Fresh', ingredients:'x' }), true);
+  const env = JSON.parse(localStorage.getItem('flyersnap-scanned-out'));
+  assert.strictEqual(env.recipes.length, 1);
+});
+
+test('FlyerSnap never writes the recipe app\'s keys', () => {
+  boot(GOOD);
+  localStorage.removeItem('mealplan-out');
+  queueScannedRecipe({ title:'X', ingredients:'y' });
+  save();
+  assert.strictEqual(localStorage.getItem('mealplan-out'), null, 'mealplan-out is theirs');
+  const ours = Object.keys(localStorage._d);
+  assert.ok(!ours.some(k => /^mealplanner-/.test(k)), 'mealplanner-* namespace untouched');
 });
 
 console.log('\nSharing');

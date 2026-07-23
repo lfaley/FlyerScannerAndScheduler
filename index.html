@@ -330,6 +330,42 @@ Rules:
 - If no dates are found, return [].`;
 }
 
+const CLASSIFY_PROMPT = `You are reading a photo or PDF a parent has captured. It is ONE of two things:
+
+(a) PAPERWORK — a school flyer, dance/sports schedule, newsletter, permission slip, enrollment form. Contains dates, times, deadlines.
+(b) A RECIPE — a recipe card, cookbook page, or recipe clipped from a flyer. Contains ingredients and cooking steps.
+
+Today's date is {TODAY}. Use it to resolve dates that omit the year (assume the nearest future occurrence).
+
+Respond with ONLY a JSON object, no markdown fences, no commentary.
+
+If it is PAPERWORK:
+{"type":"events","events":[{"title":"short name","date":"YYYY-MM-DD","time":"HH:MM 24h or null","location":"string or null","kind":"deadline" if a due date/registration cutoff/form return date, otherwise "event","notes":"one short useful sentence or null"}]}
+
+If it is a RECIPE:
+{"type":"recipe","recipe":{"title":"dish name","category":"Breakfast"|"Lunch"|"Dinner"|"Snack"|"Other","ingredients":"plain text, one ingredient per line","instructions":"numbered plain text steps"}}
+
+If you genuinely cannot tell, use {"type":"unknown"}.
+
+Rules for paperwork: registration/signup/payment/form-due dates are "deadline"; performances, games, meetings, picture days are "event". If a date range is given, use the start date and mention the range in notes. If it is paperwork but has no dates at all, return {"type":"events","events":[]}.`;
+
+async function extractAny(base64, mediaType, isPdf){
+  const block = isPdf
+    ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
+    : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
+  const text = await callClaude([block,
+    {type:'text', text: CLASSIFY_PROMPT.replace('{TODAY}', todayISO())}], 3000);
+  let out;
+  try{ out = JSON.parse(text); }catch(e){ throw new Error('Could not read that. Try a clearer photo.'); }
+  if(out && out.type === 'recipe' && out.recipe && out.recipe.title){
+    return { type:'recipe', recipe: out.recipe };
+  }
+  if(out && out.type === 'events'){
+    return { type:'events', events: parseExtractedEvents(JSON.stringify(out.events || [])) };
+  }
+  return { type:'unknown' };
+}
+
 async function extractEvents(base64, mediaType, isPdf){
   const block = isPdf
     ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
@@ -614,7 +650,7 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents, groceryBuild:renderGroceryBuild};
+    shareEvents:renderShareEvents};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
@@ -979,12 +1015,35 @@ async function handleCapture(fileList, isPdf){
   try{
     let found = [];
     for(let i=0; i<files.length; i++){
-      if(files.length>1) sub('busy', {msg:`Reading page ${i+1} of ${files.length}…`, hint:'Claude is finding dates, times, and deadlines'});
+      if(files.length>1) sub('busy', {msg:`Reading page ${i+1} of ${files.length}…`, hint:'Claude is working out what this is'});
       const f = files[i];
       let base64, mediaType;
       if(isPdf){ base64 = await readFile(f); mediaType='application/pdf'; }
       else { const r = await readImageDownscaled(f); base64=r.base64; mediaType=r.mediaType; }
-      found = found.concat(await extractEvents(base64, mediaType, isPdf));
+
+      // A single capture might be a recipe rather than paperwork — let Claude
+      // decide rather than making the user sort it first.
+      if(files.length === 1 && !append){
+        const out = await extractAny(base64, mediaType, isPdf);
+        if(out.type === 'recipe'){
+          recipeForm = {
+            title: out.recipe.title || '',
+            category: ['Breakfast','Lunch','Dinner','Snack','Other'].includes(out.recipe.category) ? out.recipe.category : 'Other',
+            ingredients: out.recipe.ingredients || '',
+            instructions: out.recipe.instructions || ''
+          };
+          toast('That looks like a recipe — sending it to the Recipe app');
+          sub('recipeForm');
+          return;
+        }
+        if(out.type === 'unknown'){
+          alert('Could not tell what that is. Try a clearer photo, or use Scan a recipe if it is a recipe.');
+          back(); return;
+        }
+        found = out.events;
+      } else {
+        found = found.concat(await extractEvents(base64, mediaType, isPdf));
+      }
     }
     if(!found.length){
       alert('No dates found. Try a clearer photo or a different page.');
@@ -1530,222 +1589,189 @@ function clearChecked(listId){
   save(); render();
 }
 
-// ---------- Meals tab ----------
-let mealEdit = null;
-function next7(){
-  const out=[]; const d=new Date();
-  for(let i=0;i<7;i++) out.push(iso(new Date(d.getFullYear(),d.getMonth(),d.getDate()+i)));
-  return out;
+// ---------- Cross-app exchange (recipe app) ----------
+// Same origin as https://lfaley.github.io/meal-planner-shoppin/, so we trade
+// through two localStorage keys. One writer per key, no merging.
+//   mealplan-out           <- recipe app writes, we read
+//   flyersnap-scanned-out  <- we write, recipe app reads
+// We NEVER write mealplan-out or any mealplanner-* key, and never touch their
+// IndexedDB database (MealPlannerDB).
+
+const MEALPLAN_KEY = 'mealplan-out';
+const SCANNED_KEY = 'flyersnap-scanned-out';
+const SCANNED_KEEP = 20;          // they dedupe by id; we just keep a rolling window
+const RECIPE_APP_URL = 'https://lfaley.github.io/meal-planner-shoppin/';
+
+function readMealPlan(){
+  try{
+    const raw = localStorage.getItem(MEALPLAN_KEY);
+    if(!raw) return null;
+    const env = JSON.parse(raw);
+    if(!env || env.schema !== 'mealplan-exchange.v1' || !Array.isArray(env.meals)) return null;
+    return env;
+  }catch(e){ return null; }   // unreadable = no data, never an error
 }
+
+function plannedMeals(){
+  const env = readMealPlan();
+  if(!env) return [];
+  const today = todayISO();
+  return env.meals
+    .filter(m => m && m.date >= today && ['breakfast','lunch','dinner'].includes(m.slot))
+    .sort((a,b) => a.date === b.date
+      ? ['breakfast','lunch','dinner'].indexOf(a.slot) - ['breakfast','lunch','dinner'].indexOf(b.slot)
+      : a.date.localeCompare(b.date));
+}
+
+function mealsByDate(){
+  const map = {};
+  plannedMeals().forEach(m => { (map[m.date] = map[m.date] || []).push(m); });
+  return map;
+}
+
+function recipeUrl(meal){
+  const env = readMealPlan();
+  if(!env || !env.recipeUrlTemplate || !meal.recipeId) return null;
+  return env.recipeUrlTemplate.replace('{id}', meal.recipeId);   // rb_ prefix stays; their router strips it
+}
+function shoppingUrl(){
+  const env = readMealPlan();
+  return (env && env.shoppingListUrl) || RECIPE_APP_URL;
+}
+function openUrl(u){ if(u) window.open(u, '_blank'); }
+
+// --- what we send them: recipes the scanner produced ---
+function queueScannedRecipe(r){
+  let env;
+  try{
+    env = JSON.parse(localStorage.getItem(SCANNED_KEY) || 'null');
+  }catch(e){ env = null; }
+  if(!env || env.schema !== 'recipe-exchange.v1' || !Array.isArray(env.recipes)){
+    env = { schema:'recipe-exchange.v1', updatedAt:new Date().toISOString(), recipes:[] };
+  }
+  env.recipes.push({
+    id: 'fs_' + uid(),                       // their collision guard rejects anything not fs_*
+    title: r.title,
+    category: r.category || null,
+    ingredients: r.ingredients || '',
+    instructions: r.instructions || '',
+    updatedAt: new Date().toISOString(),
+    source: 'Scanned in FlyerSnap'
+  });
+  if(env.recipes.length > SCANNED_KEEP) env.recipes = env.recipes.slice(-SCANNED_KEEP);
+  env.updatedAt = new Date().toISOString();
+  try{
+    localStorage.setItem(SCANNED_KEY, JSON.stringify(env));
+    return true;
+  }catch(e){ return false; }
+}
+function scannedCount(){
+  try{
+    const env = JSON.parse(localStorage.getItem(SCANNED_KEY) || 'null');
+    return (env && Array.isArray(env.recipes)) ? env.recipes.length : 0;
+  }catch(e){ return 0; }
+}
+
+// ---------- Meals tab (read-only view of the recipe app's plan) ----------
+
 function renderMeals(m){
   setHeader('Meal Plan', false);
-  const days = next7();
-  const recipes = S.recipes.filter(r=>!r.deleted);
-  let html = `<div class="formrow">
-    <button class="btn alt" onclick="sub('recipeBox')">📖 Recipe Box (${recipes.length})</button>
-    <button class="btn alt" onclick="openGroceryBuilder()">🛒 Ingredients</button>
-  </div>`;
-  html += days.map((d,idx)=>`<div class="card">
-    <div style="font-size:14px;font-weight:800;margin-bottom:6px">${idx===0?'Today':idx===1?'Tomorrow':friendly(d)}</div>` +
-    SLOTS.map(slot=>{
-      const meal = S.meals.find(x=>x.date===d && x.slot===slot && !x.deleted);
-      return `<div class="slot" onclick="openMealEdit('${d}','${slot}')">
-        <span class="slotb">${slot[0].toUpperCase()}</span>
-        <span class="slottext ${meal?'':'empty'}">${meal?esc(meal.title):'Tap to plan'}</span></div>`;
-    }).join('') + `</div>`).join('');
-  m.innerHTML = html;
-  if(mealEdit) showMealSheet();
-}
-function openMealEdit(date, slot){
-  const meal = S.meals.find(x=>x.date===date && x.slot===slot && !x.deleted);
-  mealEdit = {date, slot, text: meal?meal.title:''};
-  render();
-}
-function showMealSheet(){
-  const recipes = S.recipes.filter(r=>!r.deleted);
-  const ov = document.createElement('div'); ov.className='overlay'; ov.onclick=()=>{mealEdit=null;render();};
-  const sh = document.createElement('div'); sh.className='sheet';
-  sh.innerHTML = `<div class="label" style="margin-top:0">${mealEdit.slot.toUpperCase()} · ${friendly(mealEdit.date)}</div>
-    <div class="formrow">
-      <input type="text" id="mealText" placeholder="What's the plan? (empty to clear)" value="${esc(mealEdit.text)}">
-      <button class="btn sm" onclick="saveMeal()">Save</button>
-    </div>` +
-    (recipes.length ? `<div class="filterbar" style="padding-bottom:0">` +
-      recipes.map(r=>`<span class="chip" style="background:var(--green-lt);border-color:var(--green-lt);color:var(--green)"
-        onclick="saveMeal('${r.id}')">${esc(r.title)}</span>`).join('') + `</div>` : '');
-  document.getElementById('main').append(ov, sh);
-  document.getElementById('mealText').focus();
-}
-function saveMeal(recipeId){
-  const r = recipeId ? S.recipes.find(x=>x.id===recipeId) : null;
-  const text = r ? r.title : document.getElementById('mealText').value.trim();
-  S.meals = S.meals.filter(x=>!(x.date===mealEdit.date && x.slot===mealEdit.slot));
-  if(text) S.meals.push({id:uid(), date:mealEdit.date, slot:mealEdit.slot, title:text, recipeId:recipeId||null, deleted:false});
-  mealEdit = null; save(); render();
-}
+  const env = readMealPlan();
+  const byDate = mealsByDate();
+  const dates = Object.keys(byDate).sort();
 
-// ---------- Meal plan -> grocery list ----------
-// Recipes carry ingredients and the week carries recipes, so the grocery list
-// can just be assembled instead of retyped.
-//
-// Pantry model: an ingredient is "covered" from the moment it lands on the list
-// until the meal that needed it has passed. Ticking it off means you BOUGHT it,
-// not that you used it — so it stays covered until its meal date goes by.
-let groceryItems = [], grocerySel = null;
+  let html = '';
 
-function normIng(s){
-  return String(s).toLowerCase().replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
-}
-function groceryList(){ return S.lists.find(l=>!l.deleted && /grocer|shop|store/i.test(l.name)); }
-
-function coveredIngredients(){
-  const today = todayISO();
-  const list = groceryList();
-  const held = new Set();
-  if(!list) return held;
-  S.listItems.filter(i=>i.listId===list.id && !i.deleted).forEach(i=>{
-    const key = i.ingKey || normIng(i.text);
-    if(!key) return;
-    if(!i.checked){ held.add(key); return; }            // still on the list to buy
-    if(i.forDate && i.forDate >= today) held.add(key);  // bought, meal not cooked yet
-    // bought and the meal has passed -> eaten, buy it again
-  });
-  return held;
-}
-
-function openGroceryBuilder(){
-  const days = next7();
-  const planned = S.meals
-    .filter(m=>!m.deleted && m.recipeId && days.includes(m.date))
-    .sort((a,b)=>a.date.localeCompare(b.date));
-
-  // Roll up by ingredient rather than by recipe — you shop by ingredient.
-  const byIng = new Map();
-  for(const meal of planned){
-    const r = S.recipes.find(x=>x.id===meal.recipeId && !x.deleted);
-    if(!r || !r.ingredients) continue;
-    r.ingredients.split('\n').map(s=>s.trim()).filter(Boolean).forEach(line=>{
-      const key = normIng(line);
-      if(!key) return;
-      if(!byIng.has(key)) byIng.set(key, { text:line, key, recipes:[], count:0, forDate:meal.date });
-      const g = byIng.get(key);
-      if(!g.recipes.includes(r.title)) g.recipes.push(r.title);
-      g.count++;                                   // needed twice = say so
-      if(meal.date < g.forDate) g.forDate = meal.date;
-    });
-  }
-
-  const held = coveredIngredients();
-  groceryItems = [...byIng.values()]
-    .sort((x,y)=>x.key.localeCompare(y.key))
-    .map(g=>({ ...g, dup: held.has(g.key) }));
-  grocerySel = new Set(groceryItems.map((_,i)=>i).filter(i=>!groceryItems[i].dup));
-  sub('groceryBuild');
-}
-
-function toggleGrocery(i){ grocerySel.has(i) ? grocerySel.delete(i) : grocerySel.add(i); render(); }
-function groceryToggleAll(){
-  grocerySel = grocerySel.size === groceryItems.length
-    ? new Set()
-    : new Set(groceryItems.map((_,i)=>i));
-  render();
-}
-function addToGrocery(){
-  const chosen = [...grocerySel].sort((a,b)=>a-b).map(i=>groceryItems[i]);
-  if(!chosen.length){ toast('Tick the ingredients you need'); return; }
-  let list = groceryList();
-  if(!list){ list = { id:uid(), name:'Groceries', deleted:false }; S.lists.push(list); }
-  chosen.forEach(it=>{
-    S.listItems.push({
-      id:uid(), listId:list.id,
-      text: it.text + (it.count > 1 ? ' ×' + it.count : ''),
-      ingKey: it.key,        // survives the ×N suffix so matching still works
-      forDate: it.forDate,   // when it gets eaten
-      checked:false, deleted:false
-    });
-  });
-  save();
-  toast(`Added ${chosen.length} item${chosen.length===1?'':'s'} to ${list.name}`);
-  view = { tab:'lists', sub:'listDetail', data:{ id:list.id } };
-  render();
-}
-
-function renderGroceryBuild(m){
-  setHeader('Ingredients → Groceries', true);
-  if(!groceryItems.length){
-    m.innerHTML = `<div class="empty"><div class="et">No recipe ingredients this week</div>
-      <div class="eb">Plan a meal from your Recipe Box — tap any slot on the Meals tab and pick a recipe chip — and its ingredients show up here ready to shop.</div></div>`;
+  if(!env){
+    html += `<div class="empty">
+      <div class="et">No meal plan yet</div>
+      <div class="eb">Meals are planned in the Recipe app. Once you plan a week there, it shows up here on your calendar with links back to each recipe.</div>
+    </div>
+    <button class="btn" onclick="openUrl(RECIPE_APP_URL)">🍳 Open Recipe app</button>
+    <div style="text-align:center;margin-top:10px"><button class="linkbtn" onclick="sub('recipeBox')">📷 Scan a recipe</button></div>`;
+    m.innerHTML = html;
     return;
   }
-  const n = grocerySel.size;
-  const dupCount = groceryItems.filter(i=>i.dup).length;
-  let html = `<div class="help">Everything this week's planned meals call for.${dupCount?` ${dupCount} already covered — unticked. Those come back once the meal has passed.`:''}</div>
-    <div style="text-align:right;margin-bottom:6px">
-      <button class="linkbtn" style="padding:2px 8px" onclick="groceryToggleAll()">${n===groceryItems.length?'Clear all':'Select all'}</button></div>`;
 
-  html += groceryItems.map((it,i)=>{
-    const on = grocerySel.has(i);
-    return `<div class="card row ${on?'':'dim'}" style="padding:11px;margin-bottom:6px" onclick="toggleGrocery(${i})">
-      <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px">${on?'✓':''}</div>
-      <div class="grow">
-        <div style="font-size:14px">${esc(it.text)}${it.count>1?` <b>×${it.count}</b>`:''}</div>
-        <div class="meta" style="font-size:11px">${esc(it.recipes.join(', '))}</div>
-      </div>
-      ${it.dup?`<span class="meta" style="font-size:10px">covered</span>`:''}
-    </div>`;
+  html += `<div class="formrow">
+    <button class="btn alt" onclick="openUrl(RECIPE_APP_URL)">🍳 Recipe app</button>
+    <button class="btn alt" onclick="openUrl(shoppingUrl())">🛒 Shopping list</button>
+  </div>
+  <div style="text-align:right;margin-bottom:6px">
+    <button class="linkbtn" style="padding:2px 8px" onclick="sub('recipeBox')">📷 Scan a recipe</button></div>`;
+
+  if(!dates.length){
+    html += `<div class="empty"><div class="eb">Nothing planned for the days ahead. Plan a week in the Recipe app and it'll appear here.</div></div>`;
+    m.innerHTML = html;
+    return;
+  }
+
+  const SLOT_LABEL = { breakfast:'B', lunch:'L', dinner:'D' };
+  html += dates.map(d => {
+    const idx = daysUntil(d);
+    const label = idx === 0 ? 'Today' : idx === 1 ? 'Tomorrow' : friendly(d);
+    return `<div class="card">
+      <div style="font-size:14px;font-weight:800;margin-bottom:6px">${label}</div>` +
+      byDate[d].map((meal, i) => `<div class="slot" onclick="mealActions('${d}','${meal.slot}')">
+        <span class="slotb">${SLOT_LABEL[meal.slot]}</span>
+        <span class="slottext grow">${esc(meal.title || 'Planned')}</span>
+        <span class="meta" style="font-size:11px">›</span>
+      </div>`).join('') + `</div>`;
   }).join('');
 
-  html += `<div class="card" style="position:sticky;bottom:76px;margin-top:12px">
-    <button class="btn" onclick="addToGrocery()">🛒 Add ${n} to grocery list</button>
-  </div><div style="height:70px"></div>`;
-  m.innerHTML = html;
-}
-
-// ---------- Recipe Box ----------
-let recipeForm = null;
-function renderRecipeBox(m){
-  setHeader('Recipe Box', true);
-  const recipes = S.recipes.filter(r=>!r.deleted).sort((a,b)=>a.title.localeCompare(b.title));
-  let html = `<div class="formrow">
-    <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
-    <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
-  </div>`;
-  if(!recipes.length){
-    html += `<div class="empty"><div class="eb">The recipe box is empty. Photograph a recipe card or cookbook page and Claude will type it up for you.</div></div>`;
-  } else {
-    html += recipes.map(r=>`<div class="card row" onclick="showRecipe('${r.id}')">
-      <div class="grow"><div class="title">${esc(r.title)}</div>
-        ${r.category?`<div class="meta" style="font-size:11px">${esc(r.category)}</div>`:''}</div>
-      <span class="meta" style="font-size:11px">tap to view</span>
-      <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delRecipe('${r.id}')">✕</button>
-    </div>`).join('');
+  if(env.updatedAt){
+    html += `<div class="help" style="text-align:center;font-size:11px">Plan updated ${new Date(env.updatedAt).toLocaleString()}</div>`;
   }
   m.innerHTML = html;
 }
-function showRecipe(id){
-  const r = S.recipes.find(x=>x.id===id);
-  alert(r.title + (r.category?'\nCategory: '+r.category:'') +
-    (r.ingredients?'\n\nIngredients:\n'+r.ingredients:'') +
-    (r.instructions?'\n\nInstructions:\n'+r.instructions:''));
+
+function mealActions(date, slot){
+  const meal = plannedMeals().find(x => x.date === date && x.slot === slot);
+  if(!meal) return;
+  const rUrl = recipeUrl(meal);
+  const buttons = [];
+  if(rUrl) buttons.push({ label:'📖 Open recipe', fn:()=>openUrl(rUrl) });
+  buttons.push({ label:'🛒 Open shopping list', fn:()=>openUrl(shoppingUrl()) });
+  showSheet(meal.title || 'Planned meal',
+    friendly(date) + ' · ' + slot.charAt(0).toUpperCase() + slot.slice(1), buttons);
 }
-function delRecipe(id){
-  const r = S.recipes.find(x=>x.id===id);
-  if(confirm(`Delete "${r.title}"?`)){ r.deleted=true; save(); render(); }
+
+// ---------- Scanned recipes outbox ----------
+
+let recipeForm = null;
+
+function renderRecipeBox(m){
+  setHeader('Scan a Recipe', true);
+  const n = scannedCount();
+  m.innerHTML = `
+    <div class="help">Photograph a recipe from a book, card, or flyer. Claude types it up, you check it, and it goes to the Recipe app's library — that's where all your recipes live.</div>
+    <div class="formrow">
+      <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
+      <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
+    </div>
+    ${n ? `<div class="card" style="background:var(--green-lt)">
+        <div class="title" style="font-size:14px">${n} recipe${n===1?'':'s'} waiting in the Recipe app</div>
+        <div class="meta">Open the Recipe app and confirm them from the review banner to add them to your library.</div>
+        <button class="btn" style="margin-top:10px" onclick="openUrl(RECIPE_APP_URL)">🍳 Open Recipe app</button>
+      </div>`
+      : `<div class="help" style="font-style:italic">Nothing waiting. Scanned recipes appear in the Recipe app for you to confirm.</div>`}`;
 }
+
 function renderRecipeForm(m){
   setHeader('New Recipe', true);
   const f = recipeForm;
   m.innerHTML = `
+    <div class="help">This goes to the Recipe app's library for you to confirm there.</div>
     <input type="text" id="rTitle" placeholder="Recipe name" value="${esc(f.title)}" style="margin-bottom:10px">
-    <div>` + ['Breakfast','Lunch','Dinner','Snack','Other'].map(c=>
+    <div>` + ['Breakfast','Lunch','Dinner','Snack','Other'].map(c =>
       `<span class="chip ${f.category===c?'on':''}" onclick="syncRecipeForm();recipeForm.category='${c}';render()">${c}</span>`).join('') + `</div>
     <div class="label">Ingredients (one per line)</div>
     <textarea id="rIng">${esc(f.ingredients)}</textarea>
     <div class="label">Instructions</div>
     <textarea id="rIns">${esc(f.instructions)}</textarea>
     <div style="height:12px"></div>
-    <button class="btn" onclick="saveRecipe()">Save recipe</button>
-    <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="back();sub('recipeBox')">Cancel</button></div>`;
+    <button class="btn" onclick="sendRecipe()">Send to Recipe app</button>
+    <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="recipeForm=null;sub('recipeBox')">Cancel</button></div>`;
 }
 function syncRecipeForm(){
   const t=document.getElementById('rTitle'), i=document.getElementById('rIng'), n=document.getElementById('rIns');
@@ -1753,13 +1779,20 @@ function syncRecipeForm(){
   if(i) recipeForm.ingredients=i.value;
   if(n) recipeForm.instructions=n.value;
 }
-function saveRecipe(){
+function sendRecipe(){
   syncRecipeForm();
-  if(!recipeForm.title.trim()) return;
-  S.recipes.push({ id:uid(), title:recipeForm.title.trim(), category:recipeForm.category,
-    ingredients:recipeForm.ingredients, instructions:recipeForm.instructions, deleted:false });
-  recipeForm = null; save(); sub('recipeBox');
+  if(!recipeForm.title.trim()){ toast('Give the recipe a name'); return; }
+  const ok = queueScannedRecipe({
+    title: recipeForm.title.trim(),
+    category: recipeForm.category,
+    ingredients: recipeForm.ingredients,
+    instructions: recipeForm.instructions
+  });
+  recipeForm = null;
+  sub('recipeBox');
+  toast(ok ? 'Sent — confirm it in the Recipe app' : 'Could not send: storage is full');
 }
+
 async function handleRecipeScan(file){
   if(!file) return;
   if(!S.settings.apiKey){ alert('Add your Anthropic API key in Settings first.'); nav('settings'); return; }
@@ -1854,7 +1887,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.0 · data safety</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.1 · recipe app link</div>`;
 }
 function saveWatcher(){
   const u = (document.getElementById('watcherUrl').value||'').trim();
@@ -1985,7 +2018,12 @@ function maybeCheckEmail(){
   checkEmail(true);
 }
 maybeCheckEmail();
-document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeCheckEmail(); });
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden) return;
+  maybeCheckEmail();
+  // The recipe app rewrites mealplan-out on every change; re-render on return.
+  if(view.tab === 'meals' && !view.sub) render();
+});
 </script>
 </body>
 </html>
