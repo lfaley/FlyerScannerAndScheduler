@@ -2069,7 +2069,10 @@ function renderMeals(m){
       <div class="eb">Meals are planned in the Recipe app. Once you plan a week there, it shows up here on your calendar with links back to each recipe.</div>
     </div>
     <button class="btn" onclick="openUrl(RECIPE_APP_URL)">🍳 Open Recipe app</button>
-    <div style="text-align:center;margin-top:10px"><button class="linkbtn" onclick="sub('recipeBox')">📷 Scan a recipe</button></div>`;
+    <div style="text-align:center;margin-top:10px">
+      <button class="linkbtn" onclick="sub('recipeBox')">📷 Scan a recipe</button>
+      <button class="linkbtn" onclick="mealPlanDiagnostic()">🔍 Why don't I see my meals?</button>
+    </div>`;
     m.innerHTML = html;
     return;
   }
@@ -2104,6 +2107,62 @@ function renderMeals(m){
     html += `<div class="help" style="text-align:center;font-size:11px">Plan updated ${new Date(env.updatedAt).toLocaleString()}</div>`;
   }
   m.innerHTML = html;
+}
+
+function mealPlanDiagnostic(){
+  let raw = null, err = null;
+  try{ raw = localStorage.getItem('mealplan-out'); }catch(e){ err = e.message; }
+
+  const lines = [];
+  if(err){
+    lines.push('Could not read storage: ' + err);
+  } else if(raw === null){
+    lines.push('The recipe app has not written a meal plan to this app\'s storage.');
+    lines.push('');
+    lines.push('Most likely: the recipe app and FlyerSnap are not sharing storage.');
+    lines.push('iOS keeps an installed home-screen app separate from Safari, even on the same site.');
+    lines.push('');
+    lines.push('Try this: open the RECIPE app the SAME way you opened FlyerSnap.');
+    lines.push('If FlyerSnap is your home-screen icon, add the recipe app to your home screen too and plan/join from that icon — not from a Safari tab.');
+  } else {
+    let env = null;
+    try{ env = JSON.parse(raw); }catch(e){}
+    if(!env){
+      lines.push('A meal plan exists but could not be read (not valid JSON).');
+      lines.push('First 200 characters:');
+      lines.push(raw.slice(0, 200));
+    } else {
+      lines.push('Found a meal plan in storage.');
+      lines.push('Schema: ' + (env.schema || '(none)'));
+      lines.push('Total meals in plan: ' + (Array.isArray(env.meals) ? env.meals.length : 'not an array'));
+      if(Array.isArray(env.meals) && env.meals.length){
+        const today = todayISO();
+        const upcoming = env.meals.filter(m => m && m.date >= today);
+        const slots = [...new Set(env.meals.map(m => m && m.slot))];
+        lines.push('Upcoming (today or later): ' + upcoming.length);
+        lines.push('Slots present: ' + slots.join(', '));
+        const dates = env.meals.map(m => m && m.date).sort();
+        lines.push('Date range: ' + dates[0] + ' to ' + dates[dates.length-1]);
+        lines.push('Today is: ' + today);
+        if(!upcoming.length){
+          lines.push('');
+          lines.push('>> All planned meals are in the PAST, so nothing shows. Plan a meal for today or later.');
+        } else if(env.schema !== 'mealplan-exchange.v1'){
+          lines.push('');
+          lines.push('>> Schema is not mealplan-exchange.v1, so FlyerSnap ignores it. The recipe app is writing the wrong format.');
+        } else {
+          const goodSlots = upcoming.filter(m => ['breakfast','lunch','dinner'].includes(m.slot));
+          lines.push('');
+          if(goodSlots.length){
+            lines.push('>> ' + goodSlots.length + ' meal(s) SHOULD be showing. Close and reopen FlyerSnap.');
+          } else {
+            lines.push('>> Upcoming meals exist but none are breakfast/lunch/dinner. FlyerSnap only shows those three slots.');
+          }
+        }
+      }
+    }
+  }
+  alert(lines.join('\n'));
 }
 
 function mealActions(date, slot){
@@ -2277,7 +2336,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.8 · calendar fix for installed app</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.9 · meal plan diagnostic</div>`;
 }
 function manualPrune(){
   const n = pruneData();
