@@ -598,21 +598,35 @@ function buildVEVENTs(evt){
 function wrapICS(vevents){
   return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//FlyerSnap//EN'].concat(vevents).concat(['END:VCALENDAR']).join('\r\n');
 }
+// True when running as an installed home-screen app. In that mode iOS CANNOT
+// open a new browser tab, so window.open() strands the app on a blank page.
+function isStandalone(){
+  return (window.navigator.standalone === true) ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+
 function deliverICS(ics, filename, msg){
-  // iOS never offers Calendar in the share sheet. But Safari DOES render a
-  // text/calendar URL with an Add / Add All button. So we navigate to a blob
-  // URL instead of sharing a file.
   const blob = new Blob([ics], {type:'text/calendar'});
   const url = URL.createObjectURL(blob);
-  const win = window.open(url, '_blank');
-  if(!win){
-    // Popup blocked (rare inside a tap handler) — fall back to a download.
+
+  if(isStandalone()){
+    // Installed PWA: no new tab is possible. Download the .ics instead — tapping
+    // the downloaded file opens Calendar's import screen with an "Add All" button.
     const a = document.createElement('a');
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
+    toast('Saved ' + filename + ' — open it from Downloads to add everything 📆');
+  } else {
+    // Real Safari tab: rendering the URL shows Calendar's Add / Add All screen.
+    const win = window.open(url, '_blank');
+    if(!win){
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    if(msg) toast(msg);
   }
   setTimeout(()=>URL.revokeObjectURL(url), 60000);
-  if(msg) toast(msg);
 }
 
 // Last-resort path: hand the file to the share sheet so it can be mailed to
@@ -1152,8 +1166,11 @@ function emailBanner(){
 
 function calendarOptions(){
   const n = S.events.filter(e=>!e.deleted && e.date>=todayISO()).length;
+  const openLabel = isStandalone()
+    ? '📆 Download all ' + n + ' (.ics)'
+    : '📆 Open all ' + n + ' now (tap "Add All")';
   showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
-    {label:'📆 Open all ' + n + ' now (tap "Add All")', fn:()=>addAllAtOnce()},
+    {label: openLabel, fn:()=>addAllAtOnce()},
     {label:'✉️ Email them to myself', fn:()=>emailAllToSelf()},
     {label:'1️⃣ One at a time', fn:()=>startExportQueue(true)},
   ]);
@@ -2260,7 +2277,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.7 · duplicate cleanup + count</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.8 · calendar fix for installed app</div>`;
 }
 function manualPrune(){
   const n = pruneData();

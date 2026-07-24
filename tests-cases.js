@@ -598,6 +598,57 @@ test('upcoming and past counts reflect the active filter', () => {
   eventSearch = '';
 });
 
+console.log('\nCalendar delivery');
+
+test('installed PWA downloads the ics instead of opening a tab', () => {
+  boot(GOOD);
+  const realStandalone = isStandalone;
+  isStandalone = () => true;                 // simulate the installed app
+  let opened = false, downloaded = false;
+  const realOpen = window.open;
+  window.open = () => { opened = true; return null; };
+  const realCreate = document.createElement;
+  document.createElement = (t) => {
+    const el = realCreate(t);
+    if(t === 'a'){ el.click = () => { downloaded = true; }; }
+    return el;
+  };
+  S.events = [{ id:'e1', title:'Recital', date:dayAhead(3), kind:'event', deleted:false }];
+  addAllAtOnce();
+  assert.strictEqual(opened, false, 'must NOT try to open a tab in standalone');
+  assert.ok(downloaded, 'delivered as a download instead');
+  window.open = realOpen;
+  document.createElement = realCreate;
+  isStandalone = realStandalone;
+});
+
+test('a real Safari tab still uses window.open', () => {
+  boot(GOOD);
+  const realStandalone = isStandalone;
+  isStandalone = () => false;                // a normal browser tab
+  let opened = false;
+  const realOpen = window.open;
+  window.open = () => { opened = true; return {}; };
+  S.events = [{ id:'e1', title:'Recital', date:dayAhead(3), kind:'event', deleted:false }];
+  addAllAtOnce();
+  assert.ok(opened, 'opens the calendar render in a tab');
+  window.open = realOpen;
+  isStandalone = realStandalone;
+});
+
+test('exporting still marks events exported', () => {
+  boot(GOOD);
+  const realStandalone = isStandalone;
+  isStandalone = () => true;
+  const realCreate = document.createElement;
+  document.createElement = (t) => { const el = realCreate(t); if(t==='a') el.click = () => {}; return el; };
+  S.events = [{ id:'e1', title:'A', date:dayAhead(2), kind:'event', deleted:false }];
+  addAllAtOnce();
+  assert.strictEqual(S.events[0].exported, true);
+  document.createElement = realCreate;
+  isStandalone = realStandalone;
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
