@@ -750,7 +750,7 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents};
+    shareEvents:renderShareEvents, dedupe:renderDedupe};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
@@ -875,6 +875,7 @@ function evtCard(e, isPast){
 }
 function renderEvents(m){
   setHeader('FlyerSnap', false);
+  maybeCheckEmail();   // no-op unless a check is actually due
   const kids = S.kids.filter(k=>!k.deleted);
   const evts = upcomingEvents();
   const past = pastEvents();
@@ -896,6 +897,17 @@ function renderEvents(m){
   }
 
   html += emailBanner();
+  const dupGroups = duplicateGroups().length;
+  if(dupGroups && !eventSearch){
+    html += `<div class="card" style="border-left:5px solid var(--amber)">
+      <div class="row">
+        <div class="grow">
+          <div class="title" style="font-size:14px">${dupGroups} possible duplicate${dupGroups===1?'':'s'}</div>
+          <div class="meta">Same day, same-looking event -- probably scanned and emailed.</div>
+        </div>
+        <button class="btn sm" onclick="openDedupe()">Review</button>
+      </div></div>`;
+  }
   html += backupNudge();
   html += exportQueueBanner();
   if(!evts.length){
@@ -991,6 +1003,14 @@ async function fetchEmailQueue(){
   return { fresh, lastRun: data.lastRun };
 }
 
+// Quietly look for new email-sourced events on open (at most every 20 minutes)
+function maybeCheckEmail(){
+  if(!watcherConfigured()) return;
+  const last = S.settings.lastEmailCheck ? Date.parse(S.settings.lastEmailCheck) : 0;
+  if(Date.now() - last < 20 * 60 * 1000) return;
+  checkEmail(true);
+}
+
 async function checkEmail(silent){
   if(!watcherConfigured()){
     if(!silent){ alert('Set up the Gmail watcher in Settings first.'); nav('settings'); }
@@ -1029,15 +1049,11 @@ async function openEmailReviewNow(){
 }
 
 function openEmailReview(fresh){
-  const seenTitles = new Set(S.events.filter(e=>!e.deleted).map(e=>dupKey(e.title, e.date)));
   pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
-  pendingEvents = fresh.map(i=>{
-    const key = dupKey(i.title, i.date);
-    const dup = seenTitles.has(key);
-    seenTitles.add(key);
-    return { title:i.title, date:i.date, time:i.time, location:i.location, kind:i.kind,
-      notes:i.notes, selected:!dup, dup, kidId:null, source:i.source };
-  });
+  pendingEvents = markDuplicates(fresh.map(i => ({
+    title:i.title, date:i.date, time:i.time, location:i.location,
+    kind:i.kind, notes:i.notes, source:i.source
+  })));
   pendingSource = 'Email';
   S.settings.pendingEmailCount = 0;
   save();
@@ -1150,6 +1166,102 @@ function onEventSearch(v){
 }
 function clearEventSearch(){ eventSearch = ''; pastLimit = 30; render(); }
 
+// Duplicates that are already saved -- e.g. a flyer scanned by hand and the same
+// announcement arriving by email before matching was improved.
+function duplicateGroups(){
+  const evts = S.events.filter(e => !e.deleted)
+    .sort((a,b) => a.date.localeCompare(b.date));
+  const used = new Set();
+  const groups = [];
+  for(let i = 0; i < evts.length; i++){
+    if(used.has(evts[i].id)) continue;
+    const group = [evts[i]];
+    for(let j = i + 1; j < evts.length; j++){
+      if(used.has(evts[j].id)) continue;
+      if(evts[j].date !== evts[i].date) continue;
+      if(group.some(g => looksDuplicate(g, evts[j]))){
+        group.push(evts[j]);
+        used.add(evts[j].id);
+      }
+    }
+    if(group.length > 1){ used.add(evts[i].id); groups.push(group); }
+  }
+  return groups;
+}
+
+// Keep whichever copy carries the most information.
+function richness(e){
+  return (e.time ? 2 : 0) + (e.location ? 2 : 0) + (e.notes ? 1 : 0) +
+         (e.kidId ? 1 : 0) + (e.exported ? 1 : 0);
+}
+function bestOfGroup(group){
+  return group.slice().sort((a,b) => richness(b) - richness(a))[0];
+}
+
+let dedupeKeep = {};      // groupIndex -> event id to keep
+
+function openDedupe(){
+  dedupeKeep = {};
+  duplicateGroups().forEach((g, i) => { dedupeKeep[i] = bestOfGroup(g).id; });
+  sub('dedupe');
+}
+function setDedupeKeep(i, id){ dedupeKeep[i] = id; render(); }
+
+function applyDedupe(){
+  const groups = duplicateGroups();
+  let removed = 0;
+  groups.forEach((g, i) => {
+    const keep = dedupeKeep[i];
+    if(!keep) return;                                  // "keep both" -- skip the group
+    g.forEach(e => {
+      if(e.id !== keep){ e.deleted = true; e.dirty = 1; removed++; }
+    });
+  });
+  save();
+  toast(removed ? `Removed ${removed} duplicate${removed===1?'':'s'}` : 'Nothing removed');
+  view = { tab:'events', sub:null, data:null };
+  render();
+}
+
+function renderDedupe(m){
+  setHeader('Possible Duplicates', true);
+  const groups = duplicateGroups();
+  if(!groups.length){
+    m.innerHTML = `<div class="empty"><div class="et">No duplicates found</div>
+      <div class="eb">Nothing on the same day looks like the same event.</div></div>`;
+    return;
+  }
+  let html = `<div class="help">These landed on the same day and look like the same thing.
+    Pick the copy to keep -- the others are removed. Nothing is deleted until you tap the button at the bottom.</div>`;
+
+  html += groups.map((g, i) => `<div class="card">
+    <div style="font-size:13px;font-weight:800;margin-bottom:8px">${friendly(g[0].date)}</div>
+    ${g.map(e => {
+      const on = dedupeKeep[i] === e.id;
+      const kid = e.kidId ? kidById(e.kidId) : null;
+      return `<div class="row" style="padding:8px 0;border-top:1px solid #EEF2EF" onclick="setDedupeKeep(${i}, '${e.id}')">
+        <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px">${on?'✓':''}</div>
+        <div class="grow">
+          <div style="font-size:14px;font-weight:${on?'700':'400'}">${esc(e.title)} ${e.exported?'📆':''}</div>
+          <div class="meta" style="font-size:11px">
+            ${e.time ? e.time + ' · ' : ''}${e.location ? esc(e.location) + ' · ' : ''}${kid ? esc(kid.name) + ' · ' : ''}${esc(e.source || 'added by hand')}
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+    <div style="text-align:right;padding-top:6px">
+      <button class="linkbtn" style="padding:2px 6px" onclick="setDedupeKeep(${i}, null)">${dedupeKeep[i] ? 'Keep both' : '✓ Keeping both'}</button>
+    </div>
+  </div>`).join('');
+
+  const removing = groups.reduce((n, g, i) => n + (dedupeKeep[i] ? g.length - 1 : 0), 0);
+  html += `<div class="card" style="position:sticky;bottom:76px">
+    <button class="btn ${removing?'':'alt'}" onclick="applyDedupe()">
+      ${removing ? `Remove ${removing} duplicate${removing===1?'':'s'}` : 'Nothing selected for removal'}
+    </button></div><div style="height:70px"></div>`;
+  m.innerHTML = html;
+}
+
 function eventActions(id){
   const e = S.events.find(x=>x.id===id);
   if(!e) return;
@@ -1190,7 +1302,46 @@ function renderCapture(m){
     <div class="help">Tip: on ParentSquare links, long-press the link in your email and pick "Open in Safari" — otherwise iOS opens the app instead of the flyer.</div>`;
 }
 
-function dupKey(t, d){ return String(t).toLowerCase().trim() + '|' + d; }
+// The same announcement can reach us twice -- once photographed, once by email --
+// and Claude words the two slightly differently ("&" vs "and", extra qualifiers).
+// Matching therefore has to be on meaning, not on the exact string.
+function normTitle(t){
+  return String(t || '').toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\b(the|a|an|of|for|to|at|on|in|our|your|please|note)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function dupKey(t, d){ return normTitle(t) + '|' + d; }
+
+// Overlap measured against the shorter title, so "Picture Day" still matches
+// "Fall Picture Day for Grades 1-5".
+function titleSimilarity(a, b){
+  const A = normTitle(a).split(' ').filter(Boolean);
+  const B = normTitle(b).split(' ').filter(Boolean);
+  if(!A.length || !B.length) return 0;
+  const setB = new Set(B);
+  const overlap = A.filter(w => setB.has(w)).length;
+  return overlap / Math.min(A.length, B.length);
+}
+
+function looksDuplicate(a, b){
+  if(!a || !b || a.date !== b.date) return false;          // same day is required
+  if(normTitle(a.title) === normTitle(b.title)) return true;
+  return titleSimilarity(a.title, b.title) >= 0.6;
+}
+
+// Shared by every import path: photo, PDF, link and email.
+function markDuplicates(found, alsoPending){
+  const seen = S.events.filter(e => !e.deleted).map(e => ({ title:e.title, date:e.date }));
+  if(alsoPending) alsoPending.forEach(p => seen.push({ title:p.title, date:p.date }));
+  return found.map(e => {
+    const dup = seen.some(x => looksDuplicate(e, x));
+    seen.push({ title:e.title, date:e.date });
+    return { ...e, selected: !dup, dup, kidId: null };
+  });
+}
 
 async function handleCapture(fileList, isPdf){
   const files = Array.from(fileList||[]).filter(Boolean);
@@ -1240,15 +1391,7 @@ async function handleCapture(fileList, isPdf){
       return;
     }
     // Duplicate detection: against saved events, prior pending items, and within this batch
-    const seen = new Set(S.events.filter(e=>!e.deleted).map(e=>dupKey(e.title, e.date)));
-    if(append) for(const p of pendingEvents) seen.add(dupKey(p.title, p.date));
-    const items = [];
-    for(const e of found){
-      const key = dupKey(e.title, e.date);
-      const dup = seen.has(key);
-      seen.add(key);
-      items.push({...e, selected:!dup, dup, kidId:null});
-    }
+    const items = markDuplicates(found, append ? pendingEvents : null);
     if(append){ pendingEvents = pendingEvents.concat(items); }
     else {
       pendingEvents = items;
@@ -1328,14 +1471,7 @@ async function handleLinkCapture(url){
       append ? sub('review') : back();
       return;
     }
-    const seen = new Set(S.events.filter(e=>!e.deleted).map(e=>dupKey(e.title, e.date)));
-    if(append) for(const p of pendingEvents) seen.add(dupKey(p.title, p.date));
-    const items = [];
-    for(const e of found){
-      const key = dupKey(e.title, e.date);
-      const dup = seen.has(key); seen.add(key);
-      items.push({...e, selected:!dup, dup, kidId:null});
-    }
+    const items = markDuplicates(found, append ? pendingEvents : null);
     let host = url; try{ host = new URL(url).hostname.replace(/^www\./,''); }catch(e){}
     if(append){ pendingEvents = pendingEvents.concat(items); }
     else { pendingEvents = items; pendingSource = 'Link · ' + host; }
@@ -2116,7 +2252,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.5 · watcher transport fix</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.7 · duplicate cleanup</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -2144,18 +2280,33 @@ function saveWatcher(){
     alert('That does not look like a deployment URL.\n\nIt should look like:\nhttps://script.google.com/macros/s/AKfy.../exec\n\nCopy it from Deploy > Manage deployments > Web app > Copy. The /dev URL will not work.');
     return;
   }
+  const wasConfigured = watcherConfigured();
   S.settings.watcherUrl = u;
   S.settings.watcherToken = t;
+  if(u && !wasConfigured) S.settings.lastEmailCheck = null;   // let the first check run now
   save(); render();
   toast(u ? 'Watcher saved — tap Test to check it' : 'Watcher disconnected');
+  if(u) maybeCheckEmail();
 }
 async function testWatcher(){
   sub('busy', {msg:'Testing the watcher…', hint:''});
   try{
     const { fresh, lastRun } = await fetchEmailQueue();
-    nav('settings');
+    S.settings.lastEmailCheck = new Date().toISOString();
+    // Surface anything waiting straight away — connecting and then seeing
+    // nothing happen is indistinguishable from it not working.
+    S.settings.pendingEmailCount = fresh.length;
+    save();
     const when = lastRun ? new Date(lastRun).toLocaleString() : 'never (trigger may not be set)';
-    alert('Connected!\n\nLast script run: ' + when + '\nNew events waiting: ' + fresh.length);
+    if(fresh.length){
+      nav('events');
+      alert('Connected!\n\nLast script run: ' + when +
+        '\n\n' + fresh.length + ' event' + (fresh.length===1?'':'s') +
+        ' are waiting — tap Review on the green banner.');
+    } else {
+      nav('settings');
+      alert('Connected!\n\nLast script run: ' + when + '\nNothing new waiting right now.');
+    }
   }catch(err){
     nav('settings');
     alert('Could not reach the watcher:\n\n' + err.message);
@@ -2259,13 +2410,6 @@ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch
 if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
 render();
 
-// Quietly look for new email-sourced events on open (at most every 20 minutes)
-function maybeCheckEmail(){
-  if(!watcherConfigured()) return;
-  const last = S.settings.lastEmailCheck ? Date.parse(S.settings.lastEmailCheck) : 0;
-  if(Date.now() - last < 20 * 60 * 1000) return;
-  checkEmail(true);
-}
 maybeCheckEmail();
 
 // Quiet monthly tidy so storage never creeps toward the cap unnoticed.

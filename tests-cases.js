@@ -5,6 +5,9 @@
 render = () => {};
 toast = () => {};
 sub = () => {};
+// No network in tests; saving a watcher legitimately triggers a check, and we
+// don't want a 20s JSONP timeout logging noise over real failures.
+jsonpRequest = () => Promise.resolve({ ok: true, items: [] });
 
 function test(name, fn){
   try { fn(); results.passed++; console.log('  ok    ' + name); }
@@ -467,6 +470,108 @@ test('tokens with special characters are encoded', () => {
   S.settings.watcherToken = 'a b&c=d';
   const url = watcherBaseUrl() + '?token=' + encodeURIComponent(S.settings.watcherToken);
   assert.ok(url.includes('a%20b%26c%3Dd'), 'encoded so it survives the query string');
+});
+
+console.log('\nDuplicate detection');
+
+test('wording differences on the same day still match', () => {
+  boot(GOOD);
+  const d = dayAhead(3);
+  assert.ok(looksDuplicate(
+    { title:'Registration & Residency Verification Deadline', date:d },
+    { title:'Registration and Residency Verification Deadline', date:d }
+  ), '& vs and');
+  assert.ok(looksDuplicate(
+    { title:'Picture Day', date:d },
+    { title:'Fall Picture Day for Grades 1-5', date:d }
+  ), 'shorter title contained in the longer one');
+  assert.ok(looksDuplicate(
+    { title:'Volleyball Tryouts!', date:d },
+    { title:'volleyball tryouts', date:d }
+  ), 'punctuation and case');
+});
+
+test('different events on the same day are NOT merged', () => {
+  const d = dayAhead(3);
+  assert.ok(!looksDuplicate({ title:'Picture Day', date:d }, { title:'Volleyball Tryouts', date:d }));
+  assert.ok(!looksDuplicate({ title:'Band Concert', date:d }, { title:'Registration Deadline', date:d }));
+});
+
+test('the same title on different days is NOT a duplicate', () => {
+  assert.ok(!looksDuplicate(
+    { title:'Dance Practice', date:dayAhead(1) },
+    { title:'Dance Practice', date:dayAhead(8) }
+  ), 'recurring events survive');
+});
+
+test('imported events matching saved ones arrive unticked', () => {
+  boot(GOOD);
+  const d = dayAhead(4);
+  S.events = [{ id:'x', title:'Registration & Residency Verification', date:d, kind:'deadline', deleted:false }];
+  const marked = markDuplicates([
+    { title:'Registration and Residency Verification Deadline', date:d, kind:'deadline' },
+    { title:'Band Concert', date:d, kind:'event' }
+  ]);
+  assert.strictEqual(marked[0].dup, true);
+  assert.strictEqual(marked[0].selected, false, 'unticked so it is not added again');
+  assert.strictEqual(marked[1].dup, false);
+  assert.strictEqual(marked[1].selected, true);
+});
+
+test('repeats inside one batch are caught too', () => {
+  boot(GOOD);
+  S.events = [];
+  const d = dayAhead(2);
+  const marked = markDuplicates([
+    { title:'Open House', date:d },
+    { title:'Open House Night', date:d }
+  ]);
+  assert.strictEqual(marked[0].dup, false);
+  assert.strictEqual(marked[1].dup, true, 'second copy in the same batch flagged');
+});
+
+console.log('\nDuplicate cleanup');
+
+test('already-saved duplicates are grouped', () => {
+  boot(GOOD);
+  const d = dayAhead(5);
+  S.events = [
+    { id:'a', title:'Picture Day', date:d, kind:'event', deleted:false },
+    { id:'b', title:'Fall Picture Day', date:d, time:'09:00', location:'Gym', kind:'event', deleted:false },
+    { id:'c', title:'Band Concert', date:d, kind:'event', deleted:false }
+  ];
+  const groups = duplicateGroups();
+  assert.strictEqual(groups.length, 1, 'one group');
+  assert.strictEqual(groups[0].length, 2, 'the two picture-day rows');
+  assert.ok(!groups[0].some(e => e.id === 'c'), 'unrelated event left alone');
+});
+
+test('the richest copy is preselected to keep', () => {
+  const groups = duplicateGroups();
+  assert.strictEqual(bestOfGroup(groups[0]).id, 'b', 'the one with time and location');
+});
+
+test('applying removes the others and keeps your choice', () => {
+  openDedupe();
+  applyDedupe();
+  const live = S.events.filter(e => !e.deleted);
+  assert.strictEqual(live.length, 2, 'one picture day + the concert');
+  assert.ok(live.some(e => e.id === 'b'), 'kept the richest');
+  assert.ok(live.some(e => e.id === 'c'), 'untouched event survives');
+  assert.strictEqual(S.events.find(e => e.id === 'a').deleted, true, 'soft-deleted, not erased');
+});
+
+test('choosing "keep both" removes nothing', () => {
+  boot(GOOD);
+  const d = dayAhead(6);
+  S.events = [
+    { id:'p', title:'Open House', date:d, kind:'event', deleted:false },
+    { id:'q', title:'Open House Night', date:d, kind:'event', deleted:false }
+  ];
+  openDedupe();
+  setDedupeKeep(0, null);
+  applyDedupe();
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 2, 'both survive');
 });
 
 console.log('\nSharing');

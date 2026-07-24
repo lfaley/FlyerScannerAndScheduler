@@ -1,5 +1,5 @@
 /**
- * FlyerSnap Gmail Watcher — Google Apps Script
+ * FlyerSnap Gmail Watcher -- Google Apps Script
  *
  * Runs on Google's servers every 15 minutes, reads only emails from senders you
  * list, asks Claude to pull out dates, and holds them in a small queue that the
@@ -7,7 +7,7 @@
  *
  * Nothing is emailed, deleted, or replied to. Read-only.
  *
- * SETUP: see the step-by-step in the chat. In short —
+ * SETUP: see the step-by-step in the chat. In short --
  *   1. Script Properties: CLAUDE_KEY, SECRET, SENDERS
  *   2. Deploy > New deployment > Web app > Execute as Me > Anyone
  *   3. Triggers > checkMail > Time-driven > Every 15 minutes
@@ -53,7 +53,7 @@ function countCall() {
 // ---------- Claude ----------
 
 function claudePrompt(today) {
-  return 'You are reading an email sent to a parent — school flyers, dance studio notices, ' +
+  return 'You are reading an email sent to a parent -- school flyers, dance studio notices, ' +
     'volleyball schedules, enrollment forms, permission slips, newsletters.\n\n' +
     "Today's date is " + today + '. Use it to resolve dates that omit the year (assume the nearest future occurrence).\n\n' +
     'Extract EVERY actionable date. Respond with ONLY a JSON array, no markdown fences, no commentary. Each item:\n' +
@@ -117,7 +117,7 @@ function parseEvents(text) {
 function checkMail() {
   var list = senders();
   if (!list.length) {
-    Logger.log('No SENDERS configured — nothing to do.');
+    Logger.log('No SENDERS configured -- nothing to do.');
     return;
   }
 
@@ -144,18 +144,18 @@ function checkMail() {
       if (seenSet[id]) continue;
 
       if (processed >= MAX_PER_RUN) {
-        Logger.log('Hit MAX_PER_RUN (' + MAX_PER_RUN + ') — the rest wait for the next run.');
+        Logger.log('Hit MAX_PER_RUN (' + MAX_PER_RUN + ') -- the rest wait for the next run.');
         stop = true; break;
       }
       if (callsUsedToday() >= DAILY_CALL_CAP) {
-        Logger.log('Hit DAILY_CALL_CAP (' + DAILY_CALL_CAP + ') — stopping until tomorrow.');
+        Logger.log('Hit DAILY_CALL_CAP (' + DAILY_CALL_CAP + ') -- stopping until tomorrow.');
         stop = true; break;
       }
 
       try {
         var blocks = [];
 
-        // PDF attachments first — richest source when they exist
+        // PDF attachments first -- richest source when they exist
         var atts = msg.getAttachments();
         for (var a = 0; a < atts.length && a < 3; a++) {
           if (atts[a].getContentType() === 'application/pdf' && atts[a].getSize() < 4000000) {
@@ -170,7 +170,7 @@ function checkMail() {
           }
         }
 
-        // The email body itself — this is what makes ParentSquare work without
+        // The email body itself -- this is what makes ParentSquare work without
         // ever touching their login wall.
         var body = msg.getPlainBody() || '';
         if (body.length > 12000) body = body.slice(0, 12000);
@@ -187,7 +187,7 @@ function checkMail() {
 
         for (var e = 0; e < events.length; e++) {
           events[e].msgId = id;
-          events[e].source = 'Email · ' + msg.getSubject().slice(0, 60);
+          events[e].source = 'Email - ' + msg.getSubject().slice(0, 60);
           queue.push(events[e]);
           added++;
         }
@@ -275,13 +275,13 @@ function testSetup() {
   Logger.log('Setup looks good.\nQuery: ' + query + '\nMatching threads in the last ' +
     LOOKBACK + ': ' + threads.length);
   if (!threads.length) {
-    Logger.log('No matches — check the SENDERS domains against a real email.');
+    Logger.log('No matches -- check the SENDERS domains against a real email.');
   } else {
     Logger.log('Most recent: "' + threads[0].getFirstMessageSubject() + '"');
   }
 }
 
-/** Clears the queue and history — use if you want to re-scan from scratch. */
+/** Clears the queue and history -- use if you want to re-scan from scratch. */
 function resetWatcher() {
   props().deleteProperty('QUEUE');
   props().deleteProperty('SEEN');
