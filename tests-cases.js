@@ -574,6 +574,30 @@ test('choosing "keep both" removes nothing', () => {
   assert.strictEqual(S.events.filter(e => !e.deleted).length, 2, 'both survive');
 });
 
+console.log('\nEvent count');
+
+test('upcoming and past counts reflect the active filter', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false },
+            { id:'k2', name:'Sam', color:'#0E7490', deleted:false }];
+  S.events = [
+    { id:'a', title:'Recital', date:dayAhead(3), kind:'event', kidId:'k1', deleted:false },
+    { id:'b', title:'Tryouts', date:dayAhead(5), kind:'event', kidId:'k2', deleted:false },
+    { id:'c', title:'Old Thing', date:dayAhead(-10), kind:'event', kidId:'k1', deleted:false }
+  ];
+  eventFilter = null; eventSearch = '';
+  assert.strictEqual(upcomingEvents().length, 2);
+  assert.strictEqual(pastEvents().length, 1);
+
+  eventFilter = 'k1';
+  assert.strictEqual(upcomingEvents().length, 1, 'count follows the kid filter');
+  assert.strictEqual(pastEvents().length, 1);
+
+  eventFilter = null; eventSearch = 'recital';
+  assert.strictEqual(upcomingEvents().length, 1, 'count follows search');
+  eventSearch = '';
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

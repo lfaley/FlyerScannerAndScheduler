@@ -880,6 +880,14 @@ function renderEvents(m){
   const evts = upcomingEvents();
   const past = pastEvents();
   let html = '';
+
+  // Count line — reflects whatever filter or search is active.
+  const filtered = !!eventFilter || !!eventSearch;
+  html += `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+    <span style="font-size:20px;font-weight:800">${evts.length} upcoming</span>
+    <span class="meta" style="font-size:12px">${past.length} past${filtered ? ' · filtered' : ''}</span>
+  </div>`;
+
   if(kids.length){
     html += `<div class="filterbar">
       <span class="chip ${eventFilter===null?'on':''}" onclick="eventFilter=null;render()">All</span>` +
@@ -2252,7 +2260,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.7 · duplicate cleanup</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.7 · duplicate cleanup + count</div>`;
 }
 function manualPrune(){
   const n = pruneData();
