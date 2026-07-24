@@ -227,8 +227,21 @@ function checkMail() {
 // ---------- The endpoint FlyerSnap fetches ----------
 
 function doGet(e) {
+  // Browsers cannot fetch() an Apps Script web app cross-origin: /exec redirects
+  // to script.googleusercontent.com without usable CORS headers. So when a
+  // ?callback= is supplied we answer as JSONP, which loads via a <script> tag
+  // and is exempt from CORS. Without it we return plain JSON, so pasting the
+  // URL into a browser still works for testing.
+  var callback = (e && e.parameter && e.parameter.callback) || '';
+  var safeCallback = /^[A-Za-z_$][A-Za-z0-9_$]{0,64}$/.test(callback) ? callback : '';
+
   var out = function (obj) {
-    return ContentService.createTextOutput(JSON.stringify(obj))
+    var body = JSON.stringify(obj);
+    if (safeCallback) {
+      return ContentService.createTextOutput(safeCallback + '(' + body + ');')
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService.createTextOutput(body)
       .setMimeType(ContentService.MimeType.JSON);
   };
 

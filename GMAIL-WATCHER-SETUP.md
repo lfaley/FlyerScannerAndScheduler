@@ -213,7 +213,7 @@ Change them at the top of the script if you want.
 
 **FlyerSnap's Test says "Token rejected"** — the secret in FlyerSnap doesn't match `SECRET` in Script Properties. Watch for a trailing space.
 
-**FlyerSnap's Test says a network error, not a token error** — this is the known rough edge. Apps Script redirects `/exec` to a different Google host, and browsers occasionally refuse the cross-origin hop. If this happens, tell me and I'll switch the app to a JSONP-style call that sidesteps CORS entirely.
+**FlyerSnap's Test says a network error, not a token error** — fixed in FlyerSnap v2.5 and the current `gmail-watcher.gs`. Browsers cannot `fetch()` an Apps Script web app cross-origin, because `/exec` redirects to `script.googleusercontent.com` without usable CORS headers. Both sides now use JSONP (a `<script>` tag, which is exempt from CORS). If you see this, make sure you are on v2.5+ and that you re-pasted the current script and redeployed with **New version**.
 
 **Test says "Last script run: never"** — the trigger isn't set. Redo Step 7.
 
@@ -222,3 +222,33 @@ Change them at the top of the script if you want.
 **Log shows `Hit DAILY_CALL_CAP`** — 80 calls today. It resumes tomorrow. If you hit this regularly, something's looping — run `watcherStatus` and check what's retrying.
 
 **Want to start over** — function dropdown → **resetWatcher** → Run. Clears the queue, the seen-history, failures, and the daily counter. The next run re-scans the last 7 days (and re-spends on them).
+
+
+---
+
+## Getting the URL right (this is where people get stuck)
+
+There are two URLs, they are **not interchangeable**, and one of them is a trap.
+
+| | `/dev` | `/exec` |
+|---|---|---|
+| Where it comes from | `ScriptApp.getService().getUrl()`, or Test deployments | **Deploy → Manage deployments → Web app → Copy** |
+| Who can open it | Only people signed in with **edit access to the script** | Governed by "Who has access" |
+| Which code it runs | The most recently *saved* code | The deployed **version** |
+| Works from FlyerSnap? | **Never** — the app has no Google session | Yes |
+
+Google's docs are explicit that the `/dev` URL "can only be accessed by users who have edit access to the script" and is "only intended for testing during development."
+
+**Three traps, all of which produce confusing errors:**
+
+1. **Do not edit `/dev` into `/exec`.** They contain *different IDs* — the script ID versus the deployment ID. A hand-edited URL points at a deployment that does not exist, and Google answers with a Google Drive page reading *"Sorry, unable to open the file at this time."* A Google Developer Expert documented this exact behaviour and filed it with Google (issue 235862472): the ID returned by `getUrl()` cannot be found in the deployments list at all.
+
+2. **Do not use `ScriptApp.getService().getUrl()`** to obtain a URL for FlyerSnap, for the same reason.
+
+3. **Do not copy the Library URL.** The Manage deployments panel shows a **Library** section *above* the **Web app** section. Only the one under **Web app** is the endpoint.
+
+**The only reliable path:** Deploy → Manage deployments → select the deployment under **Active** → scroll to **Web app** → **Copy**.
+
+### Pasting into FlyerSnap
+
+FlyerSnap v2.5+ accepts either form. Paste the bare `/exec` URL into the URL field and the secret into the token field — or paste the whole working `…/exec?token=…` string into the URL field and the app will split it for you. It strips any query string before building its own request, so a stale token in a pasted URL can no longer override the one you saved.

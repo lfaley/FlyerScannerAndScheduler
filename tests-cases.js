@@ -408,6 +408,67 @@ test('events persist across a reload', () => {
   assert.ok(!S.__locked);
 });
 
+console.log('\nGmail watcher URL handling');
+
+function fakeField(id, val){
+  const store = { watcherUrl:'', watcherToken:'' };
+  return store;
+}
+
+test('a pasted full URL is split into URL and token', () => {
+  boot(GOOD);
+  const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/exec?token=snap123', watcherToken:'' };
+  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  saveWatcher();
+  assert.strictEqual(S.settings.watcherUrl, 'https://script.google.com/macros/s/AKfy123/exec');
+  assert.strictEqual(S.settings.watcherToken, 'snap123', 'token lifted out of the URL');
+});
+
+test('an explicit token field wins over one in the URL', () => {
+  boot(GOOD);
+  const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/exec?token=stale', watcherToken:'fresh' };
+  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  saveWatcher();
+  assert.strictEqual(S.settings.watcherToken, 'fresh');
+});
+
+test('a /dev URL is rejected with an explanation', () => {
+  boot(GOOD);
+  const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/dev', watcherToken:'x' };
+  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  globalThis.lastAlert = null;
+  saveWatcher();
+  assert.ok(/dev URL will not work/.test(globalThis.lastAlert || ''), 'user is told why');
+  assert.strictEqual(S.settings.watcherUrl, '', 'nothing saved');
+});
+
+test('trailing slashes are trimmed', () => {
+  boot(GOOD);
+  const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/exec/', watcherToken:'t' };
+  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  saveWatcher();
+  assert.strictEqual(S.settings.watcherUrl, 'https://script.google.com/macros/s/AKfy123/exec');
+});
+
+test('the request URL carries exactly one token', () => {
+  boot(GOOD);
+  S.settings.watcherUrl = 'https://script.google.com/macros/s/AKfy123/exec?token=old';
+  S.settings.watcherToken = 'right';
+  const base = watcherBaseUrl();
+  assert.strictEqual(base, 'https://script.google.com/macros/s/AKfy123/exec', 'stale query stripped');
+  const url = base + '?token=' + encodeURIComponent(S.settings.watcherToken);
+  assert.strictEqual((url.match(/token=/g) || []).length, 1, 'no doubled token param');
+  assert.ok(url.endsWith('token=right'));
+});
+
+test('tokens with special characters are encoded', () => {
+  boot(GOOD);
+  S.settings.watcherUrl = 'https://script.google.com/macros/s/AKfy123/exec';
+  S.settings.watcherToken = 'a b&c=d';
+  const url = watcherBaseUrl() + '?token=' + encodeURIComponent(S.settings.watcherToken);
+  assert.ok(url.includes('a%20b%26c%3Dd'), 'encoded so it survives the query string');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

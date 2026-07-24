@@ -942,12 +942,48 @@ let pendingMsgIds = [];
 
 function watcherConfigured(){ return !!(S.settings.watcherUrl && S.settings.watcherToken); }
 
+// Apps Script /exec redirects to script.googleusercontent.com, and that hop
+// does not carry CORS headers a browser will accept for a cross-origin fetch().
+// Script tags are exempt from CORS, so we load the response as JSONP instead.
+function watcherBaseUrl(){
+  let u = (S.settings.watcherUrl || '').trim();
+  const q = u.indexOf('?');
+  if(q >= 0) u = u.slice(0, q);        // drop any query the user pasted in
+  return u.replace(/\/+$/, '');
+}
+
+function jsonpRequest(url, timeoutMs){
+  return new Promise((resolve, reject) => {
+    const cb = 'fsWatcherCb' + Date.now() + Math.floor(Math.random() * 1e6);
+    const tag = document.createElement('script');
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+      clearTimeout(timer);
+      try{ delete window[cb]; }catch(e){ window[cb] = undefined; }
+      if(tag.parentNode) tag.parentNode.removeChild(tag);
+    };
+    const timer = setTimeout(() => {
+      if(settled) return;
+      cleanup();
+      reject(new Error('The watcher did not answer in time. Check the /exec URL and that the deployment is Active.'));
+    }, timeoutMs || 20000);
+    window[cb] = (data) => { if(settled) return; cleanup(); resolve(data); };
+    tag.onerror = () => {
+      if(settled) return;
+      cleanup();
+      reject(new Error('Could not load that URL. Copy it again from Deploy > Manage deployments > Web app.'));
+    };
+    tag.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cb;
+    document.body.appendChild(tag);
+  });
+}
+
 async function fetchEmailQueue(){
-  const url = S.settings.watcherUrl.trim();
-  const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'token=' +
-    encodeURIComponent(S.settings.watcherToken.trim()));
-  if(!res.ok) throw new Error('Watcher returned ' + res.status);
-  const data = await res.json();
+  const base = watcherBaseUrl();
+  if(!base) throw new Error('No watcher URL saved.');
+  const url = base + '?token=' + encodeURIComponent((S.settings.watcherToken || '').trim());
+  const data = await jsonpRequest(url);
   if(data.error) throw new Error(data.error === 'unauthorized'
     ? 'Token rejected — check the secret matches the script.' : data.error);
   const seen = new Set(S.settings.seenMsgs || []);
@@ -2080,7 +2116,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.4 · event search</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.5 · watcher transport fix</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -2090,10 +2126,23 @@ function manualPrune(){
 }
 
 function saveWatcher(){
-  const u = (document.getElementById('watcherUrl').value||'').trim();
-  const t = (document.getElementById('watcherToken').value||'').trim();
-  if(u && !/^https:\/\/script\.google\.com\//.test(u)){
-    alert('That should be the /exec URL from your Apps Script deployment.'); return;
+  let u = (document.getElementById('watcherUrl').value||'').trim();
+  let t = (document.getElementById('watcherToken').value||'').trim();
+
+  // Pasting the whole working URL is the obvious thing to do, so handle it:
+  // pull the token out and keep the URL clean rather than doubling the param.
+  const q = u.indexOf('?');
+  if(q >= 0){
+    const qs = u.slice(q + 1);
+    u = u.slice(0, q);
+    const m = /(?:^|&)token=([^&]*)/.exec(qs);
+    if(m && !t){ try{ t = decodeURIComponent(m[1]); }catch(e){ t = m[1]; } }
+  }
+  u = u.replace(/\/+$/, '');
+
+  if(u && !/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(u)){
+    alert('That does not look like a deployment URL.\n\nIt should look like:\nhttps://script.google.com/macros/s/AKfy.../exec\n\nCopy it from Deploy > Manage deployments > Web app > Copy. The /dev URL will not work.');
+    return;
   }
   S.settings.watcherUrl = u;
   S.settings.watcherToken = t;
