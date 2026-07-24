@@ -286,7 +286,7 @@ test('a v1 save migrates without losing anything', () => {
   v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
   v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
   boot(JSON.stringify(v1));
-  assert.strictEqual(S.schemaVersion, 2, 'stamped with the current version');
+  assert.strictEqual(S.schemaVersion, 3, 'stamped with the current version');
   assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
   assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
   assert.strictEqual(S.events.length, 1, 'real data untouched');
@@ -298,7 +298,7 @@ test('migration is not re-run on an already-current save', () => {
   save();
   const raw = localStorage.getItem('flyersnap');
   S = load();
-  assert.strictEqual(S.schemaVersion, 2);
+  assert.strictEqual(S.schemaVersion, 3);
   assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
 });
 
@@ -647,6 +647,87 @@ test('exporting still marks events exported', () => {
   assert.strictEqual(S.events[0].exported, true);
   document.createElement = realCreate;
   isStandalone = realStandalone;
+});
+
+console.log('\nMultiple people per event');
+
+test('migration converts kids to typed people and kidId to personIds', () => {
+  const v2 = JSON.stringify({
+    schemaVersion: 2,
+    events: [{ id:'e1', title:'Recital', date:'2026-12-01', kind:'event', kidId:'k1', deleted:false }],
+    kids: [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false }],
+    chores:[], completions:[], rewards:[], redemptions:[], lists:[], listItems:[],
+    settings:{ apiKey:'x' }
+  });
+  boot(v2);
+  assert.strictEqual(S.kids[0].type, 'kid', 'existing people default to kid');
+  assert.deepStrictEqual(S.events[0].personIds, ['k1'], 'single kidId became a list');
+  assert.strictEqual(S.events[0].kidId, 'k1', 'primary kidId preserved');
+});
+
+test('an event tagged to several people shows under each filter', () => {
+  boot(GOOD);
+  S.kids = [
+    { id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+    { id:'k2', name:'Sam', color:'#0E7490', type:'kid', deleted:false },
+    { id:'a1', name:'Me', color:'#166534', type:'adult', deleted:false }
+  ];
+  S.events = [{ id:'e1', title:'Family Photos', date:dayAhead(3), kind:'event', personIds:['k1','k2','a1'], kidId:'k1', deleted:false }];
+
+  eventFilter = 'k1'; assert.strictEqual(upcomingEvents().length, 1, 'shows for Olivia');
+  eventFilter = 'k2'; assert.strictEqual(upcomingEvents().length, 1, 'shows for Sam');
+  eventFilter = 'a1'; assert.strictEqual(upcomingEvents().length, 1, 'shows for the adult');
+  eventFilter = null;
+});
+
+test('an untagged person filter hides the event', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+            { id:'k2', name:'Sam', color:'#0E7490', type:'kid', deleted:false }];
+  S.events = [{ id:'e1', title:'Dance', date:dayAhead(2), kind:'event', personIds:['k1'], kidId:'k1', deleted:false }];
+  eventFilter = 'k2';
+  assert.strictEqual(upcomingEvents().length, 0, "Sam's filter hides Olivia-only event");
+  eventFilter = null;
+});
+
+test('eventPeople resolves names, tolerating legacy single-kidId rows', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false }];
+  const legacy = { id:'e9', title:'Old', date:dayAhead(1), kidId:'k1' };   // no personIds
+  assert.deepStrictEqual(eventPeople(legacy).map(p=>p.name), ['Olivia']);
+});
+
+test('adults are excluded from the chore/star roster', () => {
+  boot(GOOD);
+  S.kids = [
+    { id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+    { id:'a1', name:'Me', color:'#166534', type:'adult', deleted:false }
+  ];
+  assert.deepStrictEqual(justKids().map(p=>p.name), ['Olivia'], 'only kids in the star system');
+  assert.deepStrictEqual(allPeople().map(p=>p.name), ['Olivia','Me'], 'everyone available for events');
+});
+
+test('removing a person drops them from every event tag', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+            { id:'k2', name:'Sam', color:'#0E7490', type:'kid', deleted:false }];
+  S.events = [{ id:'e1', title:'Photos', date:dayAhead(3), kind:'event', personIds:['k1','k2'], kidId:'k1', deleted:false }];
+  delKid('k1');
+  assert.deepStrictEqual(S.events[0].personIds, ['k2'], 'removed person gone from the list');
+  assert.strictEqual(S.events[0].kidId, 'k2', 'primary reassigned to a remaining person');
+});
+
+test('review multi-select toggles people on and off', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+            { id:'k2', name:'Sam', color:'#0E7490', type:'kid', deleted:false }];
+  pendingEvents = [{ title:'X', date:dayAhead(1), selected:true, personIds:[] }];
+  setReviewKid(0, 'k1');
+  setReviewKid(0, 'k2');
+  assert.deepStrictEqual(pendingEvents[0].personIds, ['k1','k2']);
+  setReviewKid(0, 'k1');
+  assert.deepStrictEqual(pendingEvents[0].personIds, ['k2'], 'tapping again removes');
+  assert.strictEqual(pendingEvents[0].kidId, 'k2', 'primary follows');
 });
 
 console.log('\nSharing');

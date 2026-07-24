@@ -135,7 +135,7 @@ const SLOTS = ['breakfast','lunch','dinner'];
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: must be declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let loadError = null;
 let storageWarned = false;
@@ -160,6 +160,19 @@ function migrate(s, fromVersion){
     s.legacyMeals   = Array.isArray(s.meals)   ? s.meals   : [];
     delete s.recipes;
     delete s.meals;
+  }
+
+  if(from < 3){
+    // People can now be adults, and events can be tagged to several people.
+    // Existing kids become type 'kid'; existing single kidId becomes a
+    // one-entry personIds list. kidId is preserved so the star/chore system,
+    // which is deliberately kids-only, keeps working untouched.
+    (s.kids || []).forEach(k => { if(!k.type) k.type = 'kid'; });
+    (s.events || []).forEach(e => {
+      if(!Array.isArray(e.personIds)){
+        e.personIds = e.kidId ? [e.kidId] : [];
+      }
+    });
   }
 
   s.schemaVersion = SCHEMA_VERSION;
@@ -380,6 +393,18 @@ function friendly(s){ const d=parseDate(s); return DOW[d.getDay()]+', '+MONTHS[d
 function daysUntil(s){ const t=new Date(); t.setHours(0,0,0,0); return Math.round((parseDate(s)-t)/864e5); }
 function esc(x){ return String(x??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function kidById(id){ return S.kids.find(k=>k.id===id && !k.deleted); }
+function personById(id){ return S.kids.find(p=>p.id===id && !p.deleted); }
+function allPeople(){ return S.kids.filter(p=>!p.deleted); }
+function justKids(){ return S.kids.filter(p=>!p.deleted && (p.type||'kid')==='kid'); }
+// An event's tagged people, tolerating old single-kidId rows.
+function eventPeople(e){
+  const ids = Array.isArray(e.personIds) ? e.personIds : (e.kidId ? [e.kidId] : []);
+  return ids.map(personById).filter(Boolean);
+}
+function eventHasPerson(e, personId){
+  if(Array.isArray(e.personIds)) return e.personIds.includes(personId);
+  return e.kidId === personId;
+}
 
 let toastTimer;
 function toast(msg){
@@ -833,10 +858,11 @@ function showSheet(title, subtitle, buttons){
 
 // ---------- Events tab ----------
 let eventFilter = null;
+let newPersonType = 'kid';
 let showPast = false;
 function upcomingEvents(){
   const t = todayISO();
-  return S.events.filter(e=>!e.deleted && e.date>=t && (!eventFilter || e.kidId===eventFilter) && matchesSearch(e))
+  return S.events.filter(e=>!e.deleted && e.date>=t && (!eventFilter || eventHasPerson(e, eventFilter)) && matchesSearch(e))
     .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
 }
 let eventSearch = '';
@@ -845,14 +871,14 @@ let pastLimit = 30;               // grows on demand; pruning bounds the data at
 function matchesSearch(e){
   const q = eventSearch.trim().toLowerCase();
   if(!q) return true;
-  const kid = e.kidId ? kidById(e.kidId) : null;
-  return [e.title, e.location, e.notes, e.source, kid && kid.name, friendly(e.date)]
+  const people = eventPeople(e);
+  return [e.title, e.location, e.notes, e.source, eventPeople(e).map(p=>p.name).join(' '), friendly(e.date)]
     .filter(Boolean).join(' ').toLowerCase().includes(q);
 }
 
 function pastEvents(){
   const t = todayISO();
-  return S.events.filter(e=>!e.deleted && e.date<t && (!eventFilter || e.kidId===eventFilter) && matchesSearch(e))
+  return S.events.filter(e=>!e.deleted && e.date<t && (!eventFilter || eventHasPerson(e, eventFilter)) && matchesSearch(e))
     .sort((a,b)=>b.date.localeCompare(a.date));
 }
 function backupNudge(){
@@ -874,7 +900,7 @@ function backupNudge(){
 function evtCard(e, isPast){
   const days = daysUntil(e.date);
   const urgent = !isPast && e.kind==='deadline' && days<=3;
-  const kid = e.kidId ? kidById(e.kidId) : null;
+  const people = eventPeople(e);
   const badge = isPast ? 'past' : (days===0?'Today':days===1?'1 day':days+' days');
   return `<div class="card stripe ${e.kind} ${isPast?'dim':''}" onclick="eventActions('${e.id}')">
     <div class="row">
@@ -882,7 +908,7 @@ function evtCard(e, isPast){
         <div class="title">${esc(e.title)} ${e.exported?'📆':''}</div>
         <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
         ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
-        ${kid?`<span class="kidtag" style="background:${kid.color}">${esc(kid.name)}</span>`:''}
+        ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}
       </div>
       <span class="badge ${urgent?'urgent':''}">${badge}</span>
     </div></div>`;
@@ -890,7 +916,6 @@ function evtCard(e, isPast){
 function renderEvents(m){
   setHeader('FlyerSnap', false);
   maybeCheckEmail();   // no-op unless a check is actually due
-  const kids = S.kids.filter(k=>!k.deleted);
   const evts = upcomingEvents();
   const past = pastEvents();
   let html = '';
@@ -902,10 +927,11 @@ function renderEvents(m){
     <span class="meta" style="font-size:12px">${past.length} past${filtered ? ' · filtered' : ''}</span>
   </div>`;
 
-  if(kids.length){
+  const people = allPeople();
+  if(people.length){
     html += `<div class="filterbar">
       <span class="chip ${eventFilter===null?'on':''}" onclick="eventFilter=null;render()">All</span>` +
-      kids.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+      people.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
         onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
   }
   // Search only earns its space once there's enough to sift through.
@@ -1263,7 +1289,7 @@ function renderDedupe(m){
     <div style="font-size:13px;font-weight:800;margin-bottom:8px">${friendly(g[0].date)}</div>
     ${g.map(e => {
       const on = dedupeKeep[i] === e.id;
-      const kid = e.kidId ? kidById(e.kidId) : null;
+      const people = eventPeople(e);
       return `<div class="row" style="padding:8px 0;border-top:1px solid #EEF2EF" onclick="setDedupeKeep(${i}, '${e.id}')">
         <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px">${on?'✓':''}</div>
         <div class="grow">
@@ -1514,15 +1540,16 @@ async function handleLinkCapture(url){
 
 function renderReview(m){
   setHeader('Found Events', true);
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = allPeople();
   const n = pendingEvents.filter(e=>e.selected).length;
   const dups = pendingEvents.filter(e=>e.dup).length;
   let html = `<div class="help">Found ${pendingEvents.length} item${pendingEvents.length===1?'':'s'}. Tap to include or skip.${dups?` ${dups} already tracked (unchecked for you).`:''}</div>`;
-  if(kids.length>1){
-    html += `<div style="margin-bottom:10px"><span class="label" style="margin-right:6px">Tag all as:</span>` +
-      kids.map(k=>`<span class="chip" onclick="tagAll('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
+  const people = allPeople();
+  if(people.length>1){
+    html += `<div style="margin-bottom:10px"><span class="label" style="margin-right:6px">Tag all with:</span>` +
+      people.map(k=>`<span class="chip" onclick="tagAll('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
   }
-  if(!kids.length) html += `<div class="help" style="font-style:italic">Tip: add your kids in Settings to tag events per kid.</div>`;
+  if(!kids.length) html += `<div class="help" style="font-style:italic">Tip: add people in Settings to tag events.</div>`;
   html += pendingEvents.map((e,i)=>`
     <div class="card ${e.selected?'':'dim'}" style="${e.selected?'border:2px solid var(--green)':'border:2px solid transparent'}">
       <div class="row" onclick="toggleReview(${i})">
@@ -1536,9 +1563,9 @@ function renderReview(m){
           ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         </div>
       </div>
-      ${e.selected && kids.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #EEF2EF">
+      ${e.selected && allPeople().length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #EEF2EF">
         <span class="label" style="margin-right:6px">Who:</span>` +
-        kids.map(k=>`<span class="chip" style="${e.kidId===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+        allPeople().map(k=>`<span class="chip" style="${(e.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:#fff`:''}"
           onclick="setReviewKid(${i},'${k.id}')">${esc(k.name)}</span>`).join('') + `</div>` : ''}
     </div>`).join('');
   html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">＋ Scan another page</button></div>
@@ -1547,14 +1574,29 @@ function renderReview(m){
   m.innerHTML = html;
 }
 function toggleReview(i){ pendingEvents[i].selected = !pendingEvents[i].selected; render(); }
-function setReviewKid(i,kid){ pendingEvents[i].kidId = pendingEvents[i].kidId===kid?null:kid; render(); }
-function tagAll(kid){ pendingEvents.forEach(e=>{ if(e.selected) e.kidId=kid; }); render(); }
+function setReviewKid(i, personId){
+  const e = pendingEvents[i];
+  if(!Array.isArray(e.personIds)) e.personIds = e.kidId ? [e.kidId] : [];
+  const at = e.personIds.indexOf(personId);
+  if(at >= 0) e.personIds.splice(at, 1); else e.personIds.push(personId);
+  e.kidId = e.personIds[0] || null;      // keep a primary for any legacy reader
+  render();
+}
+function tagAll(personId){
+  pendingEvents.forEach(e=>{
+    if(!e.selected) return;
+    if(!Array.isArray(e.personIds)) e.personIds = e.kidId ? [e.kidId] : [];
+    if(!e.personIds.includes(personId)) e.personIds.push(personId);
+    e.kidId = e.personIds[0] || null;
+  });
+  render();
+}
 function saveReview(){
   const chosen = pendingEvents.filter(e=>e.selected);
   if(!chosen.length){ alert('Tap the events you want to track, then save.'); return; }
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
-      kind:e.kind, notes:e.notes, kidId:e.kidId, source:pendingSource, exported:false, deleted:false });
+      kind:e.kind, notes:e.notes, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, exported:false, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
   // the screen leaves them in the queue for next time.
@@ -1572,8 +1614,9 @@ function saveReview(){
 let eventForm = null;
 function openEventEdit(id){
   const e = S.events.find(x=>x.id===id);
+  const ids = Array.isArray(e.personIds) ? e.personIds.slice() : (e.kidId ? [e.kidId] : []);
   eventForm = { saved:true, ref:id, title:e.title, date:e.date, time:e.time||'',
-    location:e.location||'', notes:e.notes||'', kind:e.kind, kidId:e.kidId||null };
+    location:e.location||'', notes:e.notes||'', kind:e.kind, personIds:ids };
   sub('eventEdit');
 }
 function openPendingEdit(i){
@@ -1586,7 +1629,7 @@ function renderEventEdit(m){
   document.getElementById('header').innerHTML =
     `<button class="back" onclick="cancelEventEdit()">‹</button>Edit Event`;
   const f = eventForm;
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = allPeople();
   m.innerHTML = `
     <div class="label" style="margin-top:0">Title</div>
     <input type="text" id="efTitle" value="${esc(f.title)}">
@@ -1599,10 +1642,10 @@ function renderEventEdit(m){
     <div class="label">Type</div>
     <span class="chip ${f.kind==='event'?'on':''}" onclick="syncEventForm();eventForm.kind='event';render()">Event</span>
     <span class="chip ${f.kind==='deadline'?'on':''}" onclick="syncEventForm();eventForm.kind='deadline';render()">Deadline</span>
-    ${kids.length ? `<div class="label">Who</div>
-      <span class="chip ${!f.kidId?'on':''}" onclick="syncEventForm();eventForm.kidId=null;render()">No one</span>` +
-      kids.map(k=>`<span class="chip" style="${f.kidId===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
-        onclick="syncEventForm();eventForm.kidId='${k.id}';render()">${esc(k.name)}</span>`).join('') : ''}
+    ${allPeople().length ? `<div class="label">Who (tap all that apply)</div>
+      <span class="chip ${!(f.personIds||[]).length?'on':''}" onclick="syncEventForm();eventForm.personIds=[];render()">No one</span>` +
+      allPeople().map(k=>`<span class="chip" style="${(f.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+        onclick="toggleEventPerson('${k.id}')">${esc(k.name)}</span>`).join('') : ''}
     <div class="label">Location</div>
     <input type="text" id="efLoc" value="${esc(f.location)}">
     <div class="label">Notes</div>
@@ -1619,15 +1662,24 @@ function syncEventForm(){
   if(g('efLoc')) eventForm.location = g('efLoc').value;
   if(g('efNotes')) eventForm.notes = g('efNotes').value;
 }
+function toggleEventPerson(id){
+  syncEventForm();
+  if(!Array.isArray(eventForm.personIds)) eventForm.personIds = [];
+  const at = eventForm.personIds.indexOf(id);
+  if(at >= 0) eventForm.personIds.splice(at, 1); else eventForm.personIds.push(id);
+  render();
+}
+
 function saveEventEdit(){
   syncEventForm();
   const f = eventForm;
   if(!f.title.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(f.date)){
     alert('The event needs a title and a valid date.'); return;
   }
+  const ids = Array.isArray(f.personIds) ? f.personIds : [];
   const fields = { title:f.title.trim(), date:f.date, time:f.time||null,
     location:(f.location||'').trim()||null, notes:(f.notes||'').trim()||null,
-    kind:f.kind, kidId:f.kidId };
+    kind:f.kind, personIds:ids, kidId:ids[0]||null };
   if(f.saved){
     const e = S.events.find(x=>x.id===f.ref);
     const timingChanged = e.date!==fields.date || (e.time||'')!==(f.time||'');
@@ -1670,7 +1722,7 @@ function starBalances(){
 }
 function renderChores(m){
   setHeader('Chores & Routines', false);
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   const chores = choresForToday();
   const bal = starBalances();
   const t = todayISO();
@@ -1712,7 +1764,7 @@ function renderChores(m){
   if(choreForm){ const inp=document.getElementById('choreTitle'); if(inp && !choreForm.title) inp.focus(); }
 }
 function renderChoreForm(){
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   const f = choreForm;
   return `<div class="card" style="border:2px solid var(--green)">
     <input type="text" id="choreTitle" placeholder="Chore (emoji ok, e.g. 🦷 Brush teeth)" value="${esc(f.title)}"
@@ -1754,7 +1806,7 @@ function toggleChore(id){
   const t = todayISO();
   const done = completionFor(id, t);
   if(done){ S.completions = S.completions.filter(x=>x!==done); save(); render(); return; }
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   // "Anyone" chores with star value: ask who did it so the stars land somewhere
   if(!c.kidId && c.stars>0 && kids.length){
     showSheet(c.title, 'Who did it?',
@@ -1781,7 +1833,7 @@ function delChore(ev,id){ ev.preventDefault(); delChoreById(id); return false; }
 // ---------- Rewards ----------
 function renderRewards(m){
   setHeader('Rewards', true);
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   const bal = starBalances();
   const rewards = S.rewards.filter(r=>!r.deleted).sort((a,b)=>a.cost-b.cost);
   let html = `<div class="filterbar">` + kids.map(k=>
@@ -1819,7 +1871,7 @@ function delReward(id){
 }
 function redeem(id){
   const r = S.rewards.find(x=>x.id===id);
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   if(!kids.length){ alert('Add kids in Settings first.'); return; }
   const bal = starBalances();
   showSheet(`Redeem "${r.title}"`, `Costs ⭐ ${r.cost} — who is redeeming?`,
@@ -1836,7 +1888,7 @@ function redeem(id){
 let ledgerKid = null;
 function renderLedger(m){
   setHeader('Star History', true);
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   const choreById = {}; S.chores.forEach(c=>choreById[c.id]=c);
   const rewardById = {}; S.rewards.forEach(r=>rewardById[r.id]=r);
   let entries = [];
@@ -2257,17 +2309,21 @@ async function handleRecipeScan(file){
 // ---------- Settings tab ----------
 function renderSettings(m){
   setHeader('Settings', false);
-  const kids = S.kids.filter(k=>!k.deleted);
+  const kids = justKids();
   m.innerHTML = `
-    <div class="sect">Kids</div>
-    <div class="help">Add your kids to tag events and chores per kid.</div>
+    <div class="sect">People</div>
+    <div class="help">Add the people you tag events to. Kids also appear in chores and star rewards; adults are for events only.</div>
     <div class="formrow">
-      <input type="text" id="kidName" placeholder="Kid's name" onkeydown="if(event.key==='Enter')addKid()">
+      <input type="text" id="kidName" placeholder="Name" onkeydown="if(event.key==='Enter')addKid()">
       <button class="btn sm" onclick="addKid()">Add</button>
+    </div>
+    <div style="margin:2px 0 10px">
+      <span class="chip ${(newPersonType||'kid')==='kid'?'on':''}" onclick="newPersonType='kid';render()">Kid</span>
+      <span class="chip ${newPersonType==='adult'?'on':''}" onclick="newPersonType='adult';render()">Adult</span>
     </div>` +
-    kids.map(k=>`<div class="card row" style="padding:12px">
+    allPeople().map(k=>`<div class="card row" style="padding:12px">
       <span style="width:12px;height:12px;border-radius:6px;background:${k.color};flex-shrink:0"></span>
-      <div class="grow" style="font-weight:600">${esc(k.name)}</div>
+      <div class="grow" style="font-weight:600">${esc(k.name)} <span class="meta" style="font-weight:400;font-size:11px">· ${(k.type||'kid')==='adult'?'adult':'kid'}</span></div>
       <button class="linkbtn red" onclick="delKid('${k.id}')">Remove</button></div>`).join('') + `
 
     <div class="sect">Anthropic API key</div>
@@ -2336,7 +2392,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v2.9 · meal plan diagnostic</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.0 · multiple people per event</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -2432,14 +2488,17 @@ function addKid(){
     alert(name+' is already on the list.'); return;
   }
   const color = KID_COLORS[S.kids.filter(k=>!k.deleted).length % KID_COLORS.length];
-  S.kids.push({id:uid(), name, color, deleted:false});
+  S.kids.push({id:uid(), name, color, type:(newPersonType||'kid'), deleted:false});
   save(); render();
 }
 function delKid(id){
   const k = kidById(id);
   if(!confirm(`Remove ${k.name}? Their events and chores stay but lose the tag.`)) return;
   k.deleted = true;
-  S.events.forEach(e=>{ if(e.kidId===id) e.kidId=null; });
+  S.events.forEach(e=>{
+    if(Array.isArray(e.personIds)){ e.personIds = e.personIds.filter(pid => pid !== id); }
+    if(e.kidId===id) e.kidId = (e.personIds && e.personIds[0]) || null;
+  });
   S.chores.forEach(c=>{ if(c.kidId===id) c.kidId=null; });
   save(); render();
 }
