@@ -446,7 +446,7 @@ function eventPrompt(){
 Today's date is ${todayISO()}. Use it to resolve dates that omit the year (assume the nearest future occurrence).
 
 Extract EVERY actionable date you can find. Respond with ONLY a JSON array, no markdown fences, no commentary. Each item:
-{"title":"short human-friendly name","date":"YYYY-MM-DD","time":"HH:MM in 24h or null","location":"string or null","kind":"deadline" if it is a due date / registration cutoff / form return date, otherwise "event","notes":"one short useful sentence or null"}
+{"title":"short human-friendly name","date":"YYYY-MM-DD","time":"HH:MM start time in 24h or null","endTime":"HH:MM end time in 24h, or null if none is stated","location":"string or null","kind":"deadline" if it is a due date / registration cutoff / form return date, otherwise "event","notes":"one short useful sentence or null"}
 
 Rules:
 - Registration/signup/payment/form-due dates are "deadline". Performances, games, meetings, picture days are "event".
@@ -465,7 +465,7 @@ Today's date is {TODAY}. Use it to resolve dates that omit the year (assume the 
 Respond with ONLY a JSON object, no markdown fences, no commentary.
 
 If it is PAPERWORK:
-{"type":"events","events":[{"title":"short name","date":"YYYY-MM-DD","time":"HH:MM 24h or null","location":"string or null","kind":"deadline" if a due date/registration cutoff/form return date, otherwise "event","notes":"one short useful sentence or null"}]}
+{"type":"events","events":[{"title":"short name","date":"YYYY-MM-DD","time":"HH:MM start 24h or null","endTime":"HH:MM end 24h or null","location":"string or null","kind":"deadline" if a due date/registration cutoff/form return date, otherwise "event","notes":"one short useful sentence or null"}]}
 
 If it is a RECIPE:
 {"type":"recipe","recipe":{"title":"dish name","category":"Breakfast"|"Lunch"|"Dinner"|"Snack"|"Other","ingredients":"plain text, one ingredient per line","instructions":"numbered plain text steps"}}
@@ -513,6 +513,7 @@ function parseExtractedEvents(text){
   return (Array.isArray(arr)?arr:[]).filter(e=>e && e.title && /^\d{4}-\d{2}-\d{2}$/.test(e.date||''))
     .map(e=>({ title:String(e.title), date:e.date,
       time:(e.time && /^\d{2}:\d{2}$/.test(e.time))?e.time:null,
+      endTime:(e.endTime && /^\d{2}:\d{2}$/.test(e.endTime))?e.endTime:null,
       location:e.location||null, kind:e.kind==='deadline'?'deadline':'event', notes:e.notes||null }));
 }
 
@@ -569,6 +570,10 @@ function alertPlan(kind){
   return { alarms: chosen.slice(0,2), extras: S.settings.extraReminders ? chosen.slice(2) : [] };
 }
 
+function fmtTimeRange(e){
+  if(!e.time) return '';
+  return e.endTime ? e.time + '-' + e.endTime : e.time;
+}
 function eventTitle(evt){
   const kid = evt.kidId ? kidById(evt.kidId) : null;
   return (evt.kind==='deadline'?'\u23f0 ':'') + (kid?kid.name+': ':'') + evt.title;
@@ -588,8 +593,17 @@ function buildVEVENT(evt){
     const t = evt.time.replace(':','') + '00';
     const [y,m,day] = evt.date.split('-').map(Number);
     const [hh,mm] = evt.time.split(':').map(Number);
-    const end = new Date(y,m-1,day,hh,mm+60);
-    const endStr = iso(end).replace(/-/g,'') + 'T' + String(end.getHours()).padStart(2,'0') + String(end.getMinutes()).padStart(2,'0') + '00';
+    let end;
+    if(evt.endTime && /^\d{2}:\d{2}$/.test(evt.endTime)){
+      let [eh,em] = evt.endTime.split(':').map(Number);
+      // An end earlier than the start means it runs past midnight -> next day.
+      const crossesMidnight = (eh*60+em) <= (hh*60+mm);
+      end = new Date(y, m-1, day + (crossesMidnight?1:0), eh, em);
+    } else {
+      end = new Date(y, m-1, day, hh, mm+60);   // no end given -> assume one hour
+    }
+    const endStr = iso(end).replace(/-/g,'') + 'T' +
+      String(end.getHours()).padStart(2,'0') + String(end.getMinutes()).padStart(2,'0') + '00';
     dt = 'DTSTART:'+d+'T'+t+'\r\nDTEND:'+endStr;
   } else {
     dt = 'DTSTART;VALUE=DATE:'+d;
@@ -906,7 +920,7 @@ function evtCard(e, isPast){
     <div class="row">
       <div class="grow">
         <div class="title">${esc(e.title)} ${e.exported?'📆':''}</div>
-        <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
+        <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
         ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}
       </div>
@@ -1164,7 +1178,7 @@ function renderShareEvents(m){
         <div class="check ${on?'on':''}">${on?'✓':''}</div>
         <div class="grow">
           <div class="title">${esc(e.title)}</div>
-          <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
+          <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
         </div>
       </div></div>`;
   }).join('');
@@ -1559,7 +1573,7 @@ function renderReview(m){
             ${e.dup?`<span class="kindtag" style="background:#FDEBEA;color:var(--red)">TRACKED</span>`:''}
             <span class="kindtag ${e.kind}">${e.kind==='deadline'?'DEADLINE':'EVENT'}</span>
             <button class="linkbtn" style="padding:2px 4px" onclick="event.stopPropagation();openPendingEdit(${i})">✏️</button></div>
-          <div class="meta">${friendly(e.date)}${e.time?' · '+e.time:''}${e.location?' · '+esc(e.location):''}</div>
+          <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
           ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         </div>
       </div>
@@ -1596,7 +1610,7 @@ function saveReview(){
   if(!chosen.length){ alert('Tap the events you want to track, then save.'); return; }
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
-      kind:e.kind, notes:e.notes, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, exported:false, deleted:false });
+      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, exported:false, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
   // the screen leaves them in the queue for next time.
@@ -1615,7 +1629,7 @@ let eventForm = null;
 function openEventEdit(id){
   const e = S.events.find(x=>x.id===id);
   const ids = Array.isArray(e.personIds) ? e.personIds.slice() : (e.kidId ? [e.kidId] : []);
-  eventForm = { saved:true, ref:id, title:e.title, date:e.date, time:e.time||'',
+  eventForm = { saved:true, ref:id, title:e.title, date:e.date, time:e.time||'', endTime:e.endTime||'',
     location:e.location||'', notes:e.notes||'', kind:e.kind, personIds:ids };
   sub('eventEdit');
 }
@@ -1636,8 +1650,10 @@ function renderEventEdit(m){
     <div class="formrow" style="margin-top:10px;margin-bottom:0">
       <div style="flex:1"><div class="label" style="margin-top:0">Date</div>
         <input type="date" id="efDate" value="${esc(f.date)}"></div>
-      <div style="flex:1"><div class="label" style="margin-top:0">Time (optional)</div>
+      <div style="flex:1"><div class="label" style="margin-top:0">Start (optional)</div>
         <input type="time" id="efTime" value="${esc(f.time)}"></div>
+      <div style="flex:1"><div class="label" style="margin-top:0">End (optional)</div>
+        <input type="time" id="efEnd" value="${esc(f.endTime||'')}"></div>
     </div>
     <div class="label">Type</div>
     <span class="chip ${f.kind==='event'?'on':''}" onclick="syncEventForm();eventForm.kind='event';render()">Event</span>
@@ -1659,6 +1675,7 @@ function syncEventForm(){
   if(g('efTitle')) eventForm.title = g('efTitle').value;
   if(g('efDate')) eventForm.date = g('efDate').value;
   if(g('efTime')) eventForm.time = g('efTime').value;
+  if(g('efEnd')) eventForm.endTime = g('efEnd').value || null;
   if(g('efLoc')) eventForm.location = g('efLoc').value;
   if(g('efNotes')) eventForm.notes = g('efNotes').value;
 }
@@ -1678,6 +1695,7 @@ function saveEventEdit(){
   }
   const ids = Array.isArray(f.personIds) ? f.personIds : [];
   const fields = { title:f.title.trim(), date:f.date, time:f.time||null,
+    endTime:(f.time && f.endTime)?f.endTime:null,
     location:(f.location||'').trim()||null, notes:(f.notes||'').trim()||null,
     kind:f.kind, personIds:ids, kidId:ids[0]||null };
   if(f.saved){
@@ -2137,7 +2155,8 @@ function renderMeals(m){
     <button class="linkbtn" style="padding:2px 8px" onclick="sub('recipeBox')">📷 Scan a recipe</button></div>`;
 
   if(!dates.length){
-    html += `<div class="empty"><div class="eb">Nothing planned for the days ahead. Plan a week in the Recipe app and it'll appear here.</div></div>`;
+    html += `<div class="empty"><div class="eb">Nothing planned for the days ahead. Plan a week in the Recipe app and it'll appear here.</div>
+      <div style="text-align:center;margin-top:10px"><button class="linkbtn" onclick="mealPlanDiagnostic()">🔍 Why don't I see my meals?</button></div></div>`;
     m.innerHTML = html;
     return;
   }
@@ -2392,7 +2411,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.0 · multiple people per event</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.1 · event end times</div>`;
 }
 function manualPrune(){
   const n = pruneData();

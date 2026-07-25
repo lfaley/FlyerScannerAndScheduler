@@ -730,6 +730,51 @@ test('review multi-select toggles people on and off', () => {
   assert.strictEqual(pendingEvents[0].kidId, 'k2', 'primary follows');
 });
 
+console.log('\nEvent end times');
+
+function veventFor(e){
+  boot(GOOD);
+  S.settings.alerts = { deadline:[1], event:[0] };
+  return buildVEVENT(e);
+}
+
+test('an explicit end time is written to the calendar', () => {
+  const v = veventFor({ id:'e1', title:'Recital', date:'2026-09-10', time:'17:30', endTime:'20:30', kind:'event' });
+  assert.ok(v.includes('DTSTART:20260910T173000'), 'start 5:30pm');
+  assert.ok(v.includes('DTEND:20260910T203000'), 'end 8:30pm, not +1h');
+});
+
+test('no end time falls back to one hour', () => {
+  const v = veventFor({ id:'e2', title:'Meeting', date:'2026-09-10', time:'09:00', endTime:null, kind:'event' });
+  assert.ok(v.includes('DTSTART:20260910T090000'));
+  assert.ok(v.includes('DTEND:20260910T100000'), 'defaults to +1 hour');
+});
+
+test('an end past midnight rolls to the next day', () => {
+  const v = veventFor({ id:'e3', title:'Lock-in', date:'2026-09-10', time:'22:00', endTime:'01:00', kind:'event' });
+  assert.ok(v.includes('DTSTART:20260910T220000'));
+  assert.ok(v.includes('DTEND:20260911T010000'), 'crosses into the next day');
+});
+
+test('extraction keeps a valid endTime and drops a bad one', () => {
+  const parsed = parseExtractedEvents(JSON.stringify([
+    { title:'Show', date:'2026-09-10', time:'17:30', endTime:'20:30', kind:'event' },
+    { title:'Fair', date:'2026-09-11', time:'10:00', endTime:'nonsense', kind:'event' }
+  ]));
+  assert.strictEqual(parsed[0].endTime, '20:30');
+  assert.strictEqual(parsed[1].endTime, null, 'garbage end time rejected');
+});
+
+test('end time is dropped if there is no start time', () => {
+  boot(GOOD);
+  S.kids = [];
+  pendingEvents = [{ title:'X', date:'2026-09-10', time:null, endTime:'20:30', selected:true, personIds:[] }];
+  pendingSource = 'test';
+  saveReview();
+  const e = S.events.find(x => x.title === 'X');
+  assert.strictEqual(e.endTime, null, 'an end with no start is meaningless');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
