@@ -144,7 +144,7 @@ let S = load();
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
   redemptions:[], lists:[], listItems:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
-    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{} },
+    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{} },
   schemaVersion: SCHEMA_VERSION }; }
 
 function migrate(s, fromVersion){
@@ -803,7 +803,7 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents, dedupe:renderDedupe};
+    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
@@ -1015,6 +1015,16 @@ function renderEvents(m){
 let pendingMsgIds = [];
 
 function watcherConfigured(){ return !!(S.settings.watcherUrl && S.settings.watcherToken); }
+function personsForSender(from){
+  const map = S.settings.senderTags || {};
+  if(!from) return [];
+  const addr = String(from).toLowerCase();
+  if(map[addr]) return map[addr].filter(id => personById(id));
+  const at = addr.indexOf('@');
+  const domain = at >= 0 ? addr.slice(at+1) : addr;
+  if(map[domain]) return map[domain].filter(id => personById(id));
+  return [];
+}
 
 // Apps Script /exec redirects to script.googleusercontent.com, and that hop
 // does not carry CORS headers a browser will accept for a cross-origin fetch().
@@ -1073,6 +1083,95 @@ function maybeCheckEmail(){
   checkEmail(true);
 }
 
+async function fetchSenders(){
+  const base = watcherBaseUrl();
+  if(!base) throw new Error('No watcher URL saved.');
+  const url = base + '?token=' + encodeURIComponent((S.settings.watcherToken||'').trim()) + '&action=senders';
+  const data = await jsonpRequest(url);
+  if(data.error) throw new Error(data.error);
+  return data.senders || [];
+}
+async function saveSenders(list){
+  const base = watcherBaseUrl();
+  if(!base) throw new Error('No watcher URL saved.');
+  const url = base + '?token=' + encodeURIComponent((S.settings.watcherToken||'').trim()) +
+    '&action=setsenders&senders=' + encodeURIComponent(list.join(','));
+  const data = await jsonpRequest(url);
+  if(data.error) throw new Error(data.error);
+  return data.senders || [];
+}
+
+let watchedSenders = null;    // cached copy for the settings UI
+
+async function openSenderManager(){
+  if(!watcherConfigured()){ alert('Connect the Gmail watcher first.'); return; }
+  sub('busy', {msg:'Loading senders…', hint:''});
+  try{
+    watchedSenders = await fetchSenders();
+    sub('senders');
+  }catch(err){ alert('Could not load senders:\n\n'+err.message); nav('settings'); }
+}
+function renderSenders(m){
+  setHeader('Watched Senders', true);
+  const list = watchedSenders || [];
+  let html = `<div class="help">FlyerSnap scans email from these senders for dates. Add a full address (jane@school.org) or a whole domain (school.org). Tag a sender with a person and events from them arrive pre-tagged — you can still adjust before saving.</div>
+    <div class="formrow">
+      <input type="text" id="newSender" placeholder="domain.com or name@domain.com" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <button class="btn sm" onclick="addSender()">Add</button>
+    </div>`;
+  if(!list.length){
+    html += `<div class="help" style="font-style:italic">No senders yet — add at least one.</div>`;
+  } else {
+    html += list.map((s,i)=>{
+      const tagged = (S.settings.senderTags||{})[s.toLowerCase()] || [];
+      const people = allPeople();
+      const chips = people.length ? `<div style="margin-top:8px"><span class="label" style="margin-right:4px">Tag as:</span>` +
+        people.map(p=>`<span class="chip" style="${tagged.includes(p.id)?`background:${p.color};border-color:${p.color};color:#fff`:''}"
+          onclick="toggleSenderTag('${esc(s.toLowerCase())}','${p.id}')">${esc(p.name)}</span>`).join('') + `</div>` : '';
+      return `<div class="card" style="padding:12px">
+        <div class="row"><div class="grow" style="font-size:14px;word-break:break-all">${esc(s)}</div>
+          <button class="linkbtn red" onclick="removeSender(${i})">Remove</button></div>${chips}</div>`;
+    }).join('');
+  }
+  html += `<div style="height:8px"></div>
+    <div class="help">Changes take effect on the next 15-minute run. Keep the list tight — each sender's mail is read by Claude and counts toward the daily cap.</div>`;
+  m.innerHTML = html;
+}
+function toggleSenderTag(sender, personId){
+  if(!S.settings.senderTags) S.settings.senderTags = {};
+  const cur = S.settings.senderTags[sender] || [];
+  const at = cur.indexOf(personId);
+  if(at >= 0) cur.splice(at,1); else cur.push(personId);
+  if(cur.length) S.settings.senderTags[sender] = cur; else delete S.settings.senderTags[sender];
+  save(); render();
+}
+function addSender(){
+  const el = document.getElementById('newSender');
+  const v = (el.value||'').trim().toLowerCase();
+  if(!v) return;
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$|^[^@\s]+\.[^@\s]+$/.test(v)){
+    alert('Enter a domain like "school.org" or an address like "name@school.org".'); return;
+  }
+  watchedSenders = watchedSenders || [];
+  if(watchedSenders.some(s=>s.toLowerCase()===v)){ toast('Already in the list'); return; }
+  watchedSenders.push(v);
+  persistSenders();
+}
+function removeSender(i){
+  watchedSenders.splice(i,1);
+  persistSenders();
+}
+async function persistSenders(){
+  render();                                    // optimistic
+  try{
+    watchedSenders = await saveSenders(watchedSenders);
+    render();
+    toast('Senders updated');
+  }catch(err){
+    alert('Could not save to the watcher:\n\n'+err.message);
+  }
+}
+
 async function checkEmail(silent){
   if(!watcherConfigured()){
     if(!silent){ alert('Set up the Gmail watcher in Settings first.'); nav('settings'); }
@@ -1112,10 +1211,14 @@ async function openEmailReviewNow(){
 
 function openEmailReview(fresh){
   pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
-  pendingEvents = markDuplicates(fresh.map(i => ({
-    title:i.title, date:i.date, time:i.time, location:i.location,
-    kind:i.kind, notes:i.notes, source:i.source
-  })));
+  pendingEvents = markDuplicates(fresh.map(i => {
+    const ppl = personsForSender(i.from);
+    return {
+      title:i.title, date:i.date, time:i.time, endTime:i.endTime||null, location:i.location,
+      kind:i.kind, notes:i.notes, source:i.source,
+      personIds: ppl.slice(), kidId: ppl[0] || null
+    };
+  }));
   pendingSource = 'Email';
   S.settings.pendingEmailCount = 0;
   save();
@@ -1404,7 +1507,9 @@ function markDuplicates(found, alsoPending){
   return found.map(e => {
     const dup = seen.some(x => looksDuplicate(e, x));
     seen.push({ title:e.title, date:e.date });
-    return { ...e, selected: !dup, dup, kidId: null };
+    return { ...e, selected: !dup, dup,
+      personIds: Array.isArray(e.personIds) ? e.personIds : [],
+      kidId: (Array.isArray(e.personIds) && e.personIds[0]) || null };
   });
 }
 
@@ -2368,6 +2473,7 @@ function renderSettings(m){
       <button class="btn" onclick="saveWatcher()">Save</button>
       ${watcherConfigured() ? `<button class="btn alt" style="width:auto" onclick="testWatcher()">Test</button>` : ''}
     </div>
+    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">✉️ Manage watched senders</button>` : ''}
 
     <div class="sect">Backup</div>
     <div class="help">Everything lives in this phone's browser storage — there is no server holding a copy.
@@ -2411,7 +2517,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.1 · event end times</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.3 · tag senders to people</div>`;
 }
 function manualPrune(){
   const n = pruneData();

@@ -775,6 +775,80 @@ test('end time is dropped if there is no start time', () => {
   assert.strictEqual(e.endTime, null, 'an end with no start is meaningless');
 });
 
+console.log('\nSender tagging');
+
+function seedPeople(){
+  boot(GOOD);
+  S.kids = [
+    { id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+    { id:'k2', name:'Braelyn', color:'#0E7490', type:'kid', deleted:false },
+    { id:'a1', name:'Logan', color:'#166534', type:'adult', deleted:false }
+  ];
+}
+
+test('a full address maps to its person', () => {
+  seedPeople();
+  S.settings.senderTags = { 'jane@j31.com': ['k1'] };
+  assert.deepStrictEqual(personsForSender('jane@j31.com'), ['k1']);
+});
+
+test('a domain rule catches any address at that domain', () => {
+  seedPeople();
+  S.settings.senderTags = { 'j31.com': ['k1'] };
+  assert.deepStrictEqual(personsForSender('anyone@j31.com'), ['k1']);
+  assert.deepStrictEqual(personsForSender('other@j31.com'), ['k1']);
+});
+
+test('a specific address beats the domain rule', () => {
+  seedPeople();
+  S.settings.senderTags = { 'j31.com': ['k1'], 'principal@j31.com': ['k2'] };
+  assert.deepStrictEqual(personsForSender('principal@j31.com'), ['k2'], 'address wins');
+  assert.deepStrictEqual(personsForSender('teacher@j31.com'), ['k1'], 'others fall to domain');
+});
+
+test('a sender can map to several people', () => {
+  seedPeople();
+  S.settings.senderTags = { 'kingdomkc.com': ['k1','k2'] };
+  assert.deepStrictEqual(personsForSender('info@kingdomkc.com'), ['k1','k2']);
+});
+
+test('an unmapped sender tags no one', () => {
+  seedPeople();
+  S.settings.senderTags = { 'j31.com': ['k1'] };
+  assert.deepStrictEqual(personsForSender('spam@random.com'), []);
+});
+
+test('a mapping to a deleted person is ignored', () => {
+  seedPeople();
+  S.settings.senderTags = { 'j31.com': ['k1','gone'] };
+  assert.deepStrictEqual(personsForSender('x@j31.com'), ['k1'], 'missing ids dropped');
+});
+
+test('toggleSenderTag adds and removes cleanly', () => {
+  seedPeople();
+  S.settings.senderTags = {};
+  toggleSenderTag('j31.com', 'k1');
+  assert.deepStrictEqual(S.settings.senderTags['j31.com'], ['k1']);
+  toggleSenderTag('j31.com', 'k2');
+  assert.deepStrictEqual(S.settings.senderTags['j31.com'], ['k1','k2']);
+  toggleSenderTag('j31.com', 'k1');
+  assert.deepStrictEqual(S.settings.senderTags['j31.com'], ['k2']);
+  toggleSenderTag('j31.com', 'k2');
+  assert.strictEqual(S.settings.senderTags['j31.com'], undefined, 'empty mapping removed entirely');
+});
+
+test('emailed events arrive pre-tagged by sender', () => {
+  seedPeople();
+  S.settings.senderTags = { 'j31.com': ['k1'] };
+  S.events = [];
+  pendingMsgIds = [];
+  const marked = markDuplicates([
+    { title:'Field Trip', date:dayAhead(3), from:'office@j31.com', personIds: personsForSender('office@j31.com') }
+  ]);
+  assert.deepStrictEqual(marked[0].personIds, ['k1'], 'pre-tagged for Olivia');
+  assert.strictEqual(marked[0].kidId, 'k1');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

@@ -185,9 +185,13 @@ function checkMail() {
         processed++;
         var events = parseEvents(callClaude(blocks));
 
+        var fromRaw = msg.getFrom() || '';
+        var fromMatch = fromRaw.match(/[\w.+-]+@[\w.-]+\.[\w.-]+/);
+        var fromAddr = fromMatch ? fromMatch[0].toLowerCase() : '';
         for (var e = 0; e < events.length; e++) {
           events[e].msgId = id;
           events[e].source = 'Email - ' + msg.getSubject().slice(0, 60);
+          events[e].from = fromAddr;          // lets FlyerSnap map sender -> person
           queue.push(events[e]);
           added++;
         }
@@ -250,11 +254,33 @@ function doGet(e) {
     return out({ error: 'unauthorized' });
   }
 
+  var action = (e.parameter.action || '').toLowerCase();
+
+  // Manage the watched sender list from inside FlyerSnap.
+  if (action === 'setsenders') {
+    var incoming = (e.parameter.senders || '').split(',')
+      .map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0 && s.length < 120; });
+    // de-dupe, cap the count so a runaway can't bloat properties
+    var seen = {}, clean = [];
+    for (var i = 0; i < incoming.length && clean.length < 40; i++) {
+      var low = incoming[i].toLowerCase();
+      if (!seen[low]) { seen[low] = true; clean.push(incoming[i]); }
+    }
+    props().setProperty('SENDERS', clean.join(', '));
+    return out({ ok: true, senders: clean });
+  }
+
+  if (action === 'senders') {
+    return out({ ok: true, senders: senders() });
+  }
+
   return out({
     ok: true,
     lastRun: getProp('LAST_RUN') || null,
     callsToday: callsUsedToday(),
     dailyCap: DAILY_CALL_CAP,
+    senders: senders(),
     items: JSON.parse(getProp('QUEUE') || '[]')
   });
 }
