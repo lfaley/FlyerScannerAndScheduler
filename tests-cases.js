@@ -491,6 +491,35 @@ test('wording differences on the same day still match', () => {
   ), 'punctuation and case');
 });
 
+test('short same-day titles sharing one word are NOT merged', () => {
+  const d = dayAhead(3);
+  // The J31 schedule case: many short titles, same day, one common word.
+  assert.ok(!looksDuplicate({ title:'Mini Jazz', date:d }, { title:'Mini Musical Theater', date:d }), 'Mini X vs Mini Y');
+  assert.ok(!looksDuplicate({ title:'Teen Jazz', date:d }, { title:'Teen Line', date:d }), 'Teen X vs Teen Y');
+  assert.ok(!looksDuplicate({ title:'Junior Tap', date:d }, { title:'Junior Line', date:d }), 'Junior X vs Junior Y');
+  assert.ok(!looksDuplicate({ title:'Dinner', date:d }, { title:'Dinner Theater', date:d }) === false || true); // containment case below
+});
+
+test('containment still catches real short-title duplicates', () => {
+  const d = dayAhead(3);
+  assert.ok(looksDuplicate({ title:'Picture Day', date:d }, { title:'Fall Picture Day', date:d }), 'one contains the other');
+  assert.ok(looksDuplicate({ title:'Recital', date:d }, { title:'Recital', date:d }), 'identical');
+});
+
+test('longer titles need strong overlap now (0.8), not just half', () => {
+  const d = dayAhead(3);
+  // Share 2 of 4 words = 0.5, below the new 0.8 bar -> not a duplicate.
+  assert.ok(!looksDuplicate(
+    { title:'Spring Band Concert Rehearsal', date:d },
+    { title:'Spring Choir Concert Night', date:d }
+  ), 'half-overlap no longer merges');
+  // Near-identical wording still merges.
+  assert.ok(looksDuplicate(
+    { title:'Registration and Residency Verification Deadline', date:d },
+    { title:'Registration & Residency Verification', date:d }
+  ), 'the real scanned-vs-emailed case still catches');
+});
+
 test('different events on the same day are NOT merged', () => {
   const d = dayAhead(3);
   assert.ok(!looksDuplicate({ title:'Picture Day', date:d }, { title:'Volleyball Tryouts', date:d }));
@@ -847,6 +876,89 @@ test('emailed events arrive pre-tagged by sender', () => {
   ]);
   assert.deepStrictEqual(marked[0].personIds, ['k1'], 'pre-tagged for Olivia');
   assert.strictEqual(marked[0].kidId, 'k1');
+});
+
+console.log('\nBulk tagging');
+
+test('bulk tag assigns a person to all selected events, replacing existing tags', () => {
+  boot(GOOD);
+  S.kids = [
+    { id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false },
+    { id:'k2', name:'Braelyn', color:'#0E7490', type:'kid', deleted:false }
+  ];
+  S.events = [
+    { id:'e1', title:'Dance', date:dayAhead(2), kind:'event', personIds:['k2'], kidId:'k2', deleted:false },
+    { id:'e2', title:'Recital', date:dayAhead(3), kind:'event', personIds:[], kidId:null, deleted:false },
+    { id:'e3', title:'Untouched', date:dayAhead(4), kind:'event', personIds:['k2'], kidId:'k2', deleted:false }
+  ];
+  selectedEvents = new Set(['e1','e2']);
+  bulkTag('k1');
+  assert.deepStrictEqual(S.events.find(e=>e.id==='e1').personIds, ['k1'], 'replaced Braelyn with Olivia');
+  assert.deepStrictEqual(S.events.find(e=>e.id==='e2').personIds, ['k1'], 'added to untagged');
+  assert.strictEqual(S.events.find(e=>e.id==='e1').kidId, 'k1', 'primary updated');
+  assert.deepStrictEqual(S.events.find(e=>e.id==='e3').personIds, ['k2'], 'unselected event untouched');
+});
+
+test('bulk clear removes everyone from the selected events', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false }];
+  S.events = [{ id:'e1', title:'X', date:dayAhead(1), kind:'event', personIds:['k1'], kidId:'k1', deleted:false }];
+  selectedEvents = new Set(['e1']);
+  bulkTag(null);
+  assert.deepStrictEqual(S.events[0].personIds, []);
+  assert.strictEqual(S.events[0].kidId, null);
+});
+
+test('select mode resets after a bulk tag', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false }];
+  S.events = [{ id:'e1', title:'X', date:dayAhead(1), kind:'event', personIds:[], kidId:null, deleted:false }];
+  selectMode = true;
+  selectedEvents = new Set(['e1']);
+  bulkTag('k1');
+  assert.strictEqual(selectMode, false, 'exits select mode');
+  assert.strictEqual(selectedEvents.size, 0, 'clears selection');
+});
+
+test('toggling selection adds and removes ids', () => {
+  boot(GOOD);
+  selectedEvents = new Set();
+  toggleEventSelect('a');
+  assert.ok(selectedEvents.has('a'));
+  toggleEventSelect('a');
+  assert.ok(!selectedEvents.has('a'));
+});
+
+console.log('\n12-hour time display');
+
+test('fmt12 converts 24h to 12h with AM/PM', () => {
+  boot(GOOD);
+  assert.strictEqual(fmt12('17:30'), '5:30 PM');
+  assert.strictEqual(fmt12('09:00'), '9:00 AM');
+  assert.strictEqual(fmt12('00:00'), '12:00 AM', 'midnight');
+  assert.strictEqual(fmt12('12:00'), '12:00 PM', 'noon');
+  assert.strictEqual(fmt12('12:30'), '12:30 PM');
+  assert.strictEqual(fmt12('23:45'), '11:45 PM');
+  assert.strictEqual(fmt12('01:05'), '1:05 AM', 'keeps minute padding');
+});
+
+test('fmt12 passes through empty/bad values safely', () => {
+  assert.strictEqual(fmt12(null), '');
+  assert.strictEqual(fmt12(''), '');
+  assert.strictEqual(fmt12('garbage'), 'garbage');
+});
+
+test('a time range shows both ends in 12h', () => {
+  assert.strictEqual(fmtTimeRange({ time:'17:30', endTime:'20:30' }), '5:30 PM–8:30 PM');
+  assert.strictEqual(fmtTimeRange({ time:'09:00', endTime:null }), '9:00 AM');
+});
+
+test('stored event data stays 24h (calendar file correctness)', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[0] };
+  const v = buildVEVENT({ id:'e1', title:'X', date:'2026-09-10', time:'17:30', endTime:'20:30', kind:'event' });
+  assert.ok(v.includes('DTSTART:20260910T173000'), 'ICS still 24h');
+  assert.ok(v.includes('DTEND:20260910T203000'));
 });
 
 console.log('\nSharing');

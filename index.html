@@ -571,9 +571,16 @@ function alertPlan(kind){
   return { alarms: chosen.slice(0,2), extras: S.settings.extraReminders ? chosen.slice(2) : [] };
 }
 
+function fmt12(t){
+  if(!t || !/^\d{1,2}:\d{2}$/.test(t)) return t || '';
+  let [h, m] = t.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12; if(h === 0) h = 12;
+  return h + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+}
 function fmtTimeRange(e){
   if(!e.time) return '';
-  return e.endTime ? e.time + '-' + e.endTime : e.time;
+  return e.endTime ? fmt12(e.time) + '–' + fmt12(e.endTime) : fmt12(e.time);
 }
 function eventTitle(evt){
   const kid = evt.kidId ? kidById(evt.kidId) : null;
@@ -626,7 +633,7 @@ function buildReminderVEVENT(evt, daysBefore){
   return ['BEGIN:VEVENT','UID:'+evt.id+'-r'+daysBefore+'@flyersnap','DTSTAMP:'+icsStamp(),
     'DTSTART:'+ds+'T080000','DTEND:'+ds+'T081500',
     'SUMMARY:'+icsEscape(title),
-    'DESCRIPTION:'+icsEscape('Actual date: '+friendly(evt.date)+(evt.time?' at '+evt.time:'')),
+    'DESCRIPTION:'+icsEscape('Actual date: '+friendly(evt.date)+(evt.time?' at '+fmt12(evt.time):'')),
     valarm(title, 0),'END:VEVENT'].join('\r\n');
 }
 
@@ -874,6 +881,8 @@ function showSheet(title, subtitle, buttons){
 // ---------- Events tab ----------
 let eventFilter = null;
 let newPersonType = 'kid';
+let selectMode = false;
+let selectedEvents = new Set();
 let showPast = false;
 function upcomingEvents(){
   const t = todayISO();
@@ -917,6 +926,18 @@ function evtCard(e, isPast){
   const urgent = !isPast && e.kind==='deadline' && days<=3;
   const people = eventPeople(e);
   const badge = isPast ? 'past' : (days===0?'Today':days===1?'1 day':days+' days');
+  if(selectMode){
+    const on = selectedEvents.has(e.id);
+    return `<div class="card stripe ${e.kind} ${isPast?'dim':''} ${on?'':'dim'}" style="${on?'border:2px solid var(--green)':'border:2px solid transparent'}" onclick="toggleEventSelect('${e.id}')">
+      <div class="row">
+        <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px;flex-shrink:0">${on?'✓':''}</div>
+        <div class="grow">
+          <div class="title">${esc(e.title)} ${e.exported?'📆':''}</div>
+          <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
+          ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}
+        </div>
+      </div></div>`;
+  }
   return `<div class="card stripe ${e.kind} ${isPast?'dim':''}" onclick="eventActions('${e.id}')">
     <div class="row">
       <div class="grow">
@@ -937,9 +958,10 @@ function renderEvents(m){
 
   // Count line — reflects whatever filter or search is active.
   const filtered = !!eventFilter || !!eventSearch;
-  html += `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+  html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span style="font-size:20px;font-weight:800">${evts.length} upcoming</span>
-    <span class="meta" style="font-size:12px">${past.length} past${filtered ? ' · filtered' : ''}</span>
+    <span>${evts.length ? `<button class="linkbtn" style="padding:2px 8px" onclick="toggleSelectMode()">${selectMode?'Cancel':'Select'}</button>` : ''}
+    <span class="meta" style="font-size:12px">${past.length} past${filtered ? ' · filtered' : ''}</span></span>
   </div>`;
 
   const people = allPeople();
@@ -993,6 +1015,13 @@ function renderEvents(m){
     }
     html += evts.map(e=>evtCard(e, false)).join('');
   }
+  if(selectMode){
+    html += `<div class="card" style="position:sticky;bottom:76px;z-index:20">
+      <button class="btn ${selectedEvents.size?'':'alt'}" onclick="bulkTagSheet()">
+        ${selectedEvents.size ? `🏷️ Tag ${selectedEvents.size} selected` : 'Tap events to select them'}
+      </button></div><div style="height:70px"></div>`;
+  }
+
   if(past.length){
     const open = showPast || !!eventSearch;      // a search should look everywhere
     html += `<div style="text-align:center;margin-top:6px">
@@ -1144,7 +1173,12 @@ function toggleSenderTag(sender, personId){
   const at = cur.indexOf(personId);
   if(at >= 0) cur.splice(at,1); else cur.push(personId);
   if(cur.length) S.settings.senderTags[sender] = cur; else delete S.settings.senderTags[sender];
-  save(); render();
+  save();
+  // Re-render only the senders screen, preserving scroll position, so the chips
+  // stay put and readable instead of the whole view jumping.
+  const y = window.scrollY;
+  renderSenders(document.getElementById('main'));
+  window.scrollTo(0, y);
 }
 function addSender(){
   const el = document.getElementById('newSender');
@@ -1163,13 +1197,20 @@ function removeSender(i){
   persistSenders();
 }
 async function persistSenders(){
-  render();                                    // optimistic
+  render();                                    // show the change immediately
   try{
-    watchedSenders = await saveSenders(watchedSenders);
-    render();
+    const returned = await saveSenders(watchedSenders);
+    // Trust our local list for ordering/visibility; only adopt the server's
+    // set if it actually differs, and never yank the screen around mid-tagging.
+    if(Array.isArray(returned) && returned.length !== watchedSenders.length){
+      watchedSenders = returned;
+      render();
+    }
     toast('Senders updated');
   }catch(err){
+    // The domain didn't save server-side — roll back so the UI stays honest.
     alert('Could not save to the watcher:\n\n'+err.message);
+    try{ watchedSenders = await fetchSenders(); render(); }catch(e){}
   }
 }
 
@@ -1253,7 +1294,7 @@ function shareAsText(){
   const evts = selectedShareEvents();
   if(!evts.length){ toast('Tap the events you want to send'); return; }
   const text = evts.map(e=>
-    '• ' + friendly(e.date) + (e.time?' · '+e.time:'') + ' — ' + e.title +
+    '• ' + friendly(e.date) + (e.time?' · '+fmt12(e.time):'') + ' — ' + e.title +
     (e.location?' ('+e.location+')':'')
   ).join('\n');
   if(navigator.share){
@@ -1387,7 +1428,7 @@ function applyDedupe(){
     });
   });
   save();
-  toast(removed ? `Removed ${removed} duplicate${removed===1?'':'s'}` : 'Nothing removed');
+  toast(removed ? `Removed ${removed} duplicate${removed===1?'':'s'}` : 'Kept everything');
   view = { tab:'events', sub:null, data:null };
   render();
 }
@@ -1413,7 +1454,7 @@ function renderDedupe(m){
         <div class="grow">
           <div style="font-size:14px;font-weight:${on?'700':'400'}">${esc(e.title)} ${e.exported?'📆':''}</div>
           <div class="meta" style="font-size:11px">
-            ${e.time ? e.time + ' · ' : ''}${e.location ? esc(e.location) + ' · ' : ''}${kid ? esc(kid.name) + ' · ' : ''}${esc(e.source || 'added by hand')}
+            ${e.time ? fmt12(e.time) + ' · ' : ''}${e.location ? esc(e.location) + ' · ' : ''}${kid ? esc(kid.name) + ' · ' : ''}${esc(e.source || 'added by hand')}
           </div>
         </div>
       </div>`;
@@ -1426,15 +1467,51 @@ function renderDedupe(m){
   const removing = groups.reduce((n, g, i) => n + (dedupeKeep[i] ? g.length - 1 : 0), 0);
   html += `<div class="card" style="position:sticky;bottom:76px">
     <button class="btn ${removing?'':'alt'}" onclick="applyDedupe()">
-      ${removing ? `Remove ${removing} duplicate${removing===1?'':'s'}` : 'Nothing selected for removal'}
+      ${removing ? `Remove ${removing} duplicate${removing===1?'':'s'}` : '✓ Done (remove nothing)'}
     </button></div><div style="height:70px"></div>`;
   m.innerHTML = html;
+}
+
+function toggleSelectMode(){
+  selectMode = !selectMode;
+  selectedEvents = new Set();
+  render();
+}
+function toggleEventSelect(id){
+  if(selectedEvents.has(id)) selectedEvents.delete(id); else selectedEvents.add(id);
+  const y = window.scrollY;
+  renderEvents(document.getElementById('main'));
+  window.scrollTo(0, y);
+}
+function bulkTagSheet(){
+  if(!selectedEvents.size){ toast('Select some events first'); return; }
+  const people = allPeople();
+  if(!people.length){ toast('Add people in Settings first'); return; }
+  const buttons = people.map(p => ({ label: '🏷️ ' + p.name, fn: () => bulkTag(p.id) }));
+  buttons.push({ label: 'Clear everyone from these', fn: () => bulkTag(null) });
+  showSheet('Tag ' + selectedEvents.size + ' event' + (selectedEvents.size===1?'':'s'),
+    'Replaces existing tags on the selected events', buttons);
+}
+function bulkTag(personId){
+  let n = 0;
+  S.events.forEach(e => {
+    if(!selectedEvents.has(e.id)) return;
+    e.personIds = personId ? [personId] : [];
+    e.kidId = personId || null;
+    n++;
+  });
+  save();
+  const who = personId ? (personById(personId)||{}).name : 'no one';
+  toast('Tagged ' + n + ' event' + (n===1?'':'s') + ' as ' + who);
+  selectMode = false;
+  selectedEvents = new Set();
+  render();
 }
 
 function eventActions(id){
   const e = S.events.find(x=>x.id===id);
   if(!e) return;
-  showSheet(e.title, friendly(e.date) + (e.time?' · '+e.time:''), [
+  showSheet(e.title, friendly(e.date) + (e.time?' · '+fmt12(e.time):''), [
     {label: e.exported ? '📆 Calendar file again' : '📆 Add to calendar (with alerts)', fn:()=>downloadICS(e)},
     {label:'✏️ Edit event', fn:()=>openEventEdit(e.id)},
     {label:'🗑 Remove event', style:'danger', fn:()=>{
@@ -1497,8 +1574,18 @@ function titleSimilarity(a, b){
 
 function looksDuplicate(a, b){
   if(!a || !b || a.date !== b.date) return false;          // same day is required
-  if(normTitle(a.title) === normTitle(b.title)) return true;
-  return titleSimilarity(a.title, b.title) >= 0.6;
+  const na = normTitle(a.title), nb = normTitle(b.title);
+  if(!na || !nb) return false;
+  if(na === nb) return true;                                // identical after normalizing
+  // For anything else, demand a strong match. Short titles (1-2 words) are too
+  // easy to collide by chance ("Mini Jazz" vs "Mini M.T."), so for those we
+  // require one title to fully contain the other rather than mere word overlap.
+  const wa = na.split(' ').filter(Boolean), wb = nb.split(' ').filter(Boolean);
+  const shorter = Math.min(wa.length, wb.length);
+  if(shorter <= 2){
+    return na.indexOf(nb) >= 0 || nb.indexOf(na) >= 0;     // full containment only
+  }
+  return titleSimilarity(a.title, b.title) >= 0.8;         // was 0.6 — too loose
 }
 
 // Shared by every import path: photo, PDF, link and email.
@@ -2518,7 +2605,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.4 · nav bar fix</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.8 · 12-hour time</div>`;
 }
 function manualPrune(){
   const n = pruneData();
