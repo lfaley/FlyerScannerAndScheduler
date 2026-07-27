@@ -811,7 +811,7 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders};
+    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
@@ -988,7 +988,7 @@ function renderEvents(m){
       <div class="row">
         <div class="grow">
           <div class="title" style="font-size:14px">${dupGroups} possible duplicate${dupGroups===1?'':'s'}</div>
-          <div class="meta">Same day, same-looking event — tap to review and clean up.</div>
+          <div class="meta">${(function(){var g=duplicateGroups()[0]||[];return g.map(function(e){return esc(e.title);}).join('  vs  ');})()} — tap to review.</div>
         </div>
         <span class="btn sm" style="pointer-events:none">Review ›</span>
       </div></div>`;
@@ -1349,6 +1349,52 @@ function emailBanner(){
     </div></div>`;
 }
 
+let exportPick = new Set();
+
+function openPickExport(){
+  exportPick = new Set();
+  sub('pickExport');
+}
+function togglePickExport(id){
+  if(exportPick.has(id)) exportPick.delete(id); else exportPick.add(id);
+  const y = window.scrollY;
+  renderPickExport(document.getElementById('main'));
+  window.scrollTo(0, y);
+}
+function startPickedExport(){
+  if(!exportPick.size){ toast('Tap the events you want to add'); return; }
+  S.settings.exportQueue = [...exportPick];
+  exportPick = new Set();
+  save(); render();
+}
+function renderPickExport(m){
+  setHeader('Choose Events', true);
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO())
+    .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
+  if(!evts.length){
+    m.innerHTML = `<div class="empty"><div class="eb">No upcoming events to add.</div></div>`;
+    return;
+  }
+  let html = `<div class="help">Tick the events to add to your calendar, then start. Already-added events show 📆 — adding again won't duplicate them.</div>
+    <div style="text-align:right;margin-bottom:6px">
+      <button class="linkbtn" style="padding:2px 8px" onclick="${exportPick.size===evts.length?'exportPick=new Set()':'exportPick=new Set('+JSON.stringify(evts.map(e=>e.id))+')'};renderPickExport(document.getElementById('main'))">${exportPick.size===evts.length?'Clear all':'Select all'}</button></div>`;
+  html += evts.map(e=>{
+    const on = exportPick.has(e.id);
+    const ppl = eventPeople(e);
+    return `<div class="card row ${on?'':'dim'}" style="padding:11px;margin-bottom:6px;${on?'border:2px solid var(--green)':'border:2px solid transparent'}" onclick="togglePickExport('${e.id}')">
+      <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px;flex-shrink:0">${on?'✓':''}</div>
+      <div class="grow">
+        <div style="font-size:14px;font-weight:600">${esc(e.title)} ${e.exported?'📆':''}</div>
+        <div class="meta" style="font-size:12px">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${ppl.length?' · '+ppl.map(p=>esc(p.name)).join(', '):''}</div>
+      </div></div>`;
+  }).join('');
+  html += `<div class="card" style="position:sticky;bottom:76px;z-index:20">
+    <button class="btn ${exportPick.size?'':'alt'}" onclick="startPickedExport()">
+      ${exportPick.size ? `📆 Add ${exportPick.size} to calendar` : 'Tap events to choose'}
+    </button></div><div style="height:70px"></div>`;
+  m.innerHTML = html;
+}
+
 function calendarOptions(){
   const n = S.events.filter(e=>!e.deleted && e.date>=todayISO()).length;
   const openLabel = isStandalone()
@@ -1356,8 +1402,9 @@ function calendarOptions(){
     : '📆 Open all ' + n + ' now (tap "Add All")';
   showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
     {label: openLabel, fn:()=>addAllAtOnce()},
+    {label:'☑️ Choose which to add', fn:()=>openPickExport()},
     {label:'✉️ Email them to myself', fn:()=>emailAllToSelf()},
-    {label:'1️⃣ One at a time', fn:()=>startExportQueue(true)},
+    {label:'1️⃣ One at a time (all)', fn:()=>startExportQueue(true)},
   ]);
 }
 
@@ -2605,7 +2652,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v3.9 · tappable dedupe banner</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.0 · selectable export</div>`;
 }
 function manualPrune(){
   const n = pruneData();

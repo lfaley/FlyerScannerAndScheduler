@@ -961,6 +961,40 @@ test('stored event data stays 24h (calendar file correctness)', () => {
   assert.ok(v.includes('DTEND:20260910T203000'));
 });
 
+console.log('\nSelectable calendar export');
+
+test('picked export queues only the chosen events', () => {
+  boot(GOOD);
+  S.events = [
+    { id:'e1', title:'A', date:dayAhead(2), kind:'event', deleted:false },
+    { id:'e2', title:'B', date:dayAhead(3), kind:'event', deleted:false },
+    { id:'e3', title:'C', date:dayAhead(4), kind:'event', deleted:false }
+  ];
+  exportPick = new Set(['e1','e3']);
+  startPickedExport();
+  assert.deepStrictEqual(S.settings.exportQueue, ['e1','e3'], 'only chosen queued');
+  assert.strictEqual(exportPick.size, 0, 'selection cleared after');
+});
+
+test('picked export refuses when nothing is chosen', () => {
+  boot(GOOD);
+  S.settings.exportQueue = [];
+  exportPick = new Set();
+  startPickedExport();
+  assert.deepStrictEqual(S.settings.exportQueue, [], 'nothing queued');
+});
+
+test('re-export uses the same UID so no calendar double', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[0] };
+  const v1 = buildVEVENT({ id:'e1', title:'Recital', date:'2026-09-10', time:'17:30', kind:'event' });
+  const v2 = buildVEVENT({ id:'e1', title:'Recital', date:'2026-09-10', time:'17:30', kind:'event' });
+  const uid1 = v1.match(/UID:([^\r\n]+)/)[1];
+  const uid2 = v2.match(/UID:([^\r\n]+)/)[1];
+  assert.strictEqual(uid1, uid2, 'same event = same UID = calendar updates, not doubles');
+  assert.strictEqual(uid1, 'e1@flyersnap');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
