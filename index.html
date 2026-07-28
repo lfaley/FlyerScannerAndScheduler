@@ -982,16 +982,14 @@ function renderEvents(m){
   }
 
   html += emailBanner();
-  const dupGroups = duplicateGroups().length;
-  if(dupGroups && !eventSearch){
-    html += `<div class="card" style="border-left:5px solid var(--amber);cursor:pointer" onclick="openDedupe()">
-      <div class="row">
-        <div class="grow">
-          <div class="title" style="font-size:14px">${dupGroups} possible duplicate${dupGroups===1?'':'s'}</div>
-          <div class="meta">${(function(){var g=duplicateGroups()[0]||[];return g.map(function(e){return esc(e.title);}).join('  vs  ');})()} — tap to review.</div>
-        </div>
-        <span class="btn sm" style="pointer-events:none">Review ›</span>
-      </div></div>`;
+  const dGroups = duplicateGroups();
+  if(dGroups.length && !eventSearch){
+    const first = dGroups[0];
+    const preview = first.map(e => e.title).join('  vs  ');
+    html += `<div class="card" style="border-left:5px solid var(--amber)" onclick="openDedupe()">
+      <div style="font-weight:800;font-size:14px;margin-bottom:2px">${dGroups.length} possible duplicate${dGroups.length===1?'':'s'} — tap to review</div>
+      <div class="meta" style="font-size:12px">${esc(preview)}</div>
+    </div>`;
   }
   html += backupNudge();
   html += exportQueueBanner();
@@ -1363,9 +1361,18 @@ function togglePickExport(id){
 }
 function startPickedExport(){
   if(!exportPick.size){ toast('Tap the events you want to add'); return; }
-  S.settings.exportQueue = [...exportPick];
+  const chosen = S.events.filter(e => !e.deleted && exportPick.has(e.id));
+  if(!chosen.length){ toast('Nothing selected'); return; }
+  const veh = [];
+  chosen.forEach(e => veh.push(...buildVEVENTs(e)));
+  deliverICS(wrapICS(veh), 'flyersnap-events.ics',
+    isStandalone() ? 'Saved — open it from Downloads to add them 📆'
+                   : 'Tap "Add All" in the Calendar screen that opens 📆');
+  chosen.forEach(e => e.exported = true);
   exportPick = new Set();
-  save(); render();
+  save();
+  view = { tab:'events', sub:null, data:null };
+  render();
 }
 function renderPickExport(m){
   setHeader('Choose Events', true);
@@ -1401,10 +1408,9 @@ function calendarOptions(){
     ? '📆 Download all ' + n + ' (.ics)'
     : '📆 Open all ' + n + ' now (tap "Add All")';
   showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
-    {label: openLabel, fn:()=>addAllAtOnce()},
     {label:'☑️ Choose which to add', fn:()=>openPickExport()},
+    {label: openLabel, fn:()=>addAllAtOnce()},
     {label:'✉️ Email them to myself', fn:()=>emailAllToSelf()},
-    {label:'1️⃣ One at a time (all)', fn:()=>startExportQueue(true)},
   ]);
 }
 

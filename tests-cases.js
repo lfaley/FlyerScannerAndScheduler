@@ -963,25 +963,37 @@ test('stored event data stays 24h (calendar file correctness)', () => {
 
 console.log('\nSelectable calendar export');
 
-test('picked export queues only the chosen events', () => {
+test('picked export marks only the chosen events exported and clears selection', () => {
   boot(GOOD);
+  S.settings.alerts = { event:[0], deadline:[1] };
   S.events = [
-    { id:'e1', title:'A', date:dayAhead(2), kind:'event', deleted:false },
+    { id:'e1', title:'A', date:dayAhead(2), time:'17:00', kind:'event', deleted:false },
     { id:'e2', title:'B', date:dayAhead(3), kind:'event', deleted:false },
-    { id:'e3', title:'C', date:dayAhead(4), kind:'event', deleted:false }
+    { id:'e3', title:'C', date:dayAhead(4), time:'09:00', kind:'event', deleted:false }
   ];
+  const realSA = isStandalone;
+  isStandalone = () => false;
+  const realCreate = document.createElement;
+  document.createElement = (t) => { const el = realCreate(t); if(t==='a') el.click = () => {}; return el; };
+  const realOpen = window.open;
+  window.open = () => ({});
   exportPick = new Set(['e1','e3']);
   startPickedExport();
-  assert.deepStrictEqual(S.settings.exportQueue, ['e1','e3'], 'only chosen queued');
-  assert.strictEqual(exportPick.size, 0, 'selection cleared after');
+  window.open = realOpen;
+  document.createElement = realCreate;
+  isStandalone = realSA;
+  assert.strictEqual(S.events.find(e=>e.id==='e1').exported, true, 'chosen marked exported');
+  assert.strictEqual(S.events.find(e=>e.id==='e3').exported, true, 'chosen marked exported');
+  assert.ok(!S.events.find(e=>e.id==='e2').exported, 'unchosen not marked');
+  assert.strictEqual(exportPick.size, 0, 'selection cleared');
 });
 
 test('picked export refuses when nothing is chosen', () => {
   boot(GOOD);
-  S.settings.exportQueue = [];
   exportPick = new Set();
+  globalThis.lastBlob = null;
   startPickedExport();
-  assert.deepStrictEqual(S.settings.exportQueue, [], 'nothing queued');
+  assert.strictEqual(globalThis.lastBlob, null, 'nothing delivered');
 });
 
 test('re-export uses the same UID so no calendar double', () => {
