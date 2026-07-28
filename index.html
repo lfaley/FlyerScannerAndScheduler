@@ -1408,8 +1408,9 @@ function calendarOptions(){
     ? '📆 Download all ' + n + ' (.ics)'
     : '📆 Open all ' + n + ' now (tap "Add All")';
   showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
-    {label:'☑️ Choose which to add', fn:()=>openPickExport()},
     {label: openLabel, fn:()=>addAllAtOnce()},
+    {label:'☑️ Choose which to add', fn:()=>openPickExport()},
+    {label:'1️⃣ One at a time (all)', fn:()=>startExportQueue(true)},
     {label:'✉️ Email them to myself', fn:()=>emailAllToSelf()},
   ]);
 }
@@ -2658,7 +2659,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.0 · selectable export</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.1 · all export options restored</div>`;
 }
 function manualPrune(){
   const n = pruneData();
