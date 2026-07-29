@@ -1007,6 +1007,36 @@ test('re-export uses the same UID so no calendar double', () => {
   assert.strictEqual(uid1, 'e1@flyersnap');
 });
 
+console.log('\nDismissing a false duplicate');
+
+test('marking a pair as not-duplicates removes it for good', () => {
+  boot(GOOD);
+  const d = dayAhead(3);
+  S.events = [
+    { id:'a', title:'Hell Week', date:d, kind:'event', deleted:false },
+    { id:'b', title:'Livi - Mini Jazz (Kynser) Hell Week', date:d, kind:'event', deleted:false }
+  ];
+  assert.strictEqual(duplicateGroups().length, 1, 'flagged at first');
+  dismissGroup(0);
+  assert.strictEqual(duplicateGroups().length, 0, 'gone after dismissal');
+});
+
+test('a dismissal survives a reload and does not affect other pairs', () => {
+  boot(GOOD);
+  const d = dayAhead(4);
+  S.events = [
+    { id:'a', title:'Hell Week', date:d, kind:'event', deleted:false },
+    { id:'b', title:'Livi - Mini Jazz Hell Week', date:d, kind:'event', deleted:false }
+  ];
+  dismissGroup(0);
+  save();
+  S = load();
+  assert.strictEqual(duplicateGroups().length, 0, 'still dismissed after reload');
+  S.events.push({ id:'c', title:'Picture Day', date:d, kind:'event', deleted:false });
+  S.events.push({ id:'e', title:'Fall Picture Day', date:d, kind:'event', deleted:false });
+  assert.strictEqual(duplicateGroups().length, 1, 'a genuine duplicate still flags');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

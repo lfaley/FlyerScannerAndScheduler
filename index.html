@@ -38,7 +38,7 @@
   .grow{flex:1;min-width:0}
   .title{font-size:15px;font-weight:700}
   .meta{font-size:13px;color:var(--muted);margin-top:2px}
-  .notes{font-size:13px;color:var(--faint);font-style:italic;margin-top:3px}
+  .notes{font-size:13px;color:var(--faint);font-style:italic;margin-top:3px;white-space:pre-wrap;word-break:break-word}
   .stripe{border-left:5px solid var(--green)}
   .stripe.deadline{border-left-color:var(--red)}
   .badge{font-size:12px;font-weight:700;color:var(--green);background:var(--green-lt);
@@ -1433,6 +1433,26 @@ function clearEventSearch(){ eventSearch = ''; pastLimit = 30; render(); }
 
 // Duplicates that are already saved -- e.g. a flyer scanned by hand and the same
 // announcement arriving by email before matching was improved.
+function pairKey(a, b){ return [a.id, b.id].sort().join('~'); }
+function isDismissedPair(a, b){
+  const d = (S.settings && S.settings.notDuplicates) || [];
+  return d.indexOf(pairKey(a, b)) >= 0;
+}
+function dismissGroup(i){
+  const g = duplicateGroups()[i];
+  if(!g) return;
+  if(!S.settings.notDuplicates) S.settings.notDuplicates = [];
+  for(let x = 0; x < g.length; x++)
+    for(let y = x + 1; y < g.length; y++){
+      const k = pairKey(g[x], g[y]);
+      if(S.settings.notDuplicates.indexOf(k) < 0) S.settings.notDuplicates.push(k);
+    }
+  save();
+  toast('Marked as different events');
+  if(!duplicateGroups().length){ view = { tab:'events', sub:null, data:null }; }
+  render();
+}
+
 function duplicateGroups(){
   const evts = S.events.filter(e => !e.deleted)
     .sort((a,b) => a.date.localeCompare(b.date));
@@ -1444,7 +1464,7 @@ function duplicateGroups(){
     for(let j = i + 1; j < evts.length; j++){
       if(used.has(evts[j].id)) continue;
       if(evts[j].date !== evts[i].date) continue;
-      if(group.some(g => looksDuplicate(g, evts[j]))){
+      if(group.some(g => looksDuplicate(g, evts[j]) && !isDismissedPair(g, evts[j]))){
         group.push(evts[j]);
         used.add(evts[j].id);
       }
@@ -1516,6 +1536,7 @@ function renderDedupe(m){
     }).join('')}
     <div style="text-align:right;padding-top:6px">
       <button class="linkbtn" style="padding:2px 6px" onclick="setDedupeKeep(${i}, null)">${dedupeKeep[i] ? 'Keep both' : '✓ Keeping both'}</button>
+      <button class="linkbtn" style="padding:2px 6px" onclick="dismissGroup(${i})">Not duplicates</button>
     </div>
   </div>`).join('');
 
@@ -1913,7 +1934,7 @@ function renderEventEdit(m){
     <div class="label">Location</div>
     <input type="text" id="efLoc" value="${esc(f.location)}">
     <div class="label">Notes</div>
-    <input type="text" id="efNotes" value="${esc(f.notes)}">
+    <textarea id="efNotes" rows="5" style="width:100%;min-height:110px;font-family:inherit;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;box-sizing:border-box;resize:vertical">${esc(f.notes)}</textarea>
     <div style="height:14px"></div>
     <button class="btn" onclick="saveEventEdit()">Save changes</button>
     <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="cancelEventEdit()">Cancel</button></div>`;
@@ -2660,7 +2681,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.2 · fix filter chip taps</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.4 · notes field + dismiss false duplicates</div>`;
 }
 function manualPrune(){
   const n = pruneData();
