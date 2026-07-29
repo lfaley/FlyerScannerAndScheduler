@@ -1007,11 +1007,11 @@ function renderEvents(m){
         <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
     }
   } else {
-    if(!(S.settings.exportQueue||[]).length){
-      html += `<div style="display:flex;justify-content:flex-end">
-        <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">↗ Share</button>
-        <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
-    }
+    // Always available. These used to be hidden while an export queue was
+    // running, which made the button vanish if a queue was left unfinished.
+    html += `<div style="display:flex;justify-content:flex-end">
+      <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">↗ Share</button>
+      <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
     html += evts.map(e=>evtCard(e, false)).join('');
   }
   if(selectMode){
@@ -1529,7 +1529,7 @@ function renderDedupe(m){
         <div class="grow">
           <div style="font-size:14px;font-weight:${on?'700':'400'}">${esc(e.title)} ${e.exported?'📆':''}</div>
           <div class="meta" style="font-size:11px">
-            ${e.time ? fmt12(e.time) + ' · ' : ''}${e.location ? esc(e.location) + ' · ' : ''}${kid ? esc(kid.name) + ' · ' : ''}${esc(e.source || 'added by hand')}
+            ${e.time ? fmt12(e.time) + ' · ' : ''}${e.location ? esc(e.location) + ' · ' : ''}${people.length ? esc(people.map(p=>p.name).join(', ')) + ' · ' : ''}${esc(e.source || 'added by hand')}
           </div>
         </div>
       </div>`;
@@ -2681,7 +2681,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.4 · notes field + dismiss false duplicates</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.5 · fix dedupe crash + calendar button</div>`;
 }
 function manualPrune(){
   const n = pruneData();

@@ -1037,6 +1037,40 @@ test('a dismissal survives a reload and does not affect other pairs', () => {
   assert.strictEqual(duplicateGroups().length, 1, 'a genuine duplicate still flags');
 });
 
+console.log('\nScreens actually render');
+
+// These would have caught the ReferenceError that made "tap to review" look dead:
+// renderDedupe threw before setting innerHTML, so the screen never changed.
+test('the duplicate review screen renders without throwing', () => {
+  boot(GOOD);
+  const d = dayAhead(3);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false }];
+  S.events = [
+    { id:'a', title:'Picture Day', date:d, time:'09:00', kind:'event', personIds:['k1'], kidId:'k1', source:'Email - x', deleted:false },
+    { id:'b', title:'Fall Picture Day', date:d, location:'Gym', kind:'event', personIds:[], kidId:null, deleted:false }
+  ];
+  openDedupe();
+  const m = { innerHTML:'' };
+  renderDedupe(m);
+  assert.ok(m.innerHTML.length > 0, 'screen produced markup instead of throwing');
+  assert.ok(m.innerHTML.includes('Picture Day'), 'shows the conflicting events');
+  assert.ok(m.innerHTML.includes('Olivia'), 'shows tagged people');
+});
+
+test('the duplicate screen renders for untagged events too', () => {
+  boot(GOOD);
+  const d = dayAhead(2);
+  S.kids = [];
+  S.events = [
+    { id:'a', title:'Open House', date:d, kind:'event', deleted:false },
+    { id:'b', title:'Open House Night', date:d, kind:'event', deleted:false }
+  ];
+  openDedupe();
+  const m = { innerHTML:'' };
+  renderDedupe(m);
+  assert.ok(m.innerHTML.length > 0, 'no crash with no people');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
