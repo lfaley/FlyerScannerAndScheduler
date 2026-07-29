@@ -1071,6 +1071,58 @@ test('the duplicate screen renders for untagged events too', () => {
   assert.ok(m.innerHTML.length > 0, 'no crash with no people');
 });
 
+console.log('\nKeep-both clears the banner');
+
+test('choosing keep both stops the pair being flagged again', () => {
+  boot(GOOD);
+  const d = dayAhead(3);
+  S.events = [
+    { id:'a', title:'Hell Week', date:d, kind:'event', deleted:false },
+    { id:'b', title:'Livi - Mini Jazz (Kynser) Hell Week', date:d, kind:'event', deleted:false }
+  ];
+  assert.strictEqual(duplicateGroups().length, 1, 'flagged first');
+  openDedupe();
+  setDedupeKeep(0, null);        // "keep both"
+  applyDedupe();
+  assert.strictEqual(S.events.filter(e=>!e.deleted).length, 2, 'nothing deleted');
+  assert.strictEqual(duplicateGroups().length, 0, 'banner clears');
+});
+
+console.log('\nOnly-new calendar export');
+
+test('only-new export skips events already added', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[0], deadline:[1] };
+  S.events = [
+    { id:'e1', title:'Already', date:dayAhead(2), kind:'event', exported:true, deleted:false },
+    { id:'e2', title:'Fresh', date:dayAhead(3), kind:'event', exported:false, deleted:false }
+  ];
+  const realSA = isStandalone; isStandalone = () => false;
+  const realOpen = window.open; window.open = () => ({});
+  globalThis.lastBlob = null;
+  addAllAtOnce(true);
+  const ics = globalThis.lastBlob;
+  assert.ok(ics.includes('SUMMARY:Fresh'), 'new event included');
+  assert.ok(!ics.includes('SUMMARY:Already'), 'already-added event skipped');
+  window.open = realOpen; isStandalone = realSA;
+});
+
+test('plain add-all still sends everything (unchanged)', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[0], deadline:[1] };
+  S.events = [
+    { id:'e1', title:'Already', date:dayAhead(2), kind:'event', exported:true, deleted:false },
+    { id:'e2', title:'Fresh', date:dayAhead(3), kind:'event', exported:false, deleted:false }
+  ];
+  const realSA = isStandalone; isStandalone = () => false;
+  const realOpen = window.open; window.open = () => ({});
+  globalThis.lastBlob = null;
+  addAllAtOnce();
+  const ics = globalThis.lastBlob;
+  assert.ok(ics.includes('SUMMARY:Fresh') && ics.includes('SUMMARY:Already'), 'both sent');
+  window.open = realOpen; isStandalone = realSA;
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

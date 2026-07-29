@@ -693,9 +693,9 @@ async function shareICSFile(ics, filename){
   document.body.appendChild(a); a.click(); a.remove();
 }
 
-function addAllAtOnce(){
-  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO());
-  if(!evts.length){ toast('No upcoming events'); return; }
+function addAllAtOnce(onlyNew){
+  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO() && (!onlyNew || !e.exported));
+  if(!evts.length){ toast(onlyNew ? 'Everything is already added' : 'No upcoming events'); return; }
   const veh = [];
   evts.forEach(e=>veh.push(...buildVEVENTs(e)));
   deliverICS(wrapICS(veh), 'flyersnap-events.ics',
@@ -1408,12 +1408,15 @@ function calendarOptions(){
   const openLabel = isStandalone()
     ? '📆 Download all ' + n + ' (.ics)'
     : '📆 Open all ' + n + ' now (tap "Add All")';
-  showSheet('Add to Calendar', n + ' upcoming event' + (n===1?'':'s'), [
-    {label: openLabel, fn:()=>addAllAtOnce()},
-    {label:'☑️ Choose which to add', fn:()=>openPickExport()},
-    {label:'1️⃣ One at a time (all)', fn:()=>startExportQueue(true)},
-    {label:'✉️ Email them to myself', fn:()=>emailAllToSelf()},
-  ]);
+  const fresh = S.events.filter(e=>!e.deleted && e.date>=todayISO() && !e.exported).length;
+  const opts = [];
+  if(fresh) opts.push({label:'✨ Only new (' + fresh + ' not yet added)', fn:()=>addAllAtOnce(true)});
+  opts.push({label: openLabel, fn:()=>addAllAtOnce()});
+  opts.push({label:'☑️ Choose which to add', fn:()=>openPickExport()});
+  opts.push({label:'1️⃣ One at a time (all)', fn:()=>startExportQueue(true)});
+  opts.push({label:'✉️ Email them to myself', fn:()=>emailAllToSelf()});
+  showSheet('Add to Calendar',
+    n + ' upcoming' + (fresh ? ' · ' + fresh + ' not yet added' : ' · all added'), opts);
 }
 
 function onEventSearch(v){
@@ -1495,9 +1498,19 @@ function setDedupeKeep(i, id){ dedupeKeep[i] = id; render(); }
 function applyDedupe(){
   const groups = duplicateGroups();
   let removed = 0;
+  if(!S.settings.notDuplicates) S.settings.notDuplicates = [];
   groups.forEach((g, i) => {
     const keep = dedupeKeep[i];
-    if(!keep) return;                                  // "keep both" -- skip the group
+    if(!keep){
+      // "Keep both" means you have reviewed this pair and they are different.
+      // Record it so the banner stops re-flagging the same events forever.
+      for(let x = 0; x < g.length; x++)
+        for(let y = x + 1; y < g.length; y++){
+          const k = pairKey(g[x], g[y]);
+          if(S.settings.notDuplicates.indexOf(k) < 0) S.settings.notDuplicates.push(k);
+        }
+      return;
+    }
     g.forEach(e => {
       if(e.id !== keep){ e.deleted = true; e.dirty = 1; removed++; }
     });
@@ -2681,7 +2694,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.5 · fix dedupe crash + calendar button</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.6 · only-new export + keep-both clears banner</div>`;
 }
 function manualPrune(){
   const n = pruneData();
