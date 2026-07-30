@@ -286,7 +286,7 @@ test('a v1 save migrates without losing anything', () => {
   v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
   v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
   boot(JSON.stringify(v1));
-  assert.strictEqual(S.schemaVersion, 3, 'stamped with the current version');
+  assert.strictEqual(S.schemaVersion, 4, 'stamped with the current version');
   assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
   assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
   assert.strictEqual(S.events.length, 1, 'real data untouched');
@@ -298,7 +298,7 @@ test('migration is not re-run on an already-current save', () => {
   save();
   const raw = localStorage.getItem('flyersnap');
   S = load();
-  assert.strictEqual(S.schemaVersion, 3);
+  assert.strictEqual(S.schemaVersion, 4);
   assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
 });
 
@@ -1196,6 +1196,75 @@ test('the flag appears after export', () => {
   addAllAtOnce();
   window.open = realOpen; isStandalone = realSA;
   assert.ok(evtCard(S.events[0], false).includes('In calendar'), 'flagged once added');
+});
+
+console.log('\nUnread / new events');
+
+test('existing events are not marked new when upgrading', () => {
+  const v3 = JSON.stringify({
+    schemaVersion: 3,
+    events: [{ id:'e1', title:'Old', date:'2026-12-01', kind:'event', deleted:false }],
+    kids: [], chores:[], completions:[], rewards:[], redemptions:[], lists:[], listItems:[],
+    settings:{ apiKey:'x' }
+  });
+  boot(v3);
+  assert.strictEqual(S.events[0].unread, false, 'no wall of new items on upgrade');
+  assert.strictEqual(unreadCount(), 0);
+});
+
+test('newly tracked events arrive unread', () => {
+  boot(GOOD);
+  S.kids = []; S.events = [];
+  pendingEvents = [{ title:'From email', date:dayAhead(3), selected:true, personIds:[] }];
+  pendingSource = 'Email - test';
+  saveReview();
+  const e = S.events.find(x=>x.title === 'From email');
+  assert.strictEqual(e.unread, true);
+  assert.strictEqual(unreadCount(), 1);
+});
+
+test('the New filter shows only unread events', () => {
+  boot(GOOD);
+  S.events = [
+    { id:'a', title:'Seen', date:dayAhead(2), kind:'event', unread:false, deleted:false },
+    { id:'b', title:'Fresh', date:dayAhead(3), kind:'event', unread:true, deleted:false }
+  ];
+  eventFilter = UNREAD_FILTER;
+  const list = upcomingEvents();
+  assert.strictEqual(list.length, 1);
+  assert.strictEqual(list[0].title, 'Fresh');
+  eventFilter = null;
+  assert.strictEqual(upcomingEvents().length, 2, 'All shows everything again');
+});
+
+test('opening an event marks it seen', () => {
+  boot(GOOD);
+  S.events = [{ id:'a', title:'Fresh', date:dayAhead(2), kind:'event', unread:true, deleted:false }];
+  assert.strictEqual(unreadCount(), 1);
+  markRead('a');
+  assert.strictEqual(unreadCount(), 0);
+  assert.strictEqual(S.events[0].unread, false);
+});
+
+test('mark all as seen clears the whole batch and the filter', () => {
+  boot(GOOD);
+  S.events = [
+    { id:'a', title:'One', date:dayAhead(2), kind:'event', unread:true, deleted:false },
+    { id:'b', title:'Two', date:dayAhead(3), kind:'event', unread:true, deleted:false }
+  ];
+  eventFilter = UNREAD_FILTER;
+  markAllRead();
+  assert.strictEqual(unreadCount(), 0);
+  assert.strictEqual(eventFilter, null, 'drops back to All so the list is not empty');
+});
+
+test('unread events show a NEW flag on the card', () => {
+  boot(GOOD);
+  S.kids = [];
+  const fresh = { id:'a', title:'Fresh', date:dayAhead(2), kind:'event', unread:true, deleted:false };
+  const seen  = { id:'b', title:'Seen',  date:dayAhead(2), kind:'event', unread:false, deleted:false };
+  assert.ok(evtCard(fresh, false).includes('NEW'));
+  assert.ok(!evtCard(seen, false).includes('NEW'));
 });
 
 console.log('\nSharing');

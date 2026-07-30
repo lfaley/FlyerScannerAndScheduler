@@ -57,6 +57,8 @@
   .btn:disabled{opacity:.5}
   .fab{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     width:auto;padding:14px 24px;border-radius:28px;box-shadow:0 3px 10px rgba(0,0,0,.2);z-index:9}
+  .newflag{display:inline-block;background:var(--amber);color:#fff;border-radius:6px;
+    padding:1px 6px;font-size:10px;font-weight:800;margin-right:6px;vertical-align:middle;letter-spacing:.4px}
   .calflag{display:inline-block;background:#E7F0EA;color:var(--green);border:1px solid #CBDDD2;
     border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;margin-top:4px;white-space:nowrap}
   .chip{display:inline-block;background:#fff;border:1px solid var(--line);color:var(--muted);
@@ -139,7 +141,7 @@ const SLOTS = ['breakfast','lunch','dinner'];
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: must be declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 let loadError = null;
 let storageWarned = false;
@@ -177,6 +179,12 @@ function migrate(s, fromVersion){
         e.personIds = e.kidId ? [e.kidId] : [];
       }
     });
+  }
+
+  if(from < 4){
+    // Events can now be flagged unread. Everything already in the app counts as
+    // seen, so nobody opens the app to a wall of "new" items.
+    (s.events || []).forEach(e => { if(e.unread === undefined) e.unread = false; });
   }
 
   s.schemaVersion = SCHEMA_VERSION;
@@ -405,6 +413,26 @@ function eventPeople(e){
   const ids = Array.isArray(e.personIds) ? e.personIds : (e.kidId ? [e.kidId] : []);
   return ids.map(personById).filter(Boolean);
 }
+const UNREAD_FILTER = '__unread';
+function matchesFilter(e){
+  if(!eventFilter) return true;
+  if(eventFilter === UNREAD_FILTER) return !!e.unread;
+  return eventHasPerson(e, eventFilter);
+}
+function unreadCount(){ return S.events.filter(e=>!e.deleted && e.unread).length; }
+function markRead(id){
+  const e = S.events.find(x=>x.id===id);
+  if(e && e.unread){ e.unread = false; save(); }
+}
+function markAllRead(){
+  let n = 0;
+  S.events.forEach(e => { if(!e.deleted && e.unread){ e.unread = false; n++; } });
+  if(n) save();
+  if(eventFilter === UNREAD_FILTER) eventFilter = null;
+  toast(n ? 'Marked ' + n + ' as seen' : 'Nothing new');
+  render();
+}
+
 function eventHasPerson(e, personId){
   if(Array.isArray(e.personIds)) return e.personIds.includes(personId);
   return e.kidId === personId;
@@ -922,7 +950,7 @@ let selectedEvents = new Set();
 let showPast = false;
 function upcomingEvents(){
   const t = todayISO();
-  return S.events.filter(e=>!e.deleted && e.date>=t && (!eventFilter || eventHasPerson(e, eventFilter)) && matchesSearch(e))
+  return S.events.filter(e=>!e.deleted && e.date>=t && matchesFilter(e) && matchesSearch(e))
     .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
 }
 let eventSearch = '';
@@ -938,7 +966,7 @@ function matchesSearch(e){
 
 function pastEvents(){
   const t = todayISO();
-  return S.events.filter(e=>!e.deleted && e.date<t && (!eventFilter || eventHasPerson(e, eventFilter)) && matchesSearch(e))
+  return S.events.filter(e=>!e.deleted && e.date<t && matchesFilter(e) && matchesSearch(e))
     .sort((a,b)=>b.date.localeCompare(a.date));
 }
 function backupNudge(){
@@ -957,6 +985,7 @@ function backupNudge(){
       <button class="btn alt sm" onclick="S.settings.nudgeSnooze=todayISO();save();render()">Later</button>
     </div></div>`;
 }
+function newFlag(e){ return e.unread ? `<span class="newflag">NEW</span>` : ''; }
 function calFlag(e){
   return e.exported
     ? `<span class="calflag">📆 In calendar</span>`
@@ -982,7 +1011,7 @@ function evtCard(e, isPast){
   return `<div class="card stripe ${e.kind} ${isPast?'dim':''}" onclick="eventActions('${e.id}')">
     <div class="row">
       <div class="grow">
-        <div class="title">${esc(e.title)}</div>
+        <div class="title">${newFlag(e)}${esc(e.title)}</div>
         <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
         ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}${calFlag(e)}
@@ -1009,6 +1038,8 @@ function renderEvents(m){
   if(people.length){
     html += `<div class="filterbar">
       <span class="chip ${eventFilter===null?'on':''}" onclick="eventFilter=null;render()">All</span>` +
+      (unreadCount() ? `<span class="chip ${eventFilter===UNREAD_FILTER?'on':''}" style="${eventFilter===UNREAD_FILTER?'':'border-color:var(--amber);color:var(--amber)'}"
+        onclick="eventFilter=UNREAD_FILTER;render()">🔔 New ${unreadCount()}</span>` : '') +
       people.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
         onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
   }
@@ -1023,6 +1054,11 @@ function renderEvents(m){
   }
 
   html += emailBanner();
+  if(eventFilter === UNREAD_FILTER && unreadCount()){
+    html += `<div style="text-align:right;margin-bottom:6px">
+      <button class="linkbtn" style="padding:2px 8px" onclick="markAllRead()">✓ Mark all as seen</button></div>`;
+  }
+
   const dGroups = duplicateGroups();
   if(dGroups.length && !eventSearch){
     const first = dGroups[0];
@@ -1639,6 +1675,7 @@ function bulkTag(personId){
 }
 
 function eventActions(id){
+  markRead(id);
   const e = S.events.find(x=>x.id===id);
   if(!e) return;
   showSheet(e.title, friendly(e.date) + (e.time?' · '+fmt12(e.time):''), [
@@ -1933,7 +1970,7 @@ function saveReview(){
   if(!chosen.length){ alert('Tap the events you want to track, then save.'); return; }
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
-      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, exported:false, deleted:false });
+      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, exported:false, unread:true, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
   // the screen leaves them in the queue for next time.
@@ -2735,7 +2772,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.8 · in-calendar flag</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.9 · new event notifications</div>`;
 }
 function manualPrune(){
   const n = pruneData();
