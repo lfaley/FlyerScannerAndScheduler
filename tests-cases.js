@@ -1123,6 +1123,50 @@ test('plain add-all still sends everything (unchanged)', () => {
   window.open = realOpen; isStandalone = realSA;
 });
 
+console.log('\nExport queue is its own screen');
+
+test('starting a queue opens the queue screen, not the events list', () => {
+  boot(GOOD);
+  S.events = [
+    { id:'e1', title:'A', date:dayAhead(2), kind:'event', deleted:false },
+    { id:'e2', title:'B', date:dayAhead(3), kind:'event', deleted:false }
+  ];
+  const realSub = sub; let navigatedTo = null;
+  sub = (name) => { navigatedTo = name; };
+  startExportQueue(true);
+  sub = realSub;
+  assert.deepStrictEqual(S.settings.exportQueue, ['e1','e2'], 'queued');
+  assert.strictEqual(navigatedTo, 'exportQueue', 'navigated to its own screen');
+});
+
+test('the events list no longer carries the queue card', () => {
+  boot(GOOD);
+  S.events = [{ id:'e1', title:'A', date:dayAhead(2), kind:'event', deleted:false }];
+  S.settings.exportQueue = ['e1'];
+  const m = { innerHTML:'' };
+  renderEvents(m);
+  assert.ok(!m.innerHTML.includes('Adding events to Calendar'),
+    'queue card is not hanging around on the events screen');
+});
+
+test('the queue screen renders and can be resumed', () => {
+  boot(GOOD);
+  S.events = [{ id:'e1', title:'Recital', date:dayAhead(2), kind:'event', deleted:false }];
+  S.settings.exportQueue = ['e1'];
+  const m = { innerHTML:'' };
+  renderExportQueue(m);
+  assert.ok(m.innerHTML.includes('Adding events to Calendar'), 'screen shows the queue');
+  assert.ok(m.innerHTML.includes('Recital'), 'shows the next event');
+});
+
+test('an empty queue screen says done instead of throwing', () => {
+  boot(GOOD);
+  S.settings.exportQueue = [];
+  const m = { innerHTML:'' };
+  renderExportQueue(m);
+  assert.ok(m.innerHTML.includes('All done'));
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

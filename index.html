@@ -726,7 +726,7 @@ function startExportQueue(force){
   const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO() && (force || !e.exported));
   if(!evts.length){ toast('No upcoming events to add'); return; }
   S.settings.exportQueue = evts.map(e=>e.id);
-  save(); render();
+  save(); sub('exportQueue');
 }
 function exportNextInQueue(){
   const q = S.settings.exportQueue || [];
@@ -748,11 +748,44 @@ function skipNextInQueue(){
   S.settings.exportQueue = q.slice(1);
   save(); render();
 }
+function openExportQueue(){ sub('exportQueue'); }
+
 function cancelExportQueue(){
   if(!confirm('Cancel adding the rest to Calendar?')) return;
   S.settings.exportQueue = [];
   save(); render();
 }
+function renderExportQueue(m){
+  setHeader('Adding to Calendar', true);
+  const q = S.settings.exportQueue || [];
+  if(!q.length){
+    m.innerHTML = `<div class="empty">
+      <div class="et">All done</div>
+      <div class="eb">Nothing left in the queue.</div></div>
+      <button class="btn" onclick="view={tab:'events',sub:null,data:null};render()">Back to events</button>`;
+    return;
+  }
+  const next = S.events.find(x=>x.id===q[0] && !x.deleted);
+  if(!next){ S.settings.exportQueue = q.slice(1); save(); return renderExportQueue(m); }
+  const alreadyDone = S.events.filter(e=>!e.deleted && e.exported && e.date>=todayISO()).length;
+  const total = q.length + alreadyDone;
+  m.innerHTML = `<div class="card" style="background:var(--green);color:#fff">
+    <div style="font-weight:800;margin-bottom:4px">Adding events to Calendar</div>
+    <div style="font-size:13px;opacity:0.92;margin-bottom:4px">${alreadyDone+1} of ${total}: ${esc(next.title)}</div>
+    <div style="font-size:12px;opacity:0.85;line-height:1.45;margin-bottom:10px">
+      Tap <b>Add next</b> → Calendar opens → tap <b>Add</b> → come back and repeat.
+    </div>
+    <button class="btn" style="background:#fff;color:var(--green);margin-bottom:2px" onclick="exportNextInQueue()">Add next event →</button>
+    <div style="display:flex;gap:8px;margin-top:2px">
+      <button class="linkbtn" style="color:#fff;flex:1" onclick="skipNextInQueue()">Skip this one</button>
+      <button class="linkbtn" style="color:#fff;flex:1" onclick="cancelExportQueue()">Cancel</button>
+    </div>
+  </div>
+  <div style="text-align:center;margin-top:10px">
+    <button class="linkbtn" onclick="view={tab:'events',sub:null,data:null};render()">← Back to events (keeps your place)</button>
+  </div>`;
+}
+
 function exportQueueBanner(){
   const q = S.settings.exportQueue || [];
   if(!q.length) return '';
@@ -812,7 +845,7 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport};
+    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
@@ -993,7 +1026,6 @@ function renderEvents(m){
     </div>`;
   }
   html += backupNudge();
-  html += exportQueueBanner();
   if(!evts.length){
     if(eventSearch){
       html += `<div class="empty"><div class="et">No upcoming matches</div>
@@ -1409,7 +1441,9 @@ function calendarOptions(){
     ? '📆 Download all ' + n + ' (.ics)'
     : '📆 Open all ' + n + ' now (tap "Add All")';
   const fresh = S.events.filter(e=>!e.deleted && e.date>=todayISO() && !e.exported).length;
+  const queued = (S.settings.exportQueue || []).length;
   const opts = [];
+  if(queued) opts.push({label:'▶️ Resume adding (' + queued + ' left)', fn:()=>openExportQueue()});
   if(fresh) opts.push({label:'✨ Only new (' + fresh + ' not yet added)', fn:()=>addAllAtOnce(true)});
   opts.push({label: openLabel, fn:()=>addAllAtOnce()});
   opts.push({label:'☑️ Choose which to add', fn:()=>openPickExport()});
@@ -2694,7 +2728,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.6 · only-new export + keep-both clears banner</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.7 · export queue on its own screen</div>`;
 }
 function manualPrune(){
   const n = pruneData();
