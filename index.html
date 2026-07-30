@@ -57,6 +57,8 @@
   .btn:disabled{opacity:.5}
   .fab{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     width:auto;padding:14px 24px;border-radius:28px;box-shadow:0 3px 10px rgba(0,0,0,.2);z-index:9}
+  .calflag{display:inline-block;background:#E7F0EA;color:var(--green);border:1px solid #CBDDD2;
+    border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;margin-top:4px;white-space:nowrap}
   .chip{display:inline-block;background:#fff;border:1px solid var(--line);color:var(--muted);
     border-radius:14px;padding:8px 14px;font-size:12px;font-weight:600;margin:0 6px 6px 0;
     flex-shrink:0;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:rgba(0,0,0,.1)}
@@ -955,6 +957,11 @@ function backupNudge(){
       <button class="btn alt sm" onclick="S.settings.nudgeSnooze=todayISO();save();render()">Later</button>
     </div></div>`;
 }
+function calFlag(e){
+  return e.exported
+    ? `<span class="calflag">📆 In calendar</span>`
+    : '';
+}
 function evtCard(e, isPast){
   const days = daysUntil(e.date);
   const urgent = !isPast && e.kind==='deadline' && days<=3;
@@ -966,19 +973,19 @@ function evtCard(e, isPast){
       <div class="row">
         <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px;flex-shrink:0">${on?'✓':''}</div>
         <div class="grow">
-          <div class="title">${esc(e.title)} ${e.exported?'📆':''}</div>
+          <div class="title">${esc(e.title)}</div>
           <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
-          ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}
+          ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}${calFlag(e)}
         </div>
       </div></div>`;
   }
   return `<div class="card stripe ${e.kind} ${isPast?'dim':''}" onclick="eventActions('${e.id}')">
     <div class="row">
       <div class="grow">
-        <div class="title">${esc(e.title)} ${e.exported?'📆':''}</div>
+        <div class="title">${esc(e.title)}</div>
         <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
         ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
-        ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}
+        ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}${calFlag(e)}
       </div>
       <span class="badge ${urgent?'urgent':''}">${badge}</span>
     </div></div>`;
@@ -2728,7 +2735,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.7 · export queue on its own screen</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.8 · in-calendar flag</div>`;
 }
 function manualPrune(){
   const n = pruneData();

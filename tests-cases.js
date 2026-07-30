@@ -1167,6 +1167,37 @@ test('an empty queue screen says done instead of throwing', () => {
   assert.ok(m.innerHTML.includes('All done'));
 });
 
+console.log('\nIn-calendar flag');
+
+test('exported events show an In calendar flag, others do not', () => {
+  boot(GOOD);
+  S.kids = [];
+  const added = { id:'a', title:'Recital', date:dayAhead(2), kind:'event', exported:true, deleted:false };
+  const notAdded = { id:'b', title:'Tryouts', date:dayAhead(3), kind:'event', exported:false, deleted:false };
+  assert.ok(evtCard(added, false).includes('In calendar'), 'flag shown when exported');
+  assert.ok(!evtCard(notAdded, false).includes('In calendar'), 'no flag when not exported');
+});
+
+test('the flag also shows in select mode', () => {
+  boot(GOOD);
+  S.kids = [];
+  selectMode = true;
+  const added = { id:'a', title:'Recital', date:dayAhead(2), kind:'event', exported:true, deleted:false };
+  assert.ok(evtCard(added, false).includes('In calendar'));
+  selectMode = false;
+});
+
+test('the flag appears after export', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[0], deadline:[1] };
+  S.events = [{ id:'e1', title:'Fresh', date:dayAhead(2), kind:'event', deleted:false }];
+  const realSA = isStandalone; isStandalone = () => false;
+  const realOpen = window.open; window.open = () => ({});
+  addAllAtOnce();
+  window.open = realOpen; isStandalone = realSA;
+  assert.ok(evtCard(S.events[0], false).includes('In calendar'), 'flagged once added');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
