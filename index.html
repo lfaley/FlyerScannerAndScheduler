@@ -135,7 +135,7 @@
 const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA'];
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const SLOTS = ['breakfast','lunch','dinner'];
+const SLOTS = ['breakfast','lunch','snack','dinner','dessert'];
 
 // Bump when the saved shape changes, and add a migration step below.
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
@@ -2399,9 +2399,9 @@ function plannedMeals(){
   if(!env) return [];
   const today = todayISO();
   return env.meals
-    .filter(m => m && m.date >= today && ['breakfast','lunch','dinner'].includes(m.slot))
+    .filter(m => m && m.date >= today && SLOTS.includes(m.slot))
     .sort((a,b) => a.date === b.date
-      ? ['breakfast','lunch','dinner'].indexOf(a.slot) - ['breakfast','lunch','dinner'].indexOf(b.slot)
+      ? SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot)
       : a.date.localeCompare(b.date));
 }
 
@@ -2521,7 +2521,7 @@ function renderMeals(m){
     return;
   }
 
-  const SLOT_LABEL = { breakfast:'B', lunch:'L', dinner:'D' };
+  const SLOT_LABEL = { breakfast:'B', lunch:'L', snack:'Sn', dinner:'D', dessert:'Ds' };
   html += dates.map(d => {
     const idx = daysUntil(d);
     const label = idx === 0 ? 'Today' : idx === 1 ? 'Tomorrow' : friendly(d);
@@ -2582,12 +2582,12 @@ function mealPlanDiagnostic(){
           lines.push('');
           lines.push('>> Schema is not mealplan-exchange.v1, so FlyerSnap ignores it. The recipe app is writing the wrong format.');
         } else {
-          const goodSlots = upcoming.filter(m => ['breakfast','lunch','dinner'].includes(m.slot));
+          const goodSlots = upcoming.filter(m => SLOTS.includes(m.slot));
           lines.push('');
           if(goodSlots.length){
             lines.push('>> ' + goodSlots.length + ' meal(s) SHOULD be showing. Close and reopen FlyerSnap.');
           } else {
-            lines.push('>> Upcoming meals exist but none are breakfast/lunch/dinner. FlyerSnap only shows those three slots.');
+            lines.push('>> Upcoming meals exist but none are breakfast/lunch/dinner. FlyerSnap shows: ' + SLOTS.join(', ') + '.');
           }
         }
       }
@@ -2772,7 +2772,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v4.9 · new event notifications</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.0 · snacks and desserts on the meal plan</div>`;
 }
 function manualPrune(){
   const n = pruneData();

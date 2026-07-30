@@ -164,18 +164,38 @@ test('unreadable plan data is ignored, not fatal', () => {
   assert.strictEqual(readMealPlan(), null);
 });
 
-test('past meals and non-standard slots are filtered out', () => {
+test('past meals are filtered out but all five slots are kept', () => {
   const future = dayAhead(1);
   localStorage.setItem('mealplan-out', JSON.stringify({
     schema:'mealplan-exchange.v1', meals:[
       { date:'2020-01-01', slot:'dinner', recipeId:'rb_a', title:'Old' },
       { date:future, slot:'dessert', recipeId:'rb_b', title:'Cake' },
-      { date:future, slot:'lunch', recipeId:'rb_c', title:'Soup' }
+      { date:future, slot:'snack',   recipeId:'rb_d', title:'Apple' },
+      { date:future, slot:'lunch',   recipeId:'rb_c', title:'Soup' },
+      { date:future, slot:'brunch',  recipeId:'rb_e', title:'Unknown slot' }
     ]
   }));
   const meals = plannedMeals();
-  assert.strictEqual(meals.length, 1);
-  assert.strictEqual(meals[0].title, 'Soup');
+  assert.strictEqual(meals.length, 3, 'dessert and snack now included, unknown slot still dropped');
+  assert.ok(meals.some(m=>m.title==='Cake'), 'dessert shows');
+  assert.ok(meals.some(m=>m.title==='Apple'), 'snack shows');
+  assert.ok(!meals.some(m=>m.title==='Old'), 'past dropped');
+  assert.ok(!meals.some(m=>m.title==='Unknown slot'), 'unrecognised slot dropped');
+});
+
+test('meals order through the day: breakfast, lunch, snack, dinner, dessert', () => {
+  const d = dayAhead(1);
+  localStorage.setItem('mealplan-out', JSON.stringify({
+    schema:'mealplan-exchange.v1', meals:[
+      { date:d, slot:'dessert',   recipeId:'rb_1', title:'Pie' },
+      { date:d, slot:'breakfast', recipeId:'rb_2', title:'Eggs' },
+      { date:d, slot:'dinner',    recipeId:'rb_3', title:'Roast' },
+      { date:d, slot:'snack',     recipeId:'rb_4', title:'Nuts' },
+      { date:d, slot:'lunch',     recipeId:'rb_5', title:'Soup' }
+    ]
+  }));
+  assert.deepStrictEqual(plannedMeals().map(m=>m.title),
+    ['Eggs','Soup','Nuts','Roast','Pie']);
 });
 
 test('meals sort by date then breakfast/lunch/dinner', () => {
