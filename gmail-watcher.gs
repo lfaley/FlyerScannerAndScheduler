@@ -77,7 +77,7 @@ function callClaude(contentBlocks) {
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
     payload: JSON.stringify({
       model: MODEL,
-      max_tokens: 3000,
+      max_tokens: 8000,
       messages: [{ role: 'user', content: contentBlocks }]
     }),
     muteHttpExceptions: true
@@ -105,6 +105,7 @@ function parseEvents(text) {
       title: String(e.title),
       date: e.date,
       time: (e.time && /^\d{2}:\d{2}$/.test(e.time)) ? e.time : null,
+      endTime: (e.endTime && /^\d{2}:\d{2}$/.test(e.endTime)) ? e.endTime : null,
       location: e.location || null,
       kind: e.kind === 'deadline' ? 'deadline' : 'event',
       notes: e.notes || null
@@ -179,21 +180,31 @@ function checkMail() {
         var body = msg.getPlainBody() || '';
         var html = '';
         try { html = msg.getBody() || ''; } catch (err) { html = ''; }
+        var bodySource = 'plain';
         if (html && /<table/i.test(html)) {
           var trimmed = html
             .replace(/<style[\s\S]*?<\/style>/gi, ' ')
             .replace(/<script[\s\S]*?<\/script>/gi, ' ')
             .replace(/<head[\s\S]*?<\/head>/gi, ' ')
             .replace(/<!--[\s\S]*?-->/g, ' ')
-            .replace(/\sstyle="[^"]*"/gi, '')
-            .replace(/\sclass="[^"]*"/gi, '')
-            .replace(/\s(width|height|align|valign|bgcolor|cellpadding|cellspacing|border)="[^"]*"/gi, '')
-            .replace(/<\/?(span|font|b|i|u|em|strong|div)[^>]*>/gi, ' ')
+            .replace(/<(img|br|hr|input|meta|link)[^>]*>/gi, ' ')
+            .replace(/<a[^>]*>/gi, ' ').replace(/<\/a>/gi, ' ')
+            .replace(/<\/?(span|font|b|i|u|em|strong|div|p|center|o:p)[^>]*>/gi, ' ')
+            .replace(/\s(style|class|id|dir|lang|width|height|align|valign|bgcolor|cellpadding|cellspacing|border|colspan|rowspan)="[^"]*"/gi,
+                     function (m) { return /colspan|rowspan/i.test(m) ? m : ''; })
             .replace(/&nbsp;/gi, ' ')
+            .replace(/>\s+</g, '><')
             .replace(/\s+/g, ' ');
-          if (trimmed.length < 45000) body = trimmed;
+          // Keep only the region containing tables if the message is huge.
+          if (trimmed.length > 90000) {
+            var firstT = trimmed.search(/<table/i);
+            if (firstT > 0) trimmed = trimmed.slice(Math.max(0, firstT - 500));
+          }
+          if (trimmed.length < 90000) { body = trimmed; bodySource = 'html-table'; }
         }
-        if (body.length > 24000) body = body.slice(0, 24000);
+        if (body.length > 60000) { body = body.slice(0, 60000); bodySource += '-truncated'; }
+        Logger.log('  body: ' + bodySource + ', ' + body.length + ' chars' +
+          (/<table/i.test(body) ? ' (table structure preserved)' : ' (NO TABLE MARKUP -- grid will not extract well)'));
         var header = 'From: ' + msg.getFrom() + '\nSubject: ' + msg.getSubject() +
           '\nSent: ' + Utilities.formatDate(msg.getDate(), Session.getScriptTimeZone(), 'yyyy-MM-dd') +
           '\n\n' + body;
@@ -203,7 +214,12 @@ function checkMail() {
 
         countCall();
         processed++;
-        var events = parseEvents(callClaude(blocks));
+        var raw = callClaude(blocks);
+        var events = parseEvents(raw);
+        Logger.log('  Claude returned ' + events.length + ' event(s)' +
+          (events.length === 0 && raw && raw.length > 50
+            ? ' -- response did not parse; first 200 chars: ' + raw.slice(0, 200)
+            : ''));
 
         var fromRaw = msg.getFrom() || '';
         var fromMatch = fromRaw.match(/[\w.+-]+@[\w.-]+\.[\w.-]+/);
