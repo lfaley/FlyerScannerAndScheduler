@@ -1181,8 +1181,19 @@ async function fetchEmailQueue(){
   if(data.error) throw new Error(data.error === 'unauthorized'
     ? 'Token rejected — check the secret matches the script.' : data.error);
   const seen = new Set(S.settings.seenMsgs || []);
-  const fresh = (data.items || []).filter(i => i.msgId && !seen.has(i.msgId) && i.date >= todayISO());
-  return { fresh, lastRun: data.lastRun };
+  const items = data.items || [];
+  const today = todayISO();
+  let noMsgId = 0, alreadySeen = 0, inPast = 0;
+  const fresh = items.filter(i => {
+    if(!i.msgId){ noMsgId++; return false; }
+    if(seen.has(i.msgId)){ alreadySeen++; return false; }
+    if(!(i.date >= today)){ inPast++; return false; }
+    return true;
+  });
+  const report = 'Queue: ' + items.length + ' item(s) from the watcher. ' +
+    'Offered: ' + fresh.length + '. Skipped -- already imported: ' + alreadySeen +
+    ', dated before today (' + today + '): ' + inPast + ', missing message id: ' + noMsgId + '.';
+  return { fresh, lastRun: data.lastRun, report };
 }
 
 // Quietly look for new email-sourced events on open (at most every 20 minutes)
@@ -2810,7 +2821,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.2 · bulk delete + schedule tables</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.5 · queue diagnostic</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -2849,13 +2860,20 @@ function saveWatcher(){
 async function testWatcher(){
   sub('busy', {msg:'Testing the watcher…', hint:''});
   try{
-    const { fresh, lastRun } = await fetchEmailQueue();
+    const { fresh, lastRun, report } = await fetchEmailQueue();
+    if(report) console.log(report);
     S.settings.lastEmailCheck = new Date().toISOString();
     // Surface anything waiting straight away — connecting and then seeing
     // nothing happen is indistinguishable from it not working.
     S.settings.pendingEmailCount = fresh.length;
     save();
     const when = lastRun ? new Date(lastRun).toLocaleString() : 'never (trigger may not be set)';
+    if(!fresh.length && report){
+      nav('settings');
+      alert('Connected, but nothing was offered.\n\n' + report +
+        '\n\nIf the queue is 0, run checkMail in the Apps Script editor. If items were skipped as already imported, use "Re-import past emails".');
+      return;
+    }
     if(fresh.length){
       nav('events');
       alert('Connected!\n\nLast script run: ' + when +
