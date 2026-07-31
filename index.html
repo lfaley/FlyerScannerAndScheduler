@@ -1221,6 +1221,20 @@ async function openSenderManager(){
     sub('senders');
   }catch(err){ alert('Could not load senders:\n\n'+err.message); nav('settings'); }
 }
+// FlyerSnap remembers which email messages it has already imported, separately
+// from the Apps Script's own history. Clearing the script's memory alone is not
+// enough to re-read a message -- this clears ours too.
+function forgetImportedEmails(){
+  const n = (S.settings.seenMsgs || []).length;
+  if(!n){ toast('No imported emails to forget'); return; }
+  if(!confirm('Forget ' + n + ' already-imported email' + (n===1?'':'s') + '?\n\nThe next check will offer their events again. Run resetWatcher then checkMail in the Apps Script editor first, so the script re-queues them.')) return;
+  S.settings.seenMsgs = [];
+  S.settings.lastEmailCheck = null;
+  save();
+  toast('Forgotten — now tap Check my email now');
+  render();
+}
+
 function renderSenders(m){
   setHeader('Watched Senders', true);
   const list = watchedSenders || [];
@@ -2750,7 +2764,9 @@ function renderSettings(m){
       <button class="btn" onclick="saveWatcher()">Save</button>
       ${watcherConfigured() ? `<button class="btn alt" style="width:auto" onclick="testWatcher()">Test</button>` : ''}
     </div>
-    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">✉️ Manage watched senders</button>` : ''}
+    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">✉️ Manage watched senders</button>
+    <button class="btn alt" style="margin-top:8px" onclick="forgetImportedEmails()">🔄 Re-import past emails (${(S.settings.seenMsgs||[]).length})</button>
+    <div class="help" style="margin-top:4px">Use this if an email was read badly the first time. Clears FlyerSnap's memory of which emails it has already imported, so their events can be offered again.</div>` : ''}
 
     <div class="sect">Backup</div>
     <div class="help">Everything lives in this phone's browser storage — there is no server holding a copy.

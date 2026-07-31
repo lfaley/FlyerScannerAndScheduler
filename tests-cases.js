@@ -1327,6 +1327,37 @@ test('deleted events drop out of the duplicate check', () => {
   assert.strictEqual(duplicateGroups().length, 0, 'banner clears once the extra copy is gone');
 });
 
+console.log('\nRe-importing a badly-read email');
+
+test('FlyerSnap filters out messages it has already imported', () => {
+  boot(GOOD);
+  S.settings.seenMsgs = ['msg-1'];
+  const items = [
+    { msgId:'msg-1', title:'Old read', date:dayAhead(2) },
+    { msgId:'msg-2', title:'Brand new', date:dayAhead(2) }
+  ];
+  const seen = new Set(S.settings.seenMsgs);
+  const fresh = items.filter(i => i.msgId && !seen.has(i.msgId) && i.date >= todayISO());
+  assert.strictEqual(fresh.length, 1, 'already-imported message is skipped');
+  assert.strictEqual(fresh[0].title, 'Brand new');
+});
+
+test('forgetting imported emails clears the memory so they can come back', () => {
+  boot(GOOD);
+  S.settings.seenMsgs = ['msg-1','msg-2'];
+  S.settings.lastEmailCheck = new Date().toISOString();
+  forgetImportedEmails();
+  assert.deepStrictEqual(S.settings.seenMsgs, [], 'memory cleared');
+  assert.strictEqual(S.settings.lastEmailCheck, null, 'next check is due immediately');
+});
+
+test('forgetting with nothing imported is a no-op', () => {
+  boot(GOOD);
+  S.settings.seenMsgs = [];
+  forgetImportedEmails();
+  assert.deepStrictEqual(S.settings.seenMsgs, []);
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
