@@ -94,6 +94,136 @@ function callClaude(contentBlocks) {
   return text.replace(/```json|```/g, '').trim();
 }
 
+
+// ---------------------------------------------------------------------------
+// Tables: resolve merged cells in code, then emit flat text.
+//
+// Research on table serialisation for LLMs (arXiv 2305.16344) measured average
+// extraction accuracy of PLAIN 0.699 / CSV 0.691 / HTML 0.509 / XML 0.456 --
+// tag-heavy formats lose because the markup inflates tokens and fragments the
+// table. Markdown scores better than HTML too, but Markdown cannot express
+// colspan/rowspan, and schedule grids depend on merged cells.
+//
+// So we expand rowspan/colspan deterministically here and emit one line per
+// cell in the winning PLAIN form:  "<column header> | <row label> | <cell>"
+// The model then never has to infer which day or time a cell belongs to.
+// ---------------------------------------------------------------------------
+function stripTags(s) {
+  return String(s || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;|&rsquo;|&apos;/gi, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function attrNum(tag, name) {
+  var m = new RegExp(name + '\\s*=\\s*["\']?(\\d+)', 'i').exec(tag);
+  return m ? Math.max(1, Math.min(30, parseInt(m[1], 10))) : 1;
+}
+
+// Turn one <table> into a grid with merges expanded into real cells.
+function tableToGrid(tableHtml) {
+  var rows = tableHtml.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  var grid = [];
+  var pending = {};   // column -> { left: rowsRemaining, text: value }
+
+  for (var r = 0; r < rows.length; r++) {
+    var cellTags = rows[r].match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || [];
+    var row = [];
+    var c = 0;
+    var ci = 0;
+
+    while (ci < cellTags.length || hasPending(pending, c)) {
+      // A rowspan from an earlier row occupies this column.
+      if (pending[c] && pending[c].left > 0) {
+        row[c] = pending[c].text;
+        pending[c].left--;
+        c++;
+        continue;
+      }
+      if (ci >= cellTags.length) break;
+
+      var tag = cellTags[ci];
+      var open = (tag.match(/<t[dh][^>]*>/i) || [''])[0];
+      var text = stripTags(tag.replace(/<t[dh][^>]*>/i, '').replace(/<\/t[dh]>/i, ''));
+      var cs = attrNum(open, 'colspan');
+      var rs = attrNum(open, 'rowspan');
+
+      for (var k = 0; k < cs; k++) {
+        row[c] = text;
+        if (rs > 1) pending[c] = { left: rs - 1, text: text };
+        c++;
+      }
+      ci++;
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+function hasPending(pending, c) {
+  return !!(pending[c] && pending[c].left > 0);
+}
+
+// Flatten every table in the html into PLAIN "column | row | cell" lines.
+function tablesToPlainText(html) {
+  var tables = html.match(/<table[\s\S]*?<\/table>/gi) || [];
+  var out = [];
+
+  for (var t = 0; t < tables.length; t++) {
+    var grid = tableToGrid(tables[t]);
+    if (grid.length < 2) continue;
+
+    // Leading rows whose first cell is blank are header rows (dates, then day
+    // names). Combine them so a column reads "8/3 Monday".
+    var headerRows = 0;
+    while (headerRows < 2 && headerRows < grid.length &&
+           !String(grid[headerRows][0] || '').trim()) headerRows++;
+    if (headerRows === 0) headerRows = 1;
+
+    var width = 0;
+    for (var g = 0; g < grid.length; g++) width = Math.max(width, grid[g].length);
+
+    var headers = [];
+    for (var c = 0; c < width; c++) {
+      var parts = [];
+      for (var h = 0; h < headerRows; h++) {
+        var v = String((grid[h] || [])[c] || '').trim();
+        if (v && parts.indexOf(v) < 0) parts.push(v);
+      }
+      headers[c] = parts.join(' ');
+    }
+
+    out.push('TABLE ' + (t + 1) + ' -- one line per cell, already matched to its column and row:');
+    for (var r = headerRows; r < grid.length; r++) {
+      var label = String((grid[r] || [])[0] || '').trim();
+      // A row where every column holds the same value is a full-width band
+      // (Lunch, Dinner). Emit once, not once per day.
+      var vals = [];
+      for (var cc = 1; cc < width; cc++) vals.push(String((grid[r] || [])[cc] || '').trim());
+      var nonEmpty = vals.filter(function (v) { return v; });
+      var allSame = nonEmpty.length > 1 && nonEmpty.every(function (v) { return v === nonEmpty[0]; });
+      if (allSame) {
+        out.push('  [' + label + '] all columns: ' + nonEmpty[0]);
+        continue;
+      }
+      for (var c2 = 1; c2 < width; c2++) {
+        var cell = String((grid[r] || [])[c2] || '').trim();
+        if (!cell || cell === label) continue;
+        out.push('  ' + (headers[c2] || ('col' + c2)) + ' | ' + label + ' | ' + cell);
+      }
+    }
+    out.push('');
+  }
+  return out.join('\n');
+}
+
 function parseEvents(text) {
   var arr;
   try { arr = JSON.parse(text); } catch (e) { return []; }
@@ -182,6 +312,17 @@ function checkMail() {
         try { html = msg.getBody() || ''; } catch (err) { html = ''; }
         var bodySource = 'plain';
         if (html && /<table/i.test(html)) {
+          var flat = '';
+          try { flat = tablesToPlainText(html); } catch (errT) { flat = ''; }
+          if (flat && flat.length > 40) {
+            // Prose from the plain body + every table cell already resolved to
+            // its own day and time. This is the PLAIN format the benchmarks
+            // favour, with merges handled here rather than by the model.
+            body = body + '\n\n--- SCHEDULE TABLES (expanded) ---\n' + flat;
+            bodySource = 'plain+flattened-tables';
+          }
+        }
+        if (false) {
           var trimmed = html
             .replace(/<style[\s\S]*?<\/style>/gi, ' ')
             .replace(/<script[\s\S]*?<\/script>/gi, ' ')

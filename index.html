@@ -992,6 +992,13 @@ function backupNudge(){
     </div></div>`;
 }
 function newFlag(e){ return e.unread ? `<span class="newflag">NEW</span>` : ''; }
+function fromLine(e){
+  if(!e.from && !e.source) return '';
+  const bits = [];
+  if(e.from) bits.push(esc(e.from));
+  if(e.source) bits.push(esc(e.source));
+  return `<div class="meta" style="font-size:11px;opacity:.75;margin-top:2px">✉️ ${bits.join(' · ')}</div>`;
+}
 function calFlag(e){
   return e.exported
     ? `<span class="calflag">📆 In calendar</span>`
@@ -1021,6 +1028,7 @@ function evtCard(e, isPast){
         <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
         ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}${calFlag(e)}
+        ${fromLine(e)}
       </div>
       <span class="badge ${urgent?'urgent':''}">${badge}</span>
     </div></div>`;
@@ -1362,7 +1370,7 @@ function openEmailReview(fresh){
     const ppl = personsForSender(i.from);
     return {
       title:i.title, date:i.date, time:i.time, endTime:i.endTime||null, location:i.location,
-      kind:i.kind, notes:i.notes, source:i.source,
+      kind:i.kind, notes:i.notes, source:i.source, from:i.from||null,
       personIds: ppl.slice(), kidId: ppl[0] || null
     };
   }));
@@ -1984,6 +1992,7 @@ function renderReview(m){
           ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         </div>
       </div>
+      ${e.from ? `<div class="meta" style="font-size:11px;opacity:.75">✉️ ${esc(e.from)}</div>` : ''}
       ${e.selected && allPeople().length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #EEF2EF">
         <span class="label" style="margin-right:6px">Who:</span>` +
         allPeople().map(k=>`<span class="chip" style="${(e.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:#fff`:''}"
@@ -2017,7 +2026,7 @@ function saveReview(){
   if(!chosen.length){ alert('Tap the events you want to track, then save.'); return; }
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
-      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, exported:false, unread:true, deleted:false });
+      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, exported:false, unread:true, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
   // the screen leaves them in the queue for next time.
@@ -2071,6 +2080,8 @@ function renderEventEdit(m){
         onclick="toggleEventPerson('${k.id}')">${esc(k.name)}</span>`).join('') : ''}
     <div class="label">Location</div>
     <input type="text" id="efLoc" value="${esc(f.location)}">
+    ${(eventForm.ref && (S.events.find(x=>x.id===eventForm.ref)||{}).from) ? `<div class="label">Came from</div>
+      <div class="help" style="margin-top:0">${esc((S.events.find(x=>x.id===eventForm.ref)||{}).from)}</div>` : ''}
     <div class="label">Notes</div>
     <textarea id="efNotes" rows="5" style="width:100%;min-height:110px;font-family:inherit;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;box-sizing:border-box;resize:vertical">${esc(f.notes)}</textarea>
     <div style="height:14px"></div>
@@ -2821,7 +2832,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.5 · queue diagnostic</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.6 · flattened tables + sender on events</div>`;
 }
 function manualPrune(){
   const n = pruneData();

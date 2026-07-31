@@ -1358,6 +1358,36 @@ test('forgetting with nothing imported is a no-op', () => {
   assert.deepStrictEqual(S.settings.seenMsgs, []);
 });
 
+console.log('\nSender shown on events');
+
+test('the sender address is kept when tracking an emailed event', () => {
+  boot(GOOD);
+  S.kids = []; S.events = [];
+  pendingEvents = [{ title:'Hell Week', date:dayAhead(3), selected:true, personIds:[],
+                     from:'austin@j31dancecenter.com' }];
+  pendingSource = 'Email - Congratulations!!';
+  saveReview();
+  const e = S.events.find(x => x.title === 'Hell Week');
+  assert.strictEqual(e.from, 'austin@j31dancecenter.com');
+});
+
+test('the card shows who it came from', () => {
+  boot(GOOD);
+  S.kids = [];
+  const e = { id:'a', title:'Hell Week', date:dayAhead(3), kind:'event',
+              from:'austin@j31dancecenter.com', source:'Email - Congratulations!!', deleted:false };
+  const html = evtCard(e, false);
+  assert.ok(html.includes('austin@j31dancecenter.com'), 'sender visible');
+});
+
+test('events with no sender render fine', () => {
+  boot(GOOD);
+  S.kids = [];
+  const e = { id:'b', title:'Typed by hand', date:dayAhead(2), kind:'event', deleted:false };
+  assert.ok(evtCard(e, false).length > 0);
+  assert.ok(!evtCard(e, false).includes('✉️'), 'no empty sender line');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
