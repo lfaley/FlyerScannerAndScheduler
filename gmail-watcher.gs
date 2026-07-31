@@ -172,8 +172,28 @@ function checkMail() {
 
         // The email body itself -- this is what makes ParentSquare work without
         // ever touching their login wall.
+        // Plain text destroys table layout: a schedule grid collapses into a run
+        // of cells with no way to tell which column (day) each belongs to. When
+        // the message contains a table, send trimmed HTML so the row/column
+        // structure survives and every cell can be tied to its date.
         var body = msg.getPlainBody() || '';
-        if (body.length > 12000) body = body.slice(0, 12000);
+        var html = '';
+        try { html = msg.getBody() || ''; } catch (err) { html = ''; }
+        if (html && /<table/i.test(html)) {
+          var trimmed = html
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+            .replace(/<!--[\s\S]*?-->/g, ' ')
+            .replace(/\sstyle="[^"]*"/gi, '')
+            .replace(/\sclass="[^"]*"/gi, '')
+            .replace(/\s(width|height|align|valign|bgcolor|cellpadding|cellspacing|border)="[^"]*"/gi, '')
+            .replace(/<\/?(span|font|b|i|u|em|strong|div)[^>]*>/gi, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/\s+/g, ' ');
+          if (trimmed.length < 45000) body = trimmed;
+        }
+        if (body.length > 24000) body = body.slice(0, 24000);
         var header = 'From: ' + msg.getFrom() + '\nSubject: ' + msg.getSubject() +
           '\nSent: ' + Utilities.formatDate(msg.getDate(), Session.getScriptTimeZone(), 'yyyy-MM-dd') +
           '\n\n' + body;

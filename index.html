@@ -481,6 +481,10 @@ Extract EVERY actionable date you can find. Respond with ONLY a JSON array, no m
 {"title":"short human-friendly name","date":"YYYY-MM-DD","time":"HH:MM start time in 24h or null","endTime":"HH:MM end time in 24h, or null if none is stated","location":"string or null","kind":"deadline" if it is a due date / registration cutoff / form return date, otherwise "event","notes":"one short useful sentence or null"}
 
 Rules:
+- SCHEDULE GRIDS/TABLES: if there is a timetable where columns are days/dates and rows are time slots, do NOT summarise it. Walk it cell by cell. Every non-empty cell is its own separate event. Its date comes from that cell's COLUMN header, and its start/end time from that cell's ROW label -- unless the cell states its own time (e.g. "12:30-2:30pm"), which always wins. A single day's column often holds several different sessions; return each one.
+- Never collapse several sessions into one general item, and never let one day's entry stand in for the whole week. If a week-long block like "Hell Week" is named, return the named block AND every individual session inside it.
+- Keep the exact label from the cell as the title, including the instructor in parentheses, e.g. "Mini M.T. (Austin)".
+- Rows labelled Lunch/Dinner/Break are not events; skip them.
 - Registration/signup/payment/form-due dates are "deadline". Performances, games, meetings, picture days are "event".
 - If a date range is given, create one item for the start date and mention the range in notes.
 - If you find a deadline AND its related event, include both.
@@ -498,6 +502,8 @@ Respond with ONLY a JSON object, no markdown fences, no commentary.
 
 If it is PAPERWORK:
 {"type":"events","events":[{"title":"short name","date":"YYYY-MM-DD","time":"HH:MM start 24h or null","endTime":"HH:MM end 24h or null","location":"string or null","kind":"deadline" if a due date/registration cutoff/form return date, otherwise "event","notes":"one short useful sentence or null"}]}
+
+If the content contains a schedule table (HTML <table> or a grid where columns are days/dates and rows are time slots), walk it cell by cell. Every non-empty cell is a separate event: its date comes from the cell's column header, its time from the row label unless the cell states its own time. One day's column often holds several sessions -- return every one, and never summarise a week into a single item. Skip Lunch/Dinner/Break rows.
 
 If it is a RECIPE:
 {"type":"recipe","recipe":{"title":"dish name","category":"Breakfast"|"Lunch"|"Dinner"|"Snack"|"Other","ingredients":"plain text, one ingredient per line","instructions":"numbered plain text steps"}}
@@ -2772,7 +2778,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.0 · snacks and desserts on the meal plan</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.1 · read schedule tables properly</div>`;
 }
 function manualPrune(){
   const n = pruneData();
