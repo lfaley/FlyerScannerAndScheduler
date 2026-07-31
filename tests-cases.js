@@ -1287,6 +1287,46 @@ test('unread events show a NEW flag on the card', () => {
   assert.ok(!evtCard(seen, false).includes('NEW'));
 });
 
+console.log('\nBulk delete');
+
+test('bulk delete soft-deletes only the selected events', () => {
+  boot(GOOD);
+  S.events = [
+    { id:'a', title:'Hell Week', date:dayAhead(2), kind:'event', deleted:false },
+    { id:'b', title:'Livi - Mini Jazz Hell Week', date:dayAhead(2), kind:'event', deleted:false },
+    { id:'c', title:'Keep me', date:dayAhead(3), kind:'event', deleted:false }
+  ];
+  selectedEvents = new Set(['a','b']);
+  bulkDelete();
+  const live = S.events.filter(e=>!e.deleted);
+  assert.strictEqual(live.length, 1);
+  assert.strictEqual(live[0].title, 'Keep me');
+  assert.strictEqual(S.events.find(e=>e.id==='a').deleted, true, 'soft delete, recoverable');
+});
+
+test('bulk delete exits select mode and clears the selection', () => {
+  boot(GOOD);
+  S.events = [{ id:'a', title:'X', date:dayAhead(1), kind:'event', deleted:false }];
+  selectMode = true;
+  selectedEvents = new Set(['a']);
+  bulkDelete();
+  assert.strictEqual(selectMode, false);
+  assert.strictEqual(selectedEvents.size, 0);
+});
+
+test('deleted events drop out of the duplicate check', () => {
+  boot(GOOD);
+  const d = dayAhead(2);
+  S.events = [
+    { id:'a', title:'Picture Day', date:d, kind:'event', deleted:false },
+    { id:'b', title:'Fall Picture Day', date:d, kind:'event', deleted:false }
+  ];
+  assert.strictEqual(duplicateGroups().length, 1);
+  selectedEvents = new Set(['b']);
+  bulkDelete();
+  assert.strictEqual(duplicateGroups().length, 0, 'banner clears once the extra copy is gone');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

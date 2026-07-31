@@ -1098,7 +1098,7 @@ function renderEvents(m){
   if(selectMode){
     html += `<div class="card" style="position:sticky;bottom:76px;z-index:20">
       <button class="btn ${selectedEvents.size?'':'alt'}" onclick="bulkTagSheet()">
-        ${selectedEvents.size ? `🏷️ Tag ${selectedEvents.size} selected` : 'Tap events to select them'}
+        ${selectedEvents.size ? `⚙️ ${selectedEvents.size} selected — choose action` : 'Tap events to select them'}
       </button></div><div style="height:70px"></div>`;
   }
 
@@ -1656,13 +1656,29 @@ function toggleEventSelect(id){
   window.scrollTo(0, y);
 }
 function bulkTagSheet(){
-  if(!selectedEvents.size){ toast('Select some events first'); return; }
+  const n = selectedEvents.size;
+  if(!n){ toast('Select some events first'); return; }
   const people = allPeople();
-  if(!people.length){ toast('Add people in Settings first'); return; }
-  const buttons = people.map(p => ({ label: '🏷️ ' + p.name, fn: () => bulkTag(p.id) }));
-  buttons.push({ label: 'Clear everyone from these', fn: () => bulkTag(null) });
-  showSheet('Tag ' + selectedEvents.size + ' event' + (selectedEvents.size===1?'':'s'),
-    'Replaces existing tags on the selected events', buttons);
+  const buttons = people.map(p => ({ label: '🏷️ Tag as ' + p.name, fn: () => bulkTag(p.id) }));
+  if(people.length) buttons.push({ label: 'Clear everyone from these', fn: () => bulkTag(null) });
+  buttons.push({ label: '🗑️ Delete ' + n + ' event' + (n===1?'':'s'), fn: () => bulkDelete() });
+  showSheet(n + ' event' + (n===1?'':'s') + ' selected',
+    'Tagging replaces existing tags. Deleting can be undone from Settings.', buttons);
+}
+
+function bulkDelete(){
+  const n = selectedEvents.size;
+  if(!n) return;
+  if(!confirm('Delete ' + n + ' event' + (n===1?'':'s') + '?\n\nThey are removed from your list. Anything already added to your calendar stays there -- delete those in the Calendar app.')) return;
+  let removed = 0;
+  S.events.forEach(e => {
+    if(selectedEvents.has(e.id) && !e.deleted){ e.deleted = true; e.dirty = 1; removed++; }
+  });
+  save();
+  toast('Deleted ' + removed + ' event' + (removed===1?'':'s'));
+  selectMode = false;
+  selectedEvents = new Set();
+  render();
 }
 function bulkTag(personId){
   let n = 0;
@@ -2778,7 +2794,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.1 · read schedule tables properly</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.2 · bulk delete + schedule tables</div>`;
 }
 function manualPrune(){
   const n = pruneData();
