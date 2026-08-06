@@ -1388,6 +1388,49 @@ test('events with no sender render fine', () => {
   assert.ok(!evtCard(e, false).includes('✉️'), 'no empty sender line');
 });
 
+console.log('\nMulti-photo recipe scanning');
+
+test('a batch of separate recipes is reviewed one at a time', () => {
+  boot(GOOD);
+  recipeBatch = { total:3, pending:[
+    toRecipeForm({ title:'Mojito', category:'Other' }),
+    toRecipeForm({ title:'Margarita', category:'Other' }),
+    toRecipeForm({ title:'Paloma', category:'Other' })
+  ]};
+  nextBatchRecipe();
+  assert.strictEqual(recipeForm.title, 'Mojito', 'first up');
+  assert.strictEqual(recipeBatch.pending.length, 2, 'two still queued');
+  nextBatchRecipe();
+  assert.strictEqual(recipeForm.title, 'Margarita');
+});
+
+test('skipping one moves to the next without sending it', () => {
+  boot(GOOD);
+  recipeBatch = { total:2, pending:[
+    toRecipeForm({ title:'Keep' }), toRecipeForm({ title:'Next' })
+  ]};
+  nextBatchRecipe();
+  assert.strictEqual(recipeForm.title, 'Keep');
+  skipBatchRecipe();
+  assert.strictEqual(recipeForm.title, 'Next', 'moved on');
+});
+
+test('the batch ends cleanly after the last recipe', () => {
+  boot(GOOD);
+  recipeBatch = { total:1, pending:[ toRecipeForm({ title:'Only' }) ] };
+  nextBatchRecipe();
+  assert.strictEqual(recipeForm.title, 'Only');
+  nextBatchRecipe();
+  assert.strictEqual(recipeBatch, null, 'batch cleared when empty');
+});
+
+test('toRecipeForm keeps valid categories and falls back otherwise', () => {
+  assert.strictEqual(toRecipeForm({ title:'A', category:'Snack' }).category, 'Snack');
+  assert.strictEqual(toRecipeForm({ title:'A', category:'Dessert' }).category, 'Other',
+    'unknown category becomes Other');
+  assert.strictEqual(toRecipeForm({ title:'A' }).category, 'Other');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

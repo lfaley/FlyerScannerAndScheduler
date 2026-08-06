@@ -120,7 +120,7 @@
 <input type="file" id="fCam" accept="image/*" capture="environment" hidden>
 <input type="file" id="fLib" accept="image/*" multiple hidden>
 <input type="file" id="fPdf" accept="application/pdf" hidden>
-<input type="file" id="fRecipe" accept="image/*" capture="environment" hidden>
+<input type="file" id="fRecipe" accept="image/*" multiple hidden>
 <input type="file" id="fImport" accept="application/json" hidden>
 
 <script>
@@ -556,14 +556,21 @@ function parseExtractedEvents(text){
 }
 
 async function extractRecipeFromImage(base64, mediaType){
-  const prompt = `You are reading a photo of a recipe. Respond with ONLY a JSON object:
+  return extractRecipeFromImages([{base64, mediaType}]);
+}
+
+// One recipe, possibly spread across several photos (page 1 / page 2 etc).
+async function extractRecipeFromImages(images){
+  const many = images.length > 1;
+  const prompt = `You are reading ${many ? images.length + ' photos that together show ONE recipe (continued pages of the same dish)' : 'a photo of a recipe'}. Respond with ONLY a JSON object:
 {"title":"dish name","category":"Breakfast"|"Lunch"|"Dinner"|"Snack"|"Other","ingredients":"plain text, one per line","instructions":"numbered plain text steps"}
-If the image is not a recipe, respond with {"title":null}.`;
-  const text = await callClaude([
-    {type:'image', source:{type:'base64', media_type:mediaType, data:base64}},
-    {type:'text', text:prompt}]);
+${many ? 'Combine every page into one complete recipe. Do not repeat ingredients or steps that appear on more than one page.' : ''}
+If it is not a recipe, respond with {"title":null}.`;
+  const blocks = images.map(im => ({type:'image', source:{type:'base64', media_type:im.mediaType, data:im.base64}}));
+  blocks.push({type:'text', text:prompt});
+  const text = await callClaude(blocks);
   const r = JSON.parse(text);
-  if(!r || !r.title) throw new Error('That photo does not look like a recipe.');
+  if(!r || !r.title) throw new Error('That does not look like a recipe.');
   return r;
 }
 
@@ -2673,7 +2680,7 @@ function renderRecipeBox(m){
   setHeader('Scan a Recipe', true);
   const n = scannedCount();
   m.innerHTML = `
-    <div class="help">Photograph a recipe from a book, card, or flyer. Claude types it up, you check it, and it goes to the Recipe app's library — that's where all your recipes live.</div>
+    <div class="help">Photograph a recipe from a book, card, or flyer. Pick several photos at once — FlyerSnap asks whether they are separate recipes or pages of one. Claude types them up, you check each, and they go to the Recipe app's library.</div>
     <div class="formrow">
       <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
       <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
@@ -2692,7 +2699,8 @@ function renderRecipeBox(m){
 }
 
 function renderRecipeForm(m){
-  setHeader('New Recipe', true);
+  const pos = recipeBatch ? (recipeBatch.total - recipeBatch.pending.length) : 0;
+  setHeader(recipeBatch ? 'Recipe ' + pos + ' of ' + recipeBatch.total : 'New Recipe', true);
   const f = recipeForm;
   m.innerHTML = `
     <div class="help">This goes to the Recipe app's library for you to confirm there.</div>
@@ -2705,7 +2713,11 @@ function renderRecipeForm(m){
     <textarea id="rIns">${esc(f.instructions)}</textarea>
     <div style="height:12px"></div>
     <button class="btn" onclick="sendRecipe()">Send to Recipe app</button>
-    <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="recipeForm=null;sub('recipeBox')">Cancel</button></div>`;
+    <div style="text-align:center;margin-top:8px">
+      ${recipeBatch && recipeBatch.pending.length
+        ? `<button class="linkbtn" onclick="skipBatchRecipe()">Skip this one (${recipeBatch.pending.length} more)</button> · `
+        : ''}
+      <button class="linkbtn" onclick="recipeForm=null;recipeBatch=null;sub('recipeBox')">Cancel</button></div>`;
 }
 function syncRecipeForm(){
   const t=document.getElementById('rTitle'), i=document.getElementById('rIng'), n=document.getElementById('rIns');
@@ -2723,24 +2735,78 @@ function sendRecipe(){
     instructions: recipeForm.instructions
   });
   recipeForm = null;
-  sub('recipeBox');
-  toast(ok ? 'Sent — confirm it in the Recipe app' : 'Could not send: storage is full');
+  const left = recipeBatch ? recipeBatch.pending.length : 0;
+  toast(ok
+    ? (left ? 'Sent — ' + left + ' more to check' : 'Sent — confirm it in the Recipe app')
+    : 'Could not send: storage is full');
+  if(left) nextBatchRecipe(); else { recipeBatch = null; sub('recipeBox'); }
 }
 
-async function handleRecipeScan(file){
-  if(!file) return;
+let recipeBatch = null;      // { files:[], done:[], mode:'separate'|'one' }
+
+async function handleRecipeScan(files){
+  const list = Array.from(files || []).filter(Boolean);
+  if(!list.length) return;
   if(!S.settings.apiKey){ alert('Add your Anthropic API key in Settings first.'); nav('settings'); return; }
-  sub('busy', {msg:'Reading the recipe…', hint:''});
+
+  if(list.length === 1) return runRecipeScan(list, 'one');
+
+  showSheet(list.length + ' photos', 'Are these separate recipes, or pages of one?', [
+    {label:'🍹 ' + list.length + ' separate recipes', fn:()=>runRecipeScan(list, 'separate')},
+    {label:'📄 Pages of one recipe', fn:()=>runRecipeScan(list, 'one')},
+  ]);
+}
+
+async function runRecipeScan(list, mode){
   try{
-    const {base64, mediaType} = await readImageDownscaled(file);
-    const r = await extractRecipeFromImage(base64, mediaType);
-    recipeForm = { title:r.title||'', category:['Breakfast','Lunch','Dinner','Snack','Other'].includes(r.category)?r.category:'Other',
-      ingredients:r.ingredients||'', instructions:r.instructions||'' };
-    sub('recipeForm');
+    if(mode === 'one'){
+      sub('busy', {msg:'Reading the recipe…', hint: list.length>1 ? list.length + ' pages' : ''});
+      const images = [];
+      for(const f of list) images.push(await readImageDownscaled(f));
+      const r = await extractRecipeFromImages(images);
+      recipeForm = toRecipeForm(r);
+      recipeBatch = null;
+      sub('recipeForm');
+      return;
+    }
+    // Separate recipes: read them all, then review one at a time.
+    recipeBatch = { pending:[], total:list.length };
+    for(let i = 0; i < list.length; i++){
+      sub('busy', {msg:'Reading recipe ' + (i+1) + ' of ' + list.length + '…', hint:''});
+      try{
+        const im = await readImageDownscaled(list[i]);
+        const r = await extractRecipeFromImages([im]);
+        recipeBatch.pending.push(toRecipeForm(r));
+      }catch(e){ /* skip a photo that is not a recipe */ }
+    }
+    if(!recipeBatch.pending.length){
+      recipeBatch = null;
+      alert('None of those photos looked like a recipe.');
+      sub('recipeBox');
+      return;
+    }
+    nextBatchRecipe();
   }catch(err){
+    recipeBatch = null;
     alert('Scan failed: '+err.message);
     sub('recipeBox');
   }
+}
+
+function toRecipeForm(r){
+  return { title:r.title||'', category:['Breakfast','Lunch','Dinner','Snack','Other'].includes(r.category)?r.category:'Other',
+    ingredients:r.ingredients||'', instructions:r.instructions||'' };
+}
+
+function skipBatchRecipe(){
+  recipeForm = null;
+  nextBatchRecipe();
+}
+
+function nextBatchRecipe(){
+  if(!recipeBatch || !recipeBatch.pending.length){ recipeBatch = null; sub('recipeBox'); return; }
+  recipeForm = recipeBatch.pending.shift();
+  sub('recipeForm');
 }
 
 // ---------- Settings tab ----------
@@ -2832,7 +2898,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.6 · flattened tables + sender on events</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.7 · multi-photo recipe scanning</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -2991,7 +3057,7 @@ function importBackup(file){
 document.getElementById('fCam').addEventListener('change', e=>{ handleCapture(e.target.files, false); e.target.value=''; });
 document.getElementById('fLib').addEventListener('change', e=>{ handleCapture(e.target.files, false); e.target.value=''; });
 document.getElementById('fPdf').addEventListener('change', e=>{ handleCapture(e.target.files, true); e.target.value=''; });
-document.getElementById('fRecipe').addEventListener('change', e=>{ handleRecipeScan(e.target.files[0]); e.target.value=''; });
+document.getElementById('fRecipe').addEventListener('change', e=>{ handleRecipeScan(e.target.files); e.target.value=''; });
 document.getElementById('fImport').addEventListener('change', e=>{ importBackup(e.target.files[0]); e.target.value=''; });
 
 // ---------- Boot ----------
