@@ -224,6 +224,34 @@ function tablesToPlainText(html) {
   return out.join('\n');
 }
 
+
+// ---------------------------------------------------------------------------
+// "Exception: Gmail operation not allowed." is a transient Gmail service error,
+// not a permissions problem. It is well documented that scheduled Gmail scripts
+// hit it intermittently -- reports of ~3 failures out of 24 hourly runs are
+// common. The accepted remedy is to catch it and retry with a short backoff
+// rather than let the whole run die and email a failure notice.
+// ---------------------------------------------------------------------------
+function gmailSearchWithRetry(query, start, max) {
+  var attempts = 3;
+  var lastErr = null;
+  for (var i = 0; i < attempts; i++) {
+    try {
+      return GmailApp.search(query, start, max);
+    } catch (e) {
+      lastErr = e;
+      var msg = String(e && e.message || e);
+      var transient = /not allowed|service invoked too many|internal error|try again|timeout/i.test(msg);
+      if (!transient || i === attempts - 1) throw e;
+      // 2s, then 6s, with a little jitter so retries do not align.
+      var waitMs = (i === 0 ? 2000 : 6000) + Math.floor(Math.random() * 1500);
+      Logger.log('  Gmail hiccup (' + msg + ') -- retrying in ' + waitMs + 'ms');
+      Utilities.sleep(waitMs);
+    }
+  }
+  throw lastErr;
+}
+
 function parseEvents(text) {
   var arr;
   try { arr = JSON.parse(text); } catch (e) { return []; }
@@ -258,7 +286,18 @@ function checkMail() {
 
   var query = '(' + list.map(function (s) { return 'from:' + s; }).join(' OR ') +
     ') newer_than:' + LOOKBACK;
-  var threads = GmailApp.search(query, 0, 25);
+
+  var threads;
+  try {
+    threads = gmailSearchWithRetry(query, 0, 25);
+  } catch (e) {
+    // Gmail is having a moment. Exit cleanly so the trigger does not report a
+    // failure -- the next run in 15 minutes will try again.
+    Logger.log('Gmail unavailable after retries (' + (e && e.message) +
+      '). Skipping this run; will retry on the next trigger.');
+    props().setProperty('LAST_SKIP', new Date().toISOString());
+    return;
+  }
   var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 
   var queue = JSON.parse(getProp('QUEUE') || '[]');
@@ -474,7 +513,7 @@ function testSetup() {
 
   var query = '(' + senders().map(function (s) { return 'from:' + s; }).join(' OR ') +
     ') newer_than:' + LOOKBACK;
-  var threads = GmailApp.search(query, 0, 25);
+  var threads = gmailSearchWithRetry(query, 0, 25);
   Logger.log('Setup looks good.\nQuery: ' + query + '\nMatching threads in the last ' +
     LOOKBACK + ': ' + threads.length);
   if (!threads.length) {
