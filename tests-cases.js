@@ -1431,6 +1431,53 @@ test('toRecipeForm keeps valid categories and falls back otherwise', () => {
   assert.strictEqual(toRecipeForm({ title:'A' }).category, 'Other');
 });
 
+console.log('\nNo alerts in the past');
+
+test('lead times that would land before today are dropped', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[7,2,0], deadline:[7,1] };
+  S.settings.extraReminders = false;
+  // Event 2 days out: the 7-day lead would fire 5 days ago.
+  const plan = alertPlan('event', { date: dayAhead(2), kind:'event' });
+  assert.ok(!plan.alarms.includes(7), 'past lead time dropped');
+  assert.ok(plan.alarms.includes(2) || plan.alarms.includes(0), 'usable leads kept');
+});
+
+test('an event today still gets a day-of alert', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[7,2] };
+  const plan = alertPlan('event', { date: dayAhead(0), kind:'event' });
+  assert.deepStrictEqual(plan.alarms, [0], 'falls back to day-of rather than nothing');
+});
+
+test('a distant event keeps all its lead times', () => {
+  boot(GOOD);
+  S.settings.alerts = { deadline:[7,1] };
+  const plan = alertPlan('deadline', { date: dayAhead(30), kind:'deadline' });
+  assert.deepStrictEqual(plan.alarms, [1,7], 'nothing dropped when there is time');
+});
+
+test('no past-dated reminder entries are exported', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[7,2,0] };
+  S.settings.extraReminders = true;
+  const evt = { id:'e1', title:'Recital', date: dayAhead(2), kind:'event' };
+  const vevents = buildVEVENTs(evt);
+  const today = todayISO().replace(/-/g,'');
+  vevents.forEach(v => {
+    const m = /DTSTART[^:]*:(\d{8})/.exec(v);
+    if(m) assert.ok(m[1] >= today, 'no VEVENT dated before today, got ' + m[1]);
+  });
+});
+
+test('the event itself is still exported even when leads are trimmed', () => {
+  boot(GOOD);
+  S.settings.alerts = { event:[7] };
+  const v = buildVEVENT({ id:'e1', title:'Recital', date: dayAhead(1), kind:'event' });
+  assert.ok(v.includes('SUMMARY:'), 'event still present');
+  assert.ok(v.includes('BEGIN:VALARM'), 'still has an alarm');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

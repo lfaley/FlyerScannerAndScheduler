@@ -610,9 +610,22 @@ function alertLabel(n){ return n===0 ? 'Day of' : n===1 ? '1 day' : n+' days'; }
 
 // Apple Calendar honors only two alerts per event, so the two NEAREST offsets
 // become real alarms; anything earlier can optionally become its own entry.
-function alertPlan(kind){
+// Lead times that would land before today are useless -- a "7 days before"
+// alert on an event 2 days away fires 5 days in the past, which either does
+// nothing or drops a stray entry onto an old date. Drop those, and if every
+// configured lead time is already past, fall back to a day-of alert so the
+// event still notifies.
+function alertPlan(kind, evt){
   const chosen = ((S.settings.alerts||{})[kind] || []).slice().sort((x,y)=>x-y);
-  return { alarms: chosen.slice(0,2), extras: S.settings.extraReminders ? chosen.slice(2) : [] };
+  let usable = chosen;
+  if(evt && evt.date){
+    const away = daysUntil(evt.date);
+    if(away >= 0){
+      usable = chosen.filter(n => n <= away);
+      if(!usable.length) usable = [0];
+    }
+  }
+  return { alarms: usable.slice(0,2), extras: S.settings.extraReminders ? usable.slice(2) : [] };
 }
 
 function fmt12(t){
@@ -637,7 +650,7 @@ function valarm(title, daysBefore){
 }
 
 function buildVEVENT(evt){
-  const plan = alertPlan(evt.kind);
+  const plan = alertPlan(evt.kind, evt);
   const title = eventTitle(evt);
   const d = evt.date.replace(/-/g,'');
   let dt;
@@ -682,7 +695,7 @@ function buildReminderVEVENT(evt, daysBefore){
 }
 
 function buildVEVENTs(evt){
-  const plan = alertPlan(evt.kind);
+  const plan = alertPlan(evt.kind, evt);
   return [buildVEVENT(evt)].concat(plan.extras.map(n=>buildReminderVEVENT(evt, n)));
 }
 
@@ -2898,7 +2911,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.8 · watcher survives Gmail hiccups</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.9 · no alerts dated in the past</div>`;
 }
 function manualPrune(){
   const n = pruneData();
