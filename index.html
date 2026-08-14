@@ -2020,6 +2020,8 @@ function renderReview(m){
     </div>`).join('');
   html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">＋ Scan another page</button></div>
     <button class="btn fab" onclick="saveReview()">Track ${n} item${n===1?'':'s'}</button>
+    ${pendingMsgIds.length ? `<div style="text-align:center;margin-top:8px">
+      <button class="linkbtn" onclick="dismissPendingEmail()">Skip all from this email</button></div>` : ''}
     <div style="height:70px"></div>`;
   m.innerHTML = html;
 }
@@ -2041,9 +2043,33 @@ function tagAll(personId){
   });
   render();
 }
+// Mark the current email batch handled without tracking anything from it.
+function dismissPendingEmail(){
+  if(pendingMsgIds.length){
+    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs||[]).concat(pendingMsgIds))].slice(-400);
+    pendingMsgIds = [];
+  }
+  save();
+  toast('Skipped — these will not come back');
+  pendingEvents = [];
+  view = {tab:'events', sub:null, data:null};
+  render();
+}
+
 function saveReview(){
   const chosen = pendingEvents.filter(e=>e.selected);
-  if(!chosen.length){ alert('Tap the events you want to track, then save.'); return; }
+  if(!chosen.length){
+    // Deselecting everything is a legitimate answer: "none of these". This used
+    // to bail out before recording the message ids, so the same events came back
+    // on every scan with no way to dismiss them.
+    if(pendingMsgIds.length){
+      if(!confirm('Nothing is selected.\n\nSkip everything from this email? It will not be offered again.')) return;
+      dismissPendingEmail();
+      return;
+    }
+    alert('Tap the events you want to track, then save.');
+    return;
+  }
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
       kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, exported:false, unread:true, deleted:false });
@@ -2911,7 +2937,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v5.9 · no alerts dated in the past</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.0 · skip unwanted email events for good</div>`;
 }
 function manualPrune(){
   const n = pruneData();

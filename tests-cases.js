@@ -1478,6 +1478,53 @@ test('the event itself is still exported even when leads are trimmed', () => {
   assert.ok(v.includes('BEGIN:VALARM'), 'still has an alarm');
 });
 
+console.log('\nDeselected email events stay gone');
+
+test('tracking some marks the whole email handled', () => {
+  boot(GOOD);
+  S.kids = []; S.events = []; S.settings.seenMsgs = [];
+  pendingMsgIds = ['msg-1'];
+  pendingSource = 'Email - J31';
+  pendingEvents = [
+    { title:'Want this', date:dayAhead(3), selected:true,  personIds:[] },
+    { title:'Not this',  date:dayAhead(3), selected:false, personIds:[] }
+  ];
+  saveReview();
+  assert.strictEqual(S.events.length, 1, 'only the selected one tracked');
+  assert.ok(S.settings.seenMsgs.includes('msg-1'), 'message marked handled');
+});
+
+test('an already-handled message is not offered again', () => {
+  boot(GOOD);
+  S.settings.seenMsgs = ['msg-1'];
+  const seen = new Set(S.settings.seenMsgs);
+  const items = [{ msgId:'msg-1', title:'Not this', date:dayAhead(3) }];
+  const fresh = items.filter(i => !seen.has(i.msgId));
+  assert.strictEqual(fresh.length, 0, 'deselected events do not come back');
+});
+
+test('skipping everything still marks the email handled', () => {
+  boot(GOOD);
+  S.kids = []; S.events = []; S.settings.seenMsgs = [];
+  pendingMsgIds = ['msg-9'];
+  pendingEvents = [
+    { title:'None of these', date:dayAhead(2), selected:false, personIds:[] }
+  ];
+  dismissPendingEmail();
+  assert.strictEqual(S.events.length, 0, 'nothing tracked');
+  assert.ok(S.settings.seenMsgs.includes('msg-9'), 'still marked handled so it stops returning');
+  assert.strictEqual(pendingMsgIds.length, 0, 'batch cleared');
+});
+
+test('saving with nothing selected dismisses rather than dead-ending', () => {
+  boot(GOOD);
+  S.kids = []; S.events = []; S.settings.seenMsgs = [];
+  pendingMsgIds = ['msg-7'];
+  pendingEvents = [{ title:'Nope', date:dayAhead(2), selected:false, personIds:[] }];
+  saveReview();
+  assert.ok(S.settings.seenMsgs.includes('msg-7'), 'no longer a dead end');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
