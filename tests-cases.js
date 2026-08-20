@@ -1525,6 +1525,53 @@ test('saving with nothing selected dismisses rather than dead-ending', () => {
   assert.ok(S.settings.seenMsgs.includes('msg-7'), 'no longer a dead end');
 });
 
+console.log('\nEvent grouping and density');
+
+test('events fall into the right time buckets', () => {
+  boot(GOOD);
+  assert.strictEqual(timeBucket(0), 'Today');
+  assert.strictEqual(timeBucket(1), 'Tomorrow');
+  assert.strictEqual(timeBucket(5), 'This week');
+  assert.strictEqual(timeBucket(10), 'Next week');
+  assert.strictEqual(timeBucket(25), 'This month');
+  assert.strictEqual(timeBucket(90), 'Later');
+});
+
+test('grouping keeps order and never loses an event', () => {
+  boot(GOOD);
+  const evts = [
+    { id:'a', title:'A', date:dayAhead(0), kind:'event', deleted:false },
+    { id:'b', title:'B', date:dayAhead(3), kind:'event', deleted:false },
+    { id:'c', title:'C', date:dayAhead(5), kind:'event', deleted:false },
+    { id:'d', title:'D', date:dayAhead(60), kind:'event', deleted:false }
+  ];
+  const groups = groupedUpcoming(evts);
+  assert.deepStrictEqual(groups.map(g=>g.label), ['Today','This week','Later']);
+  assert.strictEqual(groups[1].items.length, 2, 'same bucket events stay together');
+  const total = groups.reduce((n,g)=>n+g.items.length, 0);
+  assert.strictEqual(total, evts.length, 'no event dropped by grouping');
+});
+
+test('distant events render compact, near ones render full', () => {
+  boot(GOOD);
+  S.kids = [];
+  const near = { id:'a', title:'Soon', date:dayAhead(2), kind:'event',
+                 notes:'bring a water bottle', deleted:false };
+  const far  = { id:'b', title:'Later', date:dayAhead(60), kind:'event',
+                 notes:'bring a water bottle', deleted:false };
+  const nearHtml = evtCard(near, false);
+  const farHtml  = evtCard(far, false);
+  assert.ok(nearHtml.includes('near'), 'imminent event gets emphasis');
+  assert.ok(nearHtml.includes('water bottle'), 'near event keeps its notes');
+  assert.ok(farHtml.includes('compact'), 'distant event is compact');
+  assert.ok(!farHtml.includes('water bottle'), 'distant event drops detail');
+});
+
+test('an empty list groups to nothing rather than throwing', () => {
+  boot(GOOD);
+  assert.deepStrictEqual(groupedUpcoming([]), []);
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

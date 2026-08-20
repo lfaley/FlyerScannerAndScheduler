@@ -56,7 +56,27 @@
   nav button .ic{font-size:20px;opacity:.45}
   nav button.on .ic{opacity:1}
   .card{background:var(--card);border-radius:14px;padding:var(--s4);margin-bottom:var(--s3);
-    box-shadow:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05)}
+    box-shadow:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
+    transition:transform .1s ease, box-shadow .1s ease}
+  .card:active{transform:scale(.99)}
+
+  /* Sticky bucket headers -- the anchor points that make a long list scannable. */
+  .bucket{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:var(--s2);
+    background:var(--bg);padding:var(--s4) 0 var(--s2);
+    font-size:var(--t-cap);font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted)}
+  .bucket::after{content:'';flex:1;height:1px;background:var(--line)}
+  .bucket-n{order:3;background:var(--line);color:var(--muted);border-radius:9px;
+    padding:1px 7px;font-size:11px;letter-spacing:0}
+
+  /* Density tiers. Imminent events earn presence; distant ones stay quiet. */
+  .card.near{box-shadow:0 1px 2px rgba(30,43,38,.05), 0 4px 14px rgba(30,43,38,.09)}
+  .card.compact{padding:var(--s3) var(--s4);margin-bottom:var(--s2);opacity:.88}
+  .card.compact .badge{background:transparent;color:var(--faint);padding:4px 0;font-weight:600}
+
+  /* Entrances. Guarded by the prefers-reduced-motion block above. */
+  @keyframes riseIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  main > .card, main > .bucket{animation:riseIn .22s ease both}
   .row{display:flex;align-items:center;gap:12px}
   .grow{flex:1;min-width:0}
   .title{font-size:var(--t-title);font-weight:700;line-height:1.3;letter-spacing:-.01em}
@@ -116,6 +136,8 @@
   .spinner{width:36px;height:36px;border:4px solid var(--green-lt);border-top-color:var(--green);
     border-radius:50%;animation:sp 1s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
+  @keyframes screenIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  main.enter{animation:screenIn .2s ease both}
   .celebrate{background:var(--green-lt);border-radius:10px;padding:12px;text-align:center;
     font-weight:700;color:var(--green);margin-bottom:12px}
   .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
@@ -940,7 +962,15 @@ function render(){
     shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
+  const changedScreen = key !== lastViewKey;
+  m.classList.remove('enter');
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
+  if(changedScreen){
+    // Retrigger the animation. Only on a genuine navigation -- animating every
+    // re-render would make simple taps feel laggy.
+    void m.offsetWidth;
+    m.classList.add('enter');
+  }
   if(key === lastViewKey) window.scrollTo(0, y); else window.scrollTo(0, 0);
   lastViewKey = key;
 }
@@ -1060,6 +1090,28 @@ function calFlag(e){
     ? `<span class="calflag">📆 In calendar</span>`
     : '';
 }
+// Group upcoming events into scannable time buckets. A flat list of 25 cards
+// gives the eye nothing to anchor on; headers let you navigate by scanning.
+function timeBucket(days){
+  if(days <= 0) return 'Today';
+  if(days === 1) return 'Tomorrow';
+  if(days <= 7) return 'This week';
+  if(days <= 14) return 'Next week';
+  if(days <= 31) return 'This month';
+  return 'Later';
+}
+
+function groupedUpcoming(evts){
+  const groups = [];
+  let current = null;
+  evts.forEach(e => {
+    const b = timeBucket(daysUntil(e.date));
+    if(!current || current.label !== b){ current = { label:b, items:[] }; groups.push(current); }
+    current.items.push(e);
+  });
+  return groups;
+}
+
 function evtCard(e, isPast){
   const days = daysUntil(e.date);
   const urgent = !isPast && e.kind==='deadline' && days<=3;
@@ -1077,13 +1129,33 @@ function evtCard(e, isPast){
         </div>
       </div></div>`;
   }
-  return `<div class="card stripe ${e.kind} ${isPast?'dim':''}" onclick="eventActions('${e.id}')">
+  // Let the data drive the hierarchy: what is imminent gets full detail and
+  // presence, what is months away stays compact so it does not compete.
+  const near = !isPast && days <= 7;
+  const far  = !isPast && days > 31;
+
+  // Two signals at most on the card. Provenance and "in calendar" are useful
+  // when you open an event, not while scanning twenty of them.
+  const tags = people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('');
+
+  if(far){
+    return `<div class="card stripe ${e.kind} compact" onclick="eventActions('${e.id}')">
+      <div class="row">
+        <div class="grow">
+          <div class="title" style="font-size:var(--t-sm)">${newFlag(e)}${esc(e.title)}</div>
+          <div class="meta" style="font-size:var(--t-cap)">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}</div>
+        </div>
+        <span class="badge">${badge}</span>
+      </div></div>`;
+  }
+
+  return `<div class="card stripe ${e.kind} ${isPast?'dim':''} ${near?'near':''}" onclick="eventActions('${e.id}')">
     <div class="row">
       <div class="grow">
         <div class="title">${newFlag(e)}${esc(e.title)}</div>
         <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
         ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
-        ${people.map(p=>`<span class="kidtag" style="background:${p.color}">${esc(p.name)}</span>`).join('')}${calFlag(e)}
+        ${tags}${e.exported?`<span class="calflag">In calendar</span>`:''}
         ${fromLine(e)}
       </div>
       <span class="badge ${urgent?'urgent':''}">${badge}</span>
@@ -1157,7 +1229,9 @@ function renderEvents(m){
     html += `<div style="display:flex;justify-content:flex-end">
       <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">↗ Share</button>
       <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
-    html += evts.map(e=>evtCard(e, false)).join('');
+    html += groupedUpcoming(evts).map(g => `
+      <div class="bucket">${g.label}<span class="bucket-n">${g.items.length}</span></div>
+      ${g.items.map(e=>evtCard(e, false)).join('')}`).join('');
   }
   if(selectMode){
     html += `<div class="card" style="position:sticky;bottom:76px;z-index:20">
@@ -2973,7 +3047,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.1 · accessible design system</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.2 · grouped events, density and motion</div>`;
 }
 function manualPrune(){
   const n = pruneData();
