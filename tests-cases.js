@@ -1905,6 +1905,165 @@ test('the attachment pass is given the covering email as context', () => {
     'the flyer stays the source of dates; the email informs the notes');
 });
 
+console.log('\nWhole-email reading');
+
+test('the combined request carries body and every attachment', () => {
+  boot(GOOD);
+  const payload = {
+    from:'austin@j31dancecenter.com', subject:'Hell Week',
+    text:'Wear all black and bring a water bottle each day.',
+    attachments:[
+      { name:'schedule.png', mediaType:'image/png', data:'AAA' },
+      { name:'handbook.pdf', mediaType:'application/pdf', data:'BBB' }
+    ]
+  };
+  const blocks = emailBlocks(payload, true);
+  const kinds = blocks.map(b => b.type);
+  assert.ok(kinds.includes('image'), 'the flyer image is included');
+  assert.ok(kinds.includes('document'), 'the PDF is included');
+  const joined = blocks.filter(b=>b.type==='text').map(b=>b.text).join(' ');
+  assert.ok(/water bottle/.test(joined), 'the email body is included');
+  assert.ok(/ATTACHMENT 1: schedule.png/.test(joined), 'attachments are labelled');
+  assert.ok(/ATTACHMENT 2: handbook.pdf/.test(joined), 'each one distinctly');
+});
+
+test('the body alone is sent when there are no attachments', () => {
+  const blocks = emailBlocks({ from:'a@b.com', subject:'Hi',
+    text:'Picture day is September 11 at 9am in the gym.', attachments:[] }, true);
+  assert.strictEqual(blocks.filter(b=>b.type==='image').length, 0);
+  assert.ok(/Picture day/.test(blocks.map(b=>b.text||'').join(' ')));
+});
+
+test('a trivial body is not sent as an empty block', () => {
+  const blocks = emailBlocks({ text:'ok', attachments:[] }, true);
+  assert.strictEqual(blocks.length, 0, 'nothing worth sending');
+});
+
+test('the model is told to treat the sources as one set of facts', () => {
+  assert.ok(/ONE set of facts/i.test(MULTI_SOURCE_NOTE), 'sources are correlated');
+  assert.ok(/only on a flyer while what to bring is only in the email/i.test(MULTI_SOURCE_NOTE),
+    'the cross-source case is spelled out');
+  assert.ok(/ONE item, not two/i.test(MULTI_SOURCE_NOTE), 'no duplicates across sources');
+});
+
+test('a failed combined read falls back instead of losing the email', () => {
+  const src = String(extractFromEmailPayload);
+  assert.ok(/trying each part separately/.test(src),
+    'per-source passes remain as a fallback');
+  assert.ok(src.indexOf('Pass 1') > src.indexOf('combined read'),
+    'combined is attempted first');
+});
+
+console.log('\nWording follows the active model');
+
+test('the assistant is called Gordon whichever model is behind him', () => {
+  boot(GOOD);
+  setAiProvider('anthropic');
+  assert.strictEqual(aiName(), 'Gordon');
+  setAiProvider('local');
+  S.settings.localModel = 'qwen3-vl:8b';
+  assert.strictEqual(aiName(), 'Gordon', 'the voice does not change with the model');
+  setAiProvider('anthropic');
+});
+
+test('the real model is still reported where truth matters', () => {
+  boot(GOOD);
+  setAiProvider('anthropic');
+  assert.strictEqual(aiModelName(), MODEL, 'provenance names the actual model');
+  setAiProvider('local');
+  S.settings.localModel = 'qwen3-vl:8b';
+  assert.strictEqual(aiModelName(), 'qwen3-vl:8b');
+  S.settings.localModel = '';
+  assert.strictEqual(aiModelName(), 'local model', 'sensible when unnamed');
+  setAiProvider('anthropic');
+});
+
+test('progress messages speak as Gordon, never as a raw model name', () => {
+  boot(GOOD);
+  setAiProvider('local');
+  S.settings.localModel = 'qwen3-vl:8b';
+  for(let i = 0; i < 20; i++){
+    const hint = aiWorkingHint();
+    assert.ok(/^Gordon is /.test(hint), 'always speaks as Gordon: ' + hint);
+    assert.ok(!/qwen|Claude|claude/.test(hint), 'no model name leaks into the hint');
+  }
+  setAiProvider('anthropic');
+});
+
+test('an event records the model that read it, not Gordon', () => {
+  boot(GOOD);
+  setAiProvider('local');
+  S.settings.localModel = 'qwen3-vl:8b';
+  assert.strictEqual(providerLabel(), 'qwen3-vl:8b',
+    'a bad extraction must be traceable to a real model');
+  assert.notStrictEqual(providerLabel(), 'Gordon');
+  setAiProvider('anthropic');
+});
+
+test('no user-facing screen text hardcodes Claude', () => {
+  boot(GOOD);
+  setAiProvider('local');
+  S.settings.localModel = 'qwen3-vl:8b';
+  S.settings.localBaseUrl = 'https://x.ts.net/v1';
+  S.kids = []; S.events = [];
+  const screens = [renderEvents, renderSettings];
+  screens.forEach(fn => {
+    const m = { innerHTML:'' };
+    try { fn(m); } catch(e){ return; }
+    assert.ok(!/Claude is /.test(m.innerHTML),
+      'no "Claude is ..." while a local model is selected');
+  });
+  setAiProvider('anthropic');
+});
+
+console.log('\nUser-supplied context');
+
+test('no context means nothing extra is sent', () => {
+  boot(GOOD);
+  scanContext = '';
+  assert.strictEqual(contextBlock(), null);
+  const blocks = withContext([{type:'image', source:{}}]);
+  assert.strictEqual(blocks.length, 2, 'just the image and the prompt');
+});
+
+test('context is inserted before the prompt, not after', () => {
+  boot(GOOD);
+  scanContext = 'band';
+  const blocks = withContext([{type:'image', source:{}}]);
+  assert.strictEqual(blocks.length, 3);
+  assert.ok(/CONTEXT FROM THE USER/.test(blocks[1].text), 'context comes second');
+  assert.ok(/short human-friendly name|JSON/.test(blocks[2].text), 'prompt comes last');
+  scanContext = '';
+});
+
+test('the context tells the model to label events, not invent facts', () => {
+  boot(GOOD);
+  scanContext = 'band';
+  const t = contextBlock().text;
+  assert.ok(/about "band"/.test(t), 'carries what the user said');
+  assert.ok(/Rehearsal \(band\)/.test(t), 'shows how to use it in a title');
+  assert.ok(/not invent dates or details that are not on the page/i.test(t),
+    'context must not become a licence to hallucinate');
+  scanContext = '';
+});
+
+test('whitespace-only context is ignored', () => {
+  boot(GOOD);
+  scanContext = '   ';
+  assert.strictEqual(contextBlock(), null);
+  scanContext = '';
+});
+
+test('context is cleared once a review is saved', () => {
+  boot(GOOD);
+  S.kids = []; S.events = [];
+  scanContext = 'band';
+  pendingMsgIds = ['m1'];
+  pendingEvents = [{ title:'X', date:dayAhead(2), selected:false, personIds:[] }];
+  dismissPendingEmail();
+  assert.strictEqual(scanContext, '', 'does not leak into the next scan');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

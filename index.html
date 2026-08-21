@@ -569,6 +569,34 @@ const GROUNDING_RECIPE = `Working from the photograph(s), transcribe the recipe 
 // Provider dispatch. Anthropic remains fully intact and is still the default;
 // the local model is an additional option, never a replacement.
 // ---------------------------------------------------------------------------
+// Never hardcode a provider name in the interface -- it will lie the moment the
+// user switches. These follow whatever is actually configured.
+// Gordon is the assistant's name in the interface. The model behind him is an
+// implementation detail that can change (Anthropic, a local model, whatever
+// comes next) without the app's voice changing. The real model is still shown
+// where it matters -- in Settings, in the self-test, and on each event's
+// provenance line -- so a bad extraction can still be traced.
+const ASSISTANT_NAME = 'Gordon';
+
+function aiName(){ return ASSISTANT_NAME; }
+
+// The actual model, for places where the truth matters more than the voice.
+function aiModelName(){
+  return aiProvider() === 'local'
+    ? ((S.settings.localModel||'').trim() || 'local model')
+    : MODEL;
+}
+
+function aiWorkingHint(){
+  const lines = [
+    'finding dates, times, and deadlines',
+    'reading every line so you do not have to',
+    'checking what you need to bring',
+    'writing this up properly'
+  ];
+  return ASSISTANT_NAME + ' is ' + lines[Math.floor(Math.random()*lines.length)];
+}
+
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
 async function callAI(contentBlocks, maxTokens, system){
@@ -810,7 +838,7 @@ async function extractEvents(base64, mediaType, isPdf){
   const block = isPdf
     ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
     : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
-  const text = await callAI([block, {type:'text', text:eventPrompt()}], 3000);
+  const text = await callAI(withContext([block]), 3000, GROUNDING_EVENTS);
   return parseExtractedEvents(text);
 }
 
@@ -818,7 +846,7 @@ async function extractEventsFromUrl(url){
   // Anthropic's servers fetch the URL — no browser CORS, no proxy needed.
   // Works cleanly for PDFs; HTML pages behind a login will return an error we translate below.
   const block = {type:'document', source:{type:'url', url}};
-  const text = await callAI([block, {type:'text', text:eventPrompt()}], 3000);
+  const text = await callAI(withContext([block]), 3000, GROUNDING_EVENTS);
   return parseExtractedEvents(text);
 }
 
@@ -1256,6 +1284,28 @@ function showSheet(title, subtitle, buttons){
 
 // ---------- Events tab ----------
 let eventFilter = null;
+// Something the user knows that the page does not say -- "these are all band
+// dates". Photographs of a schedule often carry dates and nothing else.
+let scanContext = '';
+
+// Insert the user's context just before the prompt, if they gave any.
+function withContext(blocks){
+  const ctx = contextBlock();
+  const out = blocks.slice();
+  if(ctx) out.push(ctx);
+  out.push({ type:'text', text: eventPrompt() });
+  return out;
+}
+
+function contextBlock(){
+  const c = (scanContext||'').trim();
+  if(!c) return null;
+  return { type:'text', text:
+    'CONTEXT FROM THE USER: these items are about "' + c + '".\n' +
+    'The page itself may not say so. Use this when writing each title and note so ' +
+    'the events are recognisable later -- for example a bare "Rehearsal" becomes ' +
+    '"Rehearsal (' + c + ')". This context does NOT license invention: do not invent dates or details that are not on the page. It only tells you what the page is for.' };
+}
 let newPersonType = 'kid';
 let selectMode = false;
 let selectedEvents = new Set();
@@ -1629,7 +1679,7 @@ function renderSenders(m){
     }).join('');
   }
   html += `<div style="height:8px"></div>
-    <div class="help">Changes take effect on the next 15-minute run. Keep the list tight — each sender's mail is read by Claude and counts toward the daily cap.</div>`;
+    <div class="help">Changes take effect on the next 15-minute run. Keep the list tight — each sender's mail is read by ${esc(aiName())} and counts toward the daily cap.</div>`;
   m.innerHTML = html;
 }
 function toggleSenderTag(sender, personId){
@@ -1740,15 +1790,62 @@ async function fetchMessage(msgId){
 // A single email can carry dates in the body AND on an attached flyer image.
 // Neither pass alone is enough: a text model cannot see the image, and reading
 // only the image loses the body. So run both and merge.
-function providerLabel(){
-  return aiProvider() === 'local' ? ((S.settings.localModel||'local').trim()) : MODEL;
+function providerLabel(){ return aiModelName(); }
+
+// One email can hold the date on a flyer, the dress code in the body, and the
+// kit list in an attached PDF. Separate passes cannot see across those, so we
+// send everything in a SINGLE request first and let the model correlate. Only
+// if that is impossible (a PDF on a provider that cannot read PDFs, or a payload
+// too large) do we fall back to per-source passes.
+function emailBlocks(payload, includeAttachments){
+  const blocks = [];
+  const atts = (includeAttachments && Array.isArray(payload.attachments))
+    ? payload.attachments : [];
+
+  atts.forEach((att, i) => {
+    blocks.push({ type:'text', text:'--- ATTACHMENT ' + (i+1) + ': ' + (att.name||'file') + ' ---' });
+    blocks.push(att.mediaType === 'application/pdf'
+      ? { type:'document', source:{ type:'base64', media_type:'application/pdf', data:att.data } }
+      : { type:'image',    source:{ type:'base64', media_type:att.mediaType,     data:att.data } });
+  });
+
+  if(payload.text && payload.text.trim().length > 20){
+    blocks.push({ type:'text', text:
+      '--- EMAIL BODY ---\nFrom: ' + (payload.from||'unknown') +
+      '\nSubject: ' + (payload.subject||'') + '\n\n' + payload.text });
+  }
+  return blocks;
 }
+
+const MULTI_SOURCE_NOTE = `The material above may come from more than one place: the body of an email, and one or more attachments (flyers, schedules, letters).
+
+Treat them as ONE set of facts about the same events. A date may appear only on a flyer while what to bring is only in the email, or the reverse. Combine them: each event gets the best date, time and location found anywhere, and notes drawn from every source that says something useful about it.
+
+If the same event appears in two places, produce ONE item, not two.`;
 
 async function extractFromEmailPayload(payload){
   const found = [];
   const problems = [];
+  const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
 
-  // Pass 1 -- the body text. Any model can do this.
+  // Preferred path: everything in one request, so notes can be drawn from
+  // whichever source happens to hold them.
+  if(atts.length){
+    try{
+      const blocks = emailBlocks(payload, true);
+      blocks.push({ type:'text', text: MULTI_SOURCE_NOTE });
+      blocks.push({ type:'text', text: eventPrompt() });
+      const text = await callAI(blocks, 8000, GROUNDING_EVENTS);
+      const events = parseExtractedEvents(text) || [];
+      if(events.length) return { events, problems };
+      problems.push('combined read found nothing; trying each part separately');
+    }catch(err){
+      problems.push('combined read failed (' + err.message + '); trying each part separately');
+    }
+  }
+
+  // Fallback -- read each source on its own and stitch the results together.
+  // Pass 1: the body text. Any model can do this.
   if(payload.text && payload.text.trim().length > 20){
     try{
       const text = await callAI([
@@ -1761,7 +1858,6 @@ async function extractFromEmailPayload(payload){
 
   // Pass 2 -- each attachment. Images need a vision model; PDFs only work on
   // Anthropic, and callAI reports that clearly rather than failing silently.
-  const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
   // Give the attachment pass the covering email as context. A flyer often shows
   // the date while the email body carries the detail worth noting.
   const context = (payload.text || '').slice(0, 6000);
@@ -1805,7 +1901,7 @@ async function extractFromEmailPayload(payload){
 async function extractFromRawItems(items){
   const out = [];
   const failures = [];
-  const stamp = providerLabel();
+  const stamp = aiModelName();
 
   for(let i = 0; i < items.length; i++){
     const it = items[i];
@@ -2226,6 +2322,10 @@ function renderCapture(m){
   setHeader('Add Paperwork', true);
   m.innerHTML = `
     <div style="font-size:18px;font-weight:700;margin-bottom:14px">Where is the paperwork?</div>
+    <div class="label" style="margin-top:0">What is this about? (optional)</div>
+    <input type="text" id="scanContext" placeholder="e.g. band, Olivia's dance, 3rd grade"
+      value="${esc(scanContext)}" oninput="scanContext=this.value">
+    <div class="help">If the page only shows dates, tell it what they are for. It gets noted on every event found.</div>
     <div class="card row" onclick="document.getElementById('fCam').click()">
       <span style="font-size:28px">📷</span>
       <div class="grow"><div class="title">Take a photo</div><div class="meta">Flyer in hand — snap it now</div></div></div>
@@ -2308,11 +2408,11 @@ async function handleCapture(fileList, isPdf){
   }
   const append = captureAppend && pendingEvents.length > 0;
   captureAppend = false;
-  sub('busy', {msg:'Reading the document…', hint:'Claude is finding dates, times, and deadlines'});
+  sub('busy', {msg:'Reading the document…', hint: aiWorkingHint()});
   try{
     let found = [];
     for(let i=0; i<files.length; i++){
-      if(files.length>1) sub('busy', {msg:`Reading page ${i+1} of ${files.length}…`, hint:'Claude is working out what this is'});
+      if(files.length>1) sub('busy', {msg:`Reading page ${i+1} of ${files.length}…`, hint: aiName() + ' is working out what this is'});
       const f = files[i];
       let base64, mediaType;
       if(isPdf){ base64 = await readFile(f); mediaType='application/pdf'; }
@@ -2420,7 +2520,7 @@ async function handleLinkCapture(url){
   }
   const append = captureAppend && pendingEvents.length > 0;
   captureAppend = false;
-  sub('busy', {msg:'Fetching the link…', hint:'Claude is finding dates, times, and deadlines'});
+  sub('busy', {msg:'Fetching the link…', hint: aiWorkingHint()});
   try{
     const found = await extractEventsFromUrl(url);
     if(!found.length){
@@ -2520,6 +2620,7 @@ function dismissPendingEmail(){
   toast('Skipped — these will not come back');
   pendingEvents = [];
   lastEmailProblems = [];
+  scanContext = '';
   view = {tab:'events', sub:null, data:null};
   render();
 }
@@ -2552,6 +2653,7 @@ function saveReview(){
   toast(`Tracking ${chosen.length} item${chosen.length===1?'':'s'} — tap any event to add calendar alerts`);
   pendingEvents = [];
   lastEmailProblems = [];
+  scanContext = '';
   view = {tab:'events', sub:null, data:null}; render();
 }
 
@@ -3194,7 +3296,7 @@ function renderRecipeBox(m){
   setHeader('Scan a Recipe', true);
   const n = scannedCount();
   m.innerHTML = `
-    <div class="help">Photograph a recipe from a book, card, or flyer. Pick several photos at once — FlyerSnap asks whether they are separate recipes or pages of one. Claude types them up, you check each, and they go to the Recipe app's library.</div>
+    <div class="help">Photograph a recipe from a book, card, or flyer. Pick several photos at once — FlyerSnap asks whether they are separate recipes or pages of one. ${esc(aiName())} types them up, you check each, and they go to the Recipe app's library.</div>
     <div class="formrow">
       <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
       <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
@@ -3346,14 +3448,16 @@ function renderSettings(m){
     <div class="sect">Anthropic API key</div>
     <div class="help">${S.settings.apiKey
       ? 'A key is saved on this device. Paste a new one to replace it.'
-      : 'FlyerSnap sends your photos to the Claude API to read them. Create a key at console.anthropic.com and paste it here. It is stored only in this phone\u2019s browser.'}</div>
+      : (aiProvider() === 'local'
+          ? 'Not needed while the local model is selected, but keep it here so the Anthropic fallback works when the desktop is asleep.'
+          : 'FlyerSnap sends your photos to the Claude API to read them. Create a key at console.anthropic.com and paste it here. It is stored only in this phone\u2019s browser.')}</div>
     <div class="formrow">
       <input type="password" id="apiKey" placeholder="sk-ant-...">
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
 
-    <div class="sect">AI model</div>
-    <div class="help">Which model reads your flyers and emails. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
+    <div class="sect">Gordon</div>
+    <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
     <div style="margin-bottom:10px">
       <span class="chip ${aiProvider()==='anthropic'?'on':''}" onclick="setAiProvider('anthropic')">☁️ Anthropic</span>
       <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">🏠 Local model</span>
@@ -3439,7 +3543,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v7.0 · richer notes from email context</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v7.4 · meet Gordon</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -3582,7 +3686,7 @@ async function compareProviders(file){
     const { base64, mediaType } = await readImageDownscaled(file);
     const blocks = () => ([
       {type:'image', source:{type:'base64', media_type:mediaType, data:base64}},
-      {type:'text', text:eventPrompt()}]);
+      ...(contextBlock()?[contextBlock()]:[]), {type:'text', text:eventPrompt()}]);
 
     S.settings.aiFallback = false;   // never let one provider answer for the other
 
