@@ -1602,9 +1602,29 @@ test('content blocks translate to the OpenAI shape', () => {
   assert.strictEqual(parts[1].text, 'Read this');
 });
 
-test('unknown block types are dropped rather than sent malformed', () => {
-  const parts = blocksToOpenAI([{ type:'document', source:{} }, { type:'text', text:'hi' }]);
-  assert.strictEqual(parts.length, 1);
+test('a PDF block is refused, not silently dropped', () => {
+  // Regression: this used to drop the document and send the prompt alone, so the
+  // model answered about a file it never received.
+  let msg = '';
+  try { blocksToOpenAI([{ type:'document', source:{} }, { type:'text', text:'hi' }]); }
+  catch(e){ msg = e.message; }
+  assert.ok(/UNSUPPORTED_BLOCK:document/.test(msg), 'refuses PDFs loudly');
+});
+
+test('a prompt with no text at all is refused', () => {
+  let msg = '';
+  try { blocksToOpenAI([{ type:'image', source:{type:'base64', media_type:'image/jpeg', data:'A'} }]); }
+  catch(e){ msg = e.message; }
+  assert.ok(/no-prompt/.test(msg), 'never send an image with no instruction');
+});
+
+test('images plus text still translate cleanly', () => {
+  const parts = blocksToOpenAI([
+    { type:'image', source:{type:'base64', media_type:'image/png', data:'B'} },
+    { type:'text', text:'read it' }
+  ]);
+  assert.strictEqual(parts.length, 2);
+  assert.strictEqual(parts[0].type, 'image_url');
 });
 
 test('the local model refuses to run without a URL', async () => {
