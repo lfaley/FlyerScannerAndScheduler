@@ -206,7 +206,7 @@ let loadError = null;
 let storageWarned = false;
 let S = load();
 
-function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
+function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
   redemptions:[], lists:[], listItems:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
@@ -608,11 +608,16 @@ async function callAI(contentBlocks, maxTokens, system){
       if(S.settings.aiFallback){
         toast(unsupported ? 'PDFs need Anthropic — using it for this one'
                           : 'Local model unavailable — using Anthropic');
+        logProblem('Local model', unsupported
+          ? 'Fell back to Anthropic: this content type is not supported locally'
+          : 'Fell back to Anthropic: ' + err.message, aiModelName());
         return await callClaude(contentBlocks, maxTokens, system);
       }
       if(unsupported){
+        logProblem('Local model', 'Cannot read PDFs or fetched links', aiModelName());
         throw new Error('The local model cannot read PDFs or fetched links — only photos and text.\n\nEither photograph the page instead, or turn on "Fall back to Anthropic" in Settings.');
       }
+      logProblem('Local model', err.message, aiModelName());
       throw new Error('Local model unavailable: ' + err.message +
         '\n\nIs the desktop awake and Tailscale connected?');
     }
@@ -1207,7 +1212,7 @@ function render(){
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
     shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue,
-    selfTest:renderSelfTest, compare:renderCompare};
+    problems:renderProblems,     selfTest:renderSelfTest, compare:renderCompare};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   const changedScreen = key !== lastViewKey;
@@ -1632,7 +1637,90 @@ async function saveSenders(list){
 }
 
 let watchedSenders = null;
-let lastEmailProblems = [];    // cached copy for the settings UI
+let lastEmailProblems = [];
+
+// ---------------------------------------------------------------------------
+// Problem log. Errors used to appear in a toast or an alert and then vanish, so
+// a pattern ("this sender always fails") was impossible to notice. Every
+// problem now lands here: persisted, grouped by how often it has happened, and
+// dismissable once dealt with. A backlog, not a stack trace dump.
+// ---------------------------------------------------------------------------
+function logProblem(where, message, detail){
+  try{
+    if(!S.problems) S.problems = [];
+    const msg = String(message || 'Unknown problem').slice(0, 300);
+    // Group repeats: numbers vary between occurrences, the shape does not.
+    const key = where + '|' + msg.replace(/\d+/g, 'N').slice(0, 120);
+    const now = new Date().toISOString();
+    const hit = S.problems.find(p => p.key === key && !p.done);
+    if(hit){
+      hit.count++; hit.last = now;
+      if(detail) hit.detail = String(detail).slice(0, 400);
+    } else {
+      S.problems.unshift({ id: uid(), key, where, message: msg,
+        detail: detail ? String(detail).slice(0, 400) : null,
+        first: now, last: now, count: 1, done: false });
+    }
+    if(S.problems.length > 60) S.problems = S.problems.filter(p => !p.done).slice(0, 60);
+    save();
+  }catch(e){ /* logging must never break the thing it is logging about */ }
+}
+
+function openProblems(){ sub('problems'); }
+function activeProblems(){ return (S.problems||[]).filter(p => !p.done); }
+
+function resolveProblem(id){
+  const p = (S.problems||[]).find(x => x.id === id);
+  if(p){ p.done = true; p.resolved = new Date().toISOString(); save(); }
+  render();
+}
+function reopenProblem(id){
+  const p = (S.problems||[]).find(x => x.id === id);
+  if(p){ p.done = false; delete p.resolved; save(); }
+  render();
+}
+function clearResolvedProblems(){
+  S.problems = (S.problems||[]).filter(p => !p.done);
+  save(); render();
+}
+
+function renderProblems(m){
+  setHeader('Problem Log', true);
+  const all = S.problems || [];
+  const open = all.filter(p => !p.done);
+  const done = all.filter(p => p.done);
+
+  if(!all.length){
+    m.innerHTML = `<div class="empty"><div class="et">Nothing has gone wrong</div>
+      <div class="eb">When something fails — an email that will not read, a model that is offline — it is recorded here so you can come back to it.</div></div>`;
+    return;
+  }
+
+  const row = (p) => `<div class="card" style="border-left:5px solid ${p.done?'var(--line)':'var(--amber)'}">
+    <div class="row">
+      <div class="grow">
+        <div style="font-weight:700;font-size:var(--t-sm)">${esc(p.message)}</div>
+        <div class="meta" style="font-size:var(--t-cap)">
+          ${esc(p.where)}${p.count>1?' · happened '+p.count+' times':''} · last ${esc(String(p.last).slice(0,10))}
+        </div>
+        ${p.detail?`<div class="meta" style="font-size:var(--t-cap);opacity:.75;word-break:break-word">${esc(p.detail)}</div>`:''}
+      </div>
+      <button class="linkbtn" onclick="${p.done?"reopenProblem('"+p.id+"')":"resolveProblem('"+p.id+"')"}">${p.done?'Reopen':'Done'}</button>
+    </div></div>`;
+
+  let html = '';
+  if(open.length){
+    html += `<div class="help">${open.length} thing${open.length===1?'':'s'} to look at. Repeats are grouped, so a count means it keeps happening.</div>`;
+    html += open.map(row).join('');
+  } else {
+    html += `<div class="help">Nothing outstanding.</div>`;
+  }
+  if(done.length){
+    html += `<div class="sect">Resolved (${done.length})</div>` + done.slice(0,10).map(row).join('');
+    html += `<button class="btn alt" onclick="clearResolvedProblems()">Clear resolved</button>`;
+  }
+  m.innerHTML = html;
+}
 
 async function openSenderManager(){
   if(!watcherConfigured()){ alert('Connect the Gmail watcher first.'); return; }
@@ -1918,10 +2006,18 @@ async function extractFromRawItems(items){
         { msgId: it.msgId, from: payload.from || it.from || null,
           source: 'Email - ' + (payload.subject || it.subject || ''),
           aiSource: stamp })));
-      problems.forEach(p => failures.push(label + ' — ' + p));
-      if(!events.length && !problems.length) failures.push(label + ' — no dates found');
+      problems.forEach(p => {
+        failures.push(label + ' — ' + p);
+        logProblem('Email: ' + (payload.from || it.from || 'unknown'), p, label);
+      });
+      if(!events.length && !problems.length){
+        failures.push(label + ' — no dates found');
+        logProblem('Email: ' + (payload.from || it.from || 'unknown'),
+          'No dates found in this email', label);
+      }
     }catch(err){
       failures.push(label + ' — ' + err.message);
+      logProblem('Email: ' + (it.from || 'unknown'), err.message, label);
     }
   }
 
@@ -3393,7 +3489,7 @@ async function runRecipeScan(list, mode){
         const im = await readImageDownscaled(list[i]);
         const r = await extractRecipeFromImages([im]);
         recipeBatch.pending.push(toRecipeForm(r));
-      }catch(e){ /* skip a photo that is not a recipe */ }
+      }catch(e){ logProblem('Recipe scan', 'A photo could not be read', e.message); }
     }
     if(!recipeBatch.pending.length){
       recipeBatch = null;
@@ -3404,6 +3500,7 @@ async function runRecipeScan(list, mode){
     nextBatchRecipe();
   }catch(err){
     recipeBatch = null;
+    logProblem('Scanning', err.message, scanContext || null);
     alert('Scan failed: '+err.message);
     sub('recipeBox');
   }
@@ -3455,6 +3552,10 @@ function renderSettings(m){
       <input type="password" id="apiKey" placeholder="sk-ant-...">
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
+
+    ${activeProblems().length ? `<button class="btn alt" style="border-color:var(--amber);color:var(--amber)" onclick="openProblems()">
+      ⚠️ ${activeProblems().length} problem${activeProblems().length===1?'':'s'} to look at</button>` :
+      `<button class="btn alt" onclick="openProblems()">Problem log</button>`}
 
     <div class="sect">Gordon</div>
     <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
@@ -3543,7 +3644,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v7.9 · deploy script survives PowerShell 5.1</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.0 · problem log</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -3951,6 +4052,20 @@ maybeCheckEmail();
   S.settings.lastPrune = todayISO();
   save();
 })();
+
+// Uncaught errors and rejected promises were the one class of failure nothing
+// recorded -- they went to a console nobody can read on a phone. Now they land
+// in the same log as everything else.
+window.addEventListener('error', ev => {
+  logProblem('App', ev.message || 'Unexpected error',
+    (ev.filename ? String(ev.filename).split('/').pop() : '') +
+    (ev.lineno ? ':' + ev.lineno : ''));
+});
+window.addEventListener('unhandledrejection', ev => {
+  const r = ev.reason;
+  logProblem('App', 'Background task did not finish',
+    r && r.message ? r.message : String(r));
+});
 
 document.addEventListener('visibilitychange', ()=>{
   if(document.hidden) return;

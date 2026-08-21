@@ -2064,6 +2064,157 @@ test('context is cleared once a review is saved', () => {
   assert.strictEqual(scanContext, '', 'does not leak into the next scan');
 });
 
+console.log('\nProblem log');
+
+test('a problem is recorded and survives a reload', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Email: austin@j31.com', 'Attachment could not be read', 'Hell Week');
+  save();
+  S = load();
+  assert.strictEqual(activeProblems().length, 1);
+  assert.strictEqual(S.problems[0].where, 'Email: austin@j31.com');
+  assert.strictEqual(S.problems[0].count, 1);
+});
+
+test('repeats are grouped with a count, not piled up', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Local model', 'timed out after 3 minutes', 'qwen3-vl:8b');
+  logProblem('Local model', 'timed out after 3 minutes', 'qwen3-vl:8b');
+  logProblem('Local model', 'timed out after 3 minutes', 'qwen3-vl:8b');
+  assert.strictEqual(activeProblems().length, 1, 'one entry, not three');
+  assert.strictEqual(activeProblems()[0].count, 3, 'counted');
+});
+
+test('messages differing only by numbers group together', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Local model', 'model error 404: not found');
+  logProblem('Local model', 'model error 500: not found');
+  assert.strictEqual(activeProblems().length, 1,
+    'same shape of problem, grouped despite different codes');
+});
+
+test('genuinely different problems stay separate', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Local model', 'timed out');
+  logProblem('Scanning', 'that photo does not look like a recipe');
+  assert.strictEqual(activeProblems().length, 2);
+});
+
+test('resolving removes it from the backlog but keeps the record', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Email: x@y.com', 'No dates found in this email');
+  const id = S.problems[0].id;
+  resolveProblem(id);
+  assert.strictEqual(activeProblems().length, 0, 'off the backlog');
+  assert.strictEqual(S.problems.length, 1, 'still on record');
+  reopenProblem(id);
+  assert.strictEqual(activeProblems().length, 1, 'can be reopened');
+});
+
+test('a resolved problem recurring opens a new entry rather than reviving the old', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Local model', 'offline');
+  resolveProblem(S.problems[0].id);
+  logProblem('Local model', 'offline');
+  assert.strictEqual(activeProblems().length, 1, 'the new occurrence is visible');
+  assert.strictEqual(S.problems.length, 2, 'history preserved');
+});
+
+test('the log never breaks the thing it is logging about', () => {
+  boot(GOOD);
+  S.problems = null;                       // corrupt on purpose
+  logProblem('Anywhere', 'something failed');
+  assert.ok(true, 'did not throw');
+  logProblem('Anywhere', null);
+  logProblem(undefined, undefined);
+  assert.ok(true, 'survives rubbish input');
+});
+
+test('the backlog does not grow without bound', () => {
+  boot(GOOD);
+  S.problems = [];
+  for(let i = 0; i < 80; i++) logProblem('Place ' + i, 'distinct problem ' + String.fromCharCode(65+i%26) + i);
+  assert.ok(S.problems.length <= 60, 'capped, got ' + S.problems.length);
+});
+
+test('the problem screen renders in every state', () => {
+  boot(GOOD);
+  S.problems = [];
+  let m = { innerHTML:'' };
+  renderProblems(m);
+  assert.ok(/Nothing has gone wrong/.test(m.innerHTML), 'empty state');
+
+  logProblem('Email: a@b.com', 'Attachment could not be read', 'Hell Week');
+  m = { innerHTML:'' };
+  renderProblems(m);
+  assert.ok(/Attachment could not be read/.test(m.innerHTML), 'shows the problem');
+
+  resolveProblem(S.problems[0].id);
+  m = { innerHTML:'' };
+  renderProblems(m);
+  assert.ok(/Resolved/.test(m.innerHTML), 'resolved section');
+});
+
+console.log('\nProblem log');
+
+test('a problem is recorded so it can be dealt with later', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Email', 'attachment could not be read', 'schedule.png');
+  assert.strictEqual(activeProblems().length, 1);
+  assert.strictEqual(S.problems[0].where, 'Email');
+  assert.strictEqual(S.problems[0].detail, 'schedule.png');
+  assert.strictEqual(S.problems[0].count, 1);
+});
+
+test('the same problem shape groups instead of flooding the log', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Email', 'email 3 could not be read');
+  logProblem('Email', 'email 7 could not be read');
+  logProblem('Email', 'email 12 could not be read');
+  assert.strictEqual(S.problems.length, 1, 'numbers vary, the shape does not');
+  assert.strictEqual(S.problems[0].count, 3, 'counted instead of repeated');
+});
+
+test('genuinely different problems stay separate', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Email', 'attachment could not be read');
+  logProblem('Model', 'local model offline');
+  assert.strictEqual(S.problems.length, 2);
+});
+
+test('problems survive a reload', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Model', 'local model offline');
+  save();
+  S = load();
+  assert.strictEqual(activeProblems().length, 1, 'still there after restart');
+});
+
+test('logging never throws, even on junk input', () => {
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Odd', null);
+  logProblem(undefined, { toString(){ throw new Error('hostile'); } });
+  assert.ok(true, 'logging must not break the thing it is logging about');
+});
+
+test('the log is capped so it cannot grow without limit', () => {
+  boot(GOOD);
+  S.problems = [];
+  for(let i = 0; i < 200; i++) logProblem('Bulk', 'problem type ' + String.fromCharCode(65 + (i % 26)) + i);
+  assert.ok(S.problems.length <= 60, 'capped, got ' + S.problems.length);
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
