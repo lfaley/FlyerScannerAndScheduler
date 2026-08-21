@@ -140,9 +140,30 @@ pass. Small, reversible, answers "does this work at all".
 **Stage 1 — pure logic.** `format.js`, `events.js` (matching/filters),
 `ai/prompts.js`. No DOM, no `S` mutation. Highest confidence, best payoff.
 
-**Stage 2 — state.** `state.js` with load/save/migrate/snapshot. Touches the
-most dangerous code, so it goes early enough to get plenty of soak time and late
-enough that the pattern is proven.
+**Stage 2 — state.** PARTIALLY DONE. `js/migrate.js` is extracted: it is pure
+(takes a save, returns it upgraded) and is the single most consequential
+function in the app, so isolating and testing it was the highest-value part.
+
+**The rest of state is blocked on a real constraint.** `S` is *reassigned*:
+
+```js
+let S = load();
+S = Object.assign(blank(), parsed);   // on restore
+```
+
+ES module imports are read-only bindings -- an importing module cannot reassign
+one. So `state.js` cannot simply `export let S`. Options, in preference order:
+
+1. **Export a container:** `export const store = { S: null }`, and everything
+   reads `store.S`. One mechanical change per reference (~400 sites), no
+   behaviour change.
+2. **Accessors:** `getState()` / `replaceState()`. Cleaner, but every read
+   becomes a call, which is a bigger diff.
+3. **Leave `S` in the shell.** `state.js` exports only pure helpers
+   (`blank`, `migrate`, validation) and the shell keeps ownership.
+
+Recommendation: **(3) for now, (1) later** if it stops being comfortable. There
+is no urgency -- the dangerous logic is already isolated and tested.
 
 **Stage 3 — clients as objects.** `ai/client.js`, `watcher.js`, `problems.js`.
 These are the genuine objects: state plus behaviour, and each has a natural

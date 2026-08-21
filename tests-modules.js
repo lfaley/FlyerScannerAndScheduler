@@ -84,6 +84,49 @@ module.exports = async function runModuleTests(test){
       'handlers with no definition (a tap on these does nothing): ' + missing.join(', '));
   });
 
+  console.log('\nMigration module');
+
+  const mig = await import('./js/migrate.js');
+
+  test('migrate is pure: same object back, upgraded in place', () => {
+    const save = { schemaVersion: 3, events: [], kids: [] };
+    const out = mig.migrate(save, 3);
+    assert.strictEqual(out, save, 'returns the object it was given');
+    assert.strictEqual(out.schemaVersion, mig.SCHEMA_VERSION);
+  });
+
+  test('an already-current save is stamped, not re-migrated', () => {
+    const save = { schemaVersion: mig.SCHEMA_VERSION, events: [{ id:'e1', unread: true }] };
+    mig.migrate(save, mig.SCHEMA_VERSION);
+    assert.strictEqual(save.events[0].unread, true, 'existing data untouched');
+  });
+
+  test('a v1 save reaches the current version without losing rows', () => {
+    const save = { schemaVersion: 1,
+      events: [{ id:'e1', title:'Recital', date:'2026-12-01', kidId:'k1' }],
+      kids: [{ id:'k1', name:'Olivia' }] };
+    mig.migrate(save, 1);
+    assert.strictEqual(save.schemaVersion, mig.SCHEMA_VERSION);
+    assert.strictEqual(save.events.length, 1, 'no event dropped');
+    assert.strictEqual(save.kids.length, 1, 'no person dropped');
+  });
+
+  test('running the same migration twice changes nothing the second time', () => {
+    const a = { schemaVersion: 1, events: [{ id:'e1', kidId:'k1' }], kids: [{ id:'k1', name:'O' }] };
+    mig.migrate(a, 1);
+    const once = JSON.stringify(a);
+    mig.migrate(a, a.schemaVersion);
+    assert.strictEqual(JSON.stringify(a), once, 'migration is idempotent');
+  });
+
+  test('SCHEMA_VERSION has a migration block for every step', () => {
+    const src = fs.readFileSync('js/migrate.js', 'utf8');
+    for(let v = 2; v <= mig.SCHEMA_VERSION; v++){
+      assert.ok(src.includes('from < ' + v),
+        'no migration guard for version ' + v + ' -- old saves would be stamped current without upgrading');
+    }
+  });
+
   console.log('\nService worker caches every module');
 
   test('every js/ module index.html imports is in the service worker shell', () => {

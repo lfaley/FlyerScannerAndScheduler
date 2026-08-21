@@ -182,7 +182,19 @@
 <input type="file" id="fCompare" accept="image/*" hidden>
 <input type="file" id="fImport" accept="application/json" hidden>
 
-<script type="module">import { SECRETARY_PERSONA, GROUNDING_EVENTS, GROUNDING_RECIPE, MULTI_SOURCE_NOTE } from './js/prompts.js';
+<script type="module">import { SCHEMA_VERSION, migrate } from './js/migrate.js';
+
+let loadError = null;
+let storageWarned = false;
+let S = load();
+
+function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
+  redemptions:[], lists:[], listItems:[],
+  settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
+    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
+    aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true },
+  schemaVersion: SCHEMA_VERSION }; }
+import { SECRETARY_PERSONA, GROUNDING_EVENTS, GROUNDING_RECIPE, MULTI_SOURCE_NOTE } from './js/prompts.js';
 import { normTitle, titleSimilarity, looksDuplicate, timeBucket, pairKey } from './js/matching.js';
 import { todayISO, daysUntil, fmt12, fmtTimeRange, esc } from './js/format.js';
 'use strict';
@@ -198,60 +210,6 @@ const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const SLOTS = ['breakfast','lunch','snack','dinner','dessert'];
 
-// Bump when the saved shape changes, and add a migration step below.
-// v1 = everything up to and including v2.1 (implicit; no version field was stored).
-// v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
-// NOTE: must be declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 4;
-
-let loadError = null;
-let storageWarned = false;
-let S = load();
-
-function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
-  redemptions:[], lists:[], listItems:[],
-  settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
-    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
-    aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true },
-  schemaVersion: SCHEMA_VERSION }; }
-
-function migrate(s, fromVersion){
-  const from = Number(fromVersion) || 1;
-  if(from >= SCHEMA_VERSION){ s.schemaVersion = SCHEMA_VERSION; return s; }
-
-  if(from < 2){
-    // FlyerSnap no longer owns recipes or meal plans — the recipe app does.
-    // Keep the rows (harmless, and a user may want them exported) but stop
-    // treating them as live data. Nothing is deleted here on purpose: a
-    // migration that destroys data is the thing we most want to avoid.
-    s.legacyRecipes = Array.isArray(s.recipes) ? s.recipes : [];
-    s.legacyMeals   = Array.isArray(s.meals)   ? s.meals   : [];
-    delete s.recipes;
-    delete s.meals;
-  }
-
-  if(from < 3){
-    // People can now be adults, and events can be tagged to several people.
-    // Existing kids become type 'kid'; existing single kidId becomes a
-    // one-entry personIds list. kidId is preserved so the star/chore system,
-    // which is deliberately kids-only, keeps working untouched.
-    (s.kids || []).forEach(k => { if(!k.type) k.type = 'kid'; });
-    (s.events || []).forEach(e => {
-      if(!Array.isArray(e.personIds)){
-        e.personIds = e.kidId ? [e.kidId] : [];
-      }
-    });
-  }
-
-  if(from < 4){
-    // Events can now be flagged unread. Everything already in the app counts as
-    // seen, so nobody opens the app to a wall of "new" items.
-    (s.events || []).forEach(e => { if(e.unread === undefined) e.unread = false; });
-  }
-
-  s.schemaVersion = SCHEMA_VERSION;
-  return s;
-}
 function load(){
   const base = blank();
   let raw = null;
@@ -3551,7 +3509,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.3 · pure logic modules (stage 1)</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.4 · migration isolated (stage 2)</div>`;
 }
 function manualPrune(){
   const n = pruneData();
