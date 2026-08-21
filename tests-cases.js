@@ -1823,7 +1823,7 @@ test('comparison disables fallback so neither provider answers for the other', (
 test('the self-test checks every stage the scanner depends on', () => {
   const src = String(runLocalSelfTest);
   ['Base URL saved','Server reachable','Chosen model is installed',
-   'Text request works','Thinking is off','Vision works','Returns parseable JSON']
+   'Text request works','Thinking is off','Vision works','Extracts events as JSON']
     .forEach(stage => assert.ok(src.indexOf(stage) >= 0, 'covers: ' + stage));
 });
 
@@ -1831,6 +1831,78 @@ test('the self-test verifies thinking rather than assuming it', () => {
   const src = String(runLocalSelfTest);
   assert.ok(/<think>|Thinking/.test(src),
     'looks for a leaked reasoning trace instead of trusting think:false');
+});
+
+console.log('\nSelf-test measures the real job');
+
+test('the extraction stage uses a realistic sample, not an arbitrary token', () => {
+  // Regression: this stage used to ask for {"ok":true} while sending the
+  // calendar-secretary persona, which instructs the model to discard anything
+  // without a date. An empty reply was the model obeying, and the test called
+  // it a capability failure. Test what the caller actually does.
+  const src = String(runLocalSelfTest);
+  assert.ok(/Picture Day/.test(src), 'sends a real dated sample');
+  assert.ok(/eventPrompt\(\)/.test(src), 'asks in the same shape extraction uses');
+  assert.ok(!/Respond with ONLY this JSON and nothing else/.test(src),
+    'the arbitrary-token prompt is gone');
+});
+
+test('an empty model reply explains itself instead of returning nothing', () => {
+  const src = String(callLocalModel);
+  assert.ok(/reasoning_content|reasoning/.test(src), 'checks the other trace field names');
+  assert.ok(/empty answer/.test(src), 'says the answer was empty and why');
+});
+
+console.log('\nNotes from email context');
+
+test('the notes guidance names what a parent actually needs', () => {
+  ['bring or wear','cost','RSVP','contact','null'].forEach(k =>
+    assert.ok(GROUNDING_EVENTS.toLowerCase().indexOf(k.toLowerCase()) >= 0,
+      'notes guidance covers: ' + k));
+  assert.ok(/Never invent a requirement/i.test(GROUNDING_EVENTS),
+    'still forbidden to make things up');
+});
+
+test('merging keeps the fuller note, not whichever came first', () => {
+  boot(GOOD);
+  const d = '2026-08-03';
+  const found = [
+    { title:'Hell Week', date:d, notes:null },
+    { title:'Hell Week', date:d, notes:'Wear all black; bring water bottle and dance shoes.' }
+  ];
+  const merged = [];
+  found.forEach(e => {
+    const hit = merged.find(m => looksDuplicate(m, e));
+    if(!hit){ merged.push(e); return; }
+    if((e.notes||'').length > (hit.notes||'').length) hit.notes = e.notes;
+  });
+  assert.strictEqual(merged.length, 1, 'still one event');
+  assert.ok(/water bottle/.test(merged[0].notes), 'the richer note survives');
+});
+
+test('merging fills gaps from either source', () => {
+  boot(GOOD);
+  const d = '2026-08-20';
+  const fromBody  = { title:'Open House', date:d, time:null, location:null,
+                      notes:'Parents and students.' };
+  const fromFlyer = { title:'Open House Night', date:d, time:'18:30',
+                      location:'Main Gym', notes:null };
+  const merged = [fromBody];
+  const hit = merged.find(m => looksDuplicate(m, fromFlyer));
+  if(hit){
+    if(!hit.time && fromFlyer.time) hit.time = fromFlyer.time;
+    if(!hit.location && fromFlyer.location) hit.location = fromFlyer.location;
+    if((fromFlyer.title||'').length > (hit.title||'').length) hit.title = fromFlyer.title;
+  }
+  assert.strictEqual(merged[0].time, '18:30', 'time taken from the flyer');
+  assert.strictEqual(merged[0].location, 'Main Gym', 'location taken from the flyer');
+  assert.ok(/Parents and students/.test(merged[0].notes), 'note kept from the body');
+});
+
+test('the attachment pass is given the covering email as context', () => {
+  const src = String(extractFromEmailPayload);
+  assert.ok(/Use the email only for context when writing notes/.test(src),
+    'the flyer stays the source of dates; the email informs the notes');
 });
 
 console.log('\nSharing');

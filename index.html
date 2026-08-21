@@ -550,7 +550,13 @@ const GROUNDING_EVENTS = `Working from the material provided, produce the calend
 - Times are 24-hour HH:MM. Record both a start and an end when a range is given ("6:00-8:30 PM" -> time 18:00, endTime 20:30). A single time has a null endTime.
 - SCHEDULE GRIDS: when rows are time slots and columns are days, every non-empty cell is its own separate item. Its date comes from the column, its time from the row label, unless the cell states its own time -- which always wins. One column often holds several sessions; record every one. Rows labelled Lunch, Dinner, or Break are not items.
 - Keep the cell's own label as the title, including a name in parentheses, e.g. "Mini M.T. (Austin)".
-- notes: one short factual sentence only if the source adds something actionable (what to bring, where to park). Otherwise null.`;
+- notes: this is where a good secretary earns their keep. Capture what the parent will actually need to know on the day, drawn from anywhere in the source -- the item itself, the surrounding paragraphs, or a covering email.
+
+  Include when stated: what to bring or wear; cost, fee, or payment deadline; where exactly to go (door, room, building); whether to RSVP or sign up and by when; who it is for (which grade, which team, parents or students only); who to contact; what to do beforehand; and any consequence of missing it.
+
+  Write it as plain factual phrases, semicolon-separated, in the source's own words where possible. Two or three sentences at most. Example: "Wear all black, hair up; bring water bottle, healthy snacks and all dance shoes; returning parents bring the company handbook binder."
+
+  Do NOT pad. If the source says nothing beyond the date and title, notes is null. Never invent a requirement that is not stated -- a made-up instruction is worse than no note at all.`;
 
 const GROUNDING_RECIPE = `Working from the photograph(s), transcribe the recipe exactly as written.
 
@@ -705,8 +711,13 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   // Some builds put the reasoning trace in a separate field; if content is empty
   // but a trace exists, the model spent everything thinking.
   let out = msg.content || '';
-  if(!out && msg.thinking){
-    throw new Error('the model produced only reasoning and no answer — try raising max_tokens or a non-thinking model');
+  const trace = msg.thinking || msg.reasoning || msg.reasoning_content || '';
+  if(!out && trace){
+    throw new Error('the model produced only reasoning and no answer — raise max_tokens, or use a model without thinking');
+  }
+  if(!out){
+    throw new Error('the model returned an empty answer (finish_reason: ' +
+      (choice.finish_reason || 'unknown') + ')');
   }
   if(choice.finish_reason === 'length'){
     console.log('local model response hit the token limit; output may be truncated');
@@ -1751,13 +1762,24 @@ async function extractFromEmailPayload(payload){
   // Pass 2 -- each attachment. Images need a vision model; PDFs only work on
   // Anthropic, and callAI reports that clearly rather than failing silently.
   const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+  // Give the attachment pass the covering email as context. A flyer often shows
+  // the date while the email body carries the detail worth noting.
+  const context = (payload.text || '').slice(0, 6000);
   for(const att of atts){
     const isPdf = att.mediaType === 'application/pdf';
     const block = isPdf
       ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:att.data}}
       : {type:'image', source:{type:'base64', media_type:att.mediaType, data:att.data}};
     try{
-      const text = await callAI([block, {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS);
+      const blocks = [block];
+      if(context.trim().length > 40){
+        blocks.push({type:'text', text:
+          'This was attached to an email from ' + (payload.from||'unknown') +
+          ', subject "' + (payload.subject||'') + '". The email said:\n\n' + context +
+          '\n\nExtract from the ATTACHMENT above. Use the email only for context when writing notes.'});
+      }
+      blocks.push({type:'text', text:eventPrompt()});
+      const text = await callAI(blocks, 8000, GROUNDING_EVENTS);
       (parseExtractedEvents(text)||[]).forEach(e => found.push(e));
     }catch(err){
       problems.push((att.name || 'attachment') + ': ' + err.message);
@@ -1765,9 +1787,17 @@ async function extractFromEmailPayload(payload){
   }
 
   // Merge: the same date can appear in both the body and the flyer. One event.
+  // Merge duplicates, keeping the fullest version of each field. The body and
+  // the flyer often each know something the other does not.
   const merged = [];
   found.forEach(e => {
-    if(!merged.some(m => looksDuplicate(m, e))) merged.push(e);
+    const hit = merged.find(m => looksDuplicate(m, e));
+    if(!hit){ merged.push(e); return; }
+    if((e.notes||'').length > (hit.notes||'').length) hit.notes = e.notes;
+    if(!hit.time && e.time) hit.time = e.time;
+    if(!hit.endTime && e.endTime) hit.endTime = e.endTime;
+    if(!hit.location && e.location) hit.location = e.location;
+    if((e.title||'').length > (hit.title||'').length) hit.title = e.title;
   });
   return { events: merged, problems };
 }
@@ -3409,7 +3439,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.8 · self-test and provider comparison</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v7.0 · richer notes from email context</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -3501,15 +3531,25 @@ async function runLocalSelfTest(){
   }
 
   // Stage 6 -- strict JSON, which every extraction depends on.
-  sub('busy', {msg:'Testing JSON output…', hint:''});
+  // Exercise the real job: a scrap of text with a date in it, asked for in the
+  // exact shape extraction uses. The earlier version of this stage asked for an
+  // arbitrary {"ok":true} while sending the calendar-secretary persona, which
+  // told the model to discard anything without a date -- so an empty reply was
+  // the model behaving correctly, and the test was simply wrong.
+  sub('busy', {msg:'Testing extraction…', hint:'a small sample with one date'});
   try{
+    const sample = 'Reminder: Picture Day is on Friday, September 11, 2026 at 9:00 AM in the gym.';
     const out = await callLocalModel(
-      [{type:'text', text:'Respond with ONLY this JSON and nothing else: {"ok":true}'}], 200);
+      [{type:'text', text:sample}, {type:'text', text:eventPrompt()}], 2000, GROUNDING_EVENTS);
     let parsed = null;
     try{ parsed = JSON.parse(out); }catch(e){}
-    add('Returns parseable JSON', !!parsed, parsed ? 'parsed cleanly' : JSON.stringify(out).slice(0,100));
+    const arr = Array.isArray(parsed) ? parsed : (parsed && parsed.events);
+    const gotOne = Array.isArray(arr) && arr.length >= 1 && arr[0] && arr[0].date;
+    add('Extracts events as JSON', !!gotOne,
+      gotOne ? (arr.length + ' event: ' + (arr[0].title||'') + ' ' + arr[0].date)
+             : ('could not parse: ' + JSON.stringify(out).slice(0,120)));
   }catch(err){
-    add('Returns parseable JSON', false, err.message);
+    add('Extracts events as JSON', false, err.message);
   }
 
   sub('selfTest');
