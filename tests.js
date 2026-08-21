@@ -45,9 +45,27 @@ const box = {
 box.globalThis = box;
 vm.createContext(box);
 
+// Stand in for the ES import at the top of index.html's module. Loaded from the
+// real js/format.js source so the sandbox cannot drift from what ships.
+const fmtSrc = fs.readFileSync(__dirname + '/js/format.js', 'utf8')
+  .replace(/^export\s+/gm, '');
+vm.runInContext(fmtSrc, box, { filename: 'js/format.js' });
+
 const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
-const app = html.split('<script>')[1].split('</script>')[0]
-  .split('// ---------- File input wiring ----------')[0];
+
+// index.html's script is an ES module now. The sandbox runs plain script, so
+// strip the import line and inject the imported functions directly -- they come
+// from js/format.js, which tests-modules.js covers on its own.
+const openTag = html.indexOf('<script type="module">') >= 0
+  ? '<script type="module">' : '<script>';
+let app = html.split(openTag)[1].split('</script>')[0]
+  .split('// ---------- File input wiring ----------')[0]
+  .replace(/^import\s+\{[^}]*\}\s+from\s+'[^']*';\s*$/m, '');
+
+// The bridge assigns to window, which the sandbox does not need and which would
+// fail on names trimmed off with the file-input wiring above.
+app = app.split('// Bridge for inline handlers.')[0]
+         .replace(/Object\.assign\(window,\s*\{[\s\S]*$/, '');
 
 vm.runInContext(app, box, { filename: 'index.html' });
 vm.runInContext(fs.readFileSync(__dirname + '/tests-cases.js', 'utf8'), box,

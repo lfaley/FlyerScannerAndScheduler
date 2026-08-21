@@ -182,7 +182,7 @@
 <input type="file" id="fCompare" accept="image/*" hidden>
 <input type="file" id="fImport" accept="application/json" hidden>
 
-<script>
+<script type="module">import { todayISO, daysUntil, fmt12, fmtTimeRange, esc } from './js/format.js';
 'use strict';
 // ============================================================
 // FlyerSnap PWA — single file, zero dependencies.
@@ -458,12 +458,9 @@ function startFresh(){
   save(); render();
 }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,9); }
-function todayISO(){ const d=new Date(); return iso(d); }
 function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function parseDate(s){ const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); }
 function friendly(s){ const d=parseDate(s); return DOW[d.getDay()]+', '+MONTHS[d.getMonth()]+' '+d.getDate(); }
-function daysUntil(s){ const t=new Date(); t.setHours(0,0,0,0); return Math.round((parseDate(s)-t)/864e5); }
-function esc(x){ return String(x??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function kidById(id){ return S.kids.find(k=>k.id===id && !k.deleted); }
 function personById(id){ return S.kids.find(p=>p.id===id && !p.deleted); }
 function allPeople(){ return S.kids.filter(p=>!p.deleted); }
@@ -938,17 +935,6 @@ function alertPlan(kind, evt){
   return { alarms: usable.slice(0,2), extras: S.settings.extraReminders ? usable.slice(2) : [] };
 }
 
-function fmt12(t){
-  if(!t || !/^\d{1,2}:\d{2}$/.test(t)) return t || '';
-  let [h, m] = t.split(':').map(Number);
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  h = h % 12; if(h === 0) h = 12;
-  return h + ':' + String(m).padStart(2,'0') + ' ' + ampm;
-}
-function fmtTimeRange(e){
-  if(!e.time) return '';
-  return e.endTime ? fmt12(e.time) + '–' + fmt12(e.endTime) : fmt12(e.time);
-}
 function eventTitle(evt){
   const kid = evt.kidId ? kidById(evt.kidId) : null;
   return (evt.kind==='deadline'?'\u23f0 ':'') + (kid?kid.name+': ':'') + evt.title;
@@ -1128,7 +1114,7 @@ function renderExportQueue(m){
     m.innerHTML = `<div class="empty">
       <div class="et">All done</div>
       <div class="eb">Nothing left in the queue.</div></div>
-      <button class="btn" onclick="view={tab:'events',sub:null,data:null};render()">Back to events</button>`;
+      <button class="btn" onclick="goToEvents()">Back to events</button>`;
     return;
   }
   const next = S.events.find(x=>x.id===q[0] && !x.deleted);
@@ -1148,7 +1134,7 @@ function renderExportQueue(m){
     </div>
   </div>
   <div style="text-align:center;margin-top:10px">
-    <button class="linkbtn" onclick="view={tab:'events',sub:null,data:null};render()">← Back to events (keeps your place)</button>
+    <button class="linkbtn" onclick="goToEvents()">← Back to events (keeps your place)</button>
   </div>`;
 }
 
@@ -1201,6 +1187,31 @@ function setHeader(title, showBack){
   document.getElementById('header').innerHTML =
     (showBack?`<button class="back" onclick="back()">‹</button>`:'') + esc(title);
 }
+
+// ---------------------------------------------------------------------------
+// Setters for state that inline handlers used to assign directly. Direct
+// assignment from an inline handler resolves against the GLOBAL scope, so once
+// this code lives in a module those assignments would silently create globals
+// instead of updating anything. Naming them also means the re-render cannot be
+// forgotten at a call site.
+// ---------------------------------------------------------------------------
+function setEventFilter(v){ eventFilter = v; render(); }
+function setLedgerKid(v){ ledgerKid = v; render(); }
+function setNewPersonType(v){ newPersonType = v; render(); }
+function setScanContext(v){ scanContext = v; }
+function togglePastEvents(){ showPast = !showPast; render(); }
+function goToEvents(){ view = { tab:'events', sub:null, data:null }; render(); }
+function closeChoreForm(){ choreForm = null; render(); }
+function newChoreForm(){ choreForm = { title:'', kidId:null, frequency:'daily', days:[], stars:1 }; render(); }
+function clearCompare(){ compareResult = null; render(); }
+function startCompare(){ compareResult = null; sub('compare'); }
+function closeRecipeForm(){ recipeForm = null; recipeBatch = null; sub('recipeBox'); }
+function newRecipeForm(){ recipeForm = { title:'', category:'Dinner', ingredients:'', instructions:'' }; sub('recipeForm'); }
+function toggleAllExportPick(ids){
+  exportPick = (exportPick.size === ids.length) ? new Set() : new Set(ids);
+  renderPickExport(document.getElementById('main'));
+}
+
 
 function render(){
   if(S.__locked){ renderRecovery(document.getElementById('main')); return; }
@@ -1454,11 +1465,11 @@ function renderEvents(m){
   const people = allPeople();
   if(people.length){
     html += `<div class="filterbar">
-      <span class="chip ${eventFilter===null?'on':''}" onclick="eventFilter=null;render()">All</span>` +
+      <span class="chip ${eventFilter===null?'on':''}" onclick="setEventFilter(null)">All</span>` +
       (unreadCount() ? `<span class="chip ${eventFilter===UNREAD_FILTER?'on':''}" style="${eventFilter===UNREAD_FILTER?'':'border-color:var(--amber);color:var(--amber)'}"
-        onclick="eventFilter=UNREAD_FILTER;render()">🔔 New ${unreadCount()}</span>` : '') +
+        onclick="setEventFilter(UNREAD_FILTER)">🔔 New ${unreadCount()}</span>` : '') +
       people.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
-        onclick="eventFilter='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
+        onclick="setEventFilter('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
   }
   // Search only earns its space once there's enough to sift through.
   const totalEvents = S.events.filter(e=>!e.deleted).length;
@@ -1518,7 +1529,7 @@ function renderEvents(m){
   if(past.length){
     const open = showPast || !!eventSearch;      // a search should look everywhere
     html += `<div style="text-align:center;margin-top:6px">
-      <button class="linkbtn" onclick="showPast=!showPast;render()">${open?'▾':'▸'} Past events (${past.length})</button></div>`;
+      <button class="linkbtn" onclick="togglePastEvents()">${open?'▾':'▸'} Past events (${past.length})</button></div>`;
     if(open){
       const shown = past.slice(0, pastLimit);
       html += shown.map(e=>evtCard(e, true)).join('');
@@ -2168,7 +2179,7 @@ function renderPickExport(m){
   }
   let html = `<div class="help">Tick the events to add to your calendar, then start. Already-added events show 📆 — adding again won't duplicate them.</div>
     <div style="text-align:right;margin-bottom:6px">
-      <button class="linkbtn" style="padding:2px 8px" onclick="${exportPick.size===evts.length?'exportPick=new Set()':'exportPick=new Set('+JSON.stringify(evts.map(e=>e.id))+')'};renderPickExport(document.getElementById('main'))">${exportPick.size===evts.length?'Clear all':'Select all'}</button></div>`;
+      <button class="linkbtn" style="padding:2px 8px" onclick="toggleAllExportPick(${JSON.stringify(evts.map(e=>e.id))})">${exportPick.size===evts.length?'Clear all':'Select all'}</button></div>`;
   html += evts.map(e=>{
     const on = exportPick.has(e.id);
     const ppl = eventPeople(e);
@@ -2420,7 +2431,7 @@ function renderCapture(m){
     <div style="font-size:18px;font-weight:700;margin-bottom:14px">Where is the paperwork?</div>
     <div class="label" style="margin-top:0">What is this about? (optional)</div>
     <input type="text" id="scanContext" placeholder="e.g. band, Olivia's dance, 3rd grade"
-      value="${esc(scanContext)}" oninput="scanContext=this.value">
+      value="${esc(scanContext)}" oninput="setScanContext(this.value)">
     <div class="help">If the page only shows dates, tell it what they are for. It gets noted on every event found.</div>
     <div class="card row" onclick="document.getElementById('fCam').click()">
       <span style="font-size:28px">📷</span>
@@ -2912,7 +2923,7 @@ function renderChores(m){
   if(choreForm){
     html += renderChoreForm();
   } else {
-    html += `<button class="btn fab" onclick="choreForm={title:'',kidId:null,frequency:'daily',days:[],stars:1};render()">＋ Add chore</button>`;
+    html += `<button class="btn fab" onclick="newChoreForm()">＋ Add chore</button>`;
   }
   html += `<div style="height:70px"></div>`;
   m.innerHTML = html;
@@ -2937,7 +2948,7 @@ function renderChoreForm(){
     [0,1,2,3,5].map(s=>`<span class="chip ${f.stars===s?'on':''}" onclick="choreForm.stars=${s};syncChoreTitle();render()">${s===0?'None':s+' ⭐'}</span>`).join('') + `
     <div class="formrow" style="margin-top:12px">
       <button class="btn" onclick="saveChoreForm()">Save chore</button>
-      <button class="btn alt" style="width:auto" onclick="choreForm=null;render()">Cancel</button>
+      <button class="btn alt" style="width:auto" onclick="closeChoreForm()">Cancel</button>
     </div></div>`;
 }
 function syncChoreTitle(){ const i=document.getElementById('choreTitle'); if(i) choreForm.title=i.value; }
@@ -3059,9 +3070,9 @@ function renderLedger(m){
   let html = '';
   if(kids.length>1){
     html += `<div class="filterbar">
-      <span class="chip ${ledgerKid===null?'on':''}" onclick="ledgerKid=null;render()">All</span>` +
+      <span class="chip ${ledgerKid===null?'on':''}" onclick="setLedgerKid(null)">All</span>` +
       kids.map(k=>`<span class="chip" style="${ledgerKid===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
-        onclick="ledgerKid='${k.id}';render()">${esc(k.name)}</span>`).join('') + `</div>`;
+        onclick="setLedgerKid('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
   }
   if(!entries.length){
     html += `<div class="empty"><div class="eb">No star activity yet — stars show up here as chores get checked off.</div></div>`;
@@ -3395,7 +3406,7 @@ function renderRecipeBox(m){
     <div class="help">Photograph a recipe from a book, card, or flyer. Pick several photos at once — FlyerSnap asks whether they are separate recipes or pages of one. ${esc(aiName())} types them up, you check each, and they go to the Recipe app's library.</div>
     <div class="formrow">
       <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
-      <button class="btn alt" onclick="recipeForm={title:'',category:'Dinner',ingredients:'',instructions:''};sub('recipeForm')">✍️ Type one in</button>
+      <button class="btn alt" onclick="newRecipeForm()">✍️ Type one in</button>
     </div>
     ${legacyRecipes().length ? `<div class="card" style="border-left:5px solid var(--amber)">
         <div class="title" style="font-size:14px">${legacyRecipes().length} recipe${legacyRecipes().length===1?'':'s'} from FlyerSnap's old Recipe Box</div>
@@ -3429,7 +3440,7 @@ function renderRecipeForm(m){
       ${recipeBatch && recipeBatch.pending.length
         ? `<button class="linkbtn" onclick="skipBatchRecipe()">Skip this one (${recipeBatch.pending.length} more)</button> · `
         : ''}
-      <button class="linkbtn" onclick="recipeForm=null;recipeBatch=null;sub('recipeBox')">Cancel</button></div>`;
+      <button class="linkbtn" onclick="closeRecipeForm()">Cancel</button></div>`;
 }
 function syncRecipeForm(){
   const t=document.getElementById('rTitle'), i=document.getElementById('rIng'), n=document.getElementById('rIns');
@@ -3534,8 +3545,8 @@ function renderSettings(m){
       <button class="btn sm" onclick="addKid()">Add</button>
     </div>
     <div style="margin:2px 0 10px">
-      <span class="chip ${(newPersonType||'kid')==='kid'?'on':''}" onclick="newPersonType='kid';render()">Kid</span>
-      <span class="chip ${newPersonType==='adult'?'on':''}" onclick="newPersonType='adult';render()">Adult</span>
+      <span class="chip ${(newPersonType||'kid')==='kid'?'on':''}" onclick="setNewPersonType('kid')">Kid</span>
+      <span class="chip ${newPersonType==='adult'?'on':''}" onclick="setNewPersonType('adult')">Adult</span>
     </div>` +
     allPeople().map(k=>`<div class="card row" style="padding:12px">
       <span style="width:12px;height:12px;border-radius:6px;background:${k.color};flex-shrink:0"></span>
@@ -3580,7 +3591,7 @@ function renderSettings(m){
         <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
       </div>
       <button class="btn alt" style="margin-top:8px" onclick="runLocalSelfTest()">🔬 Run full self-test</button>
-      <button class="btn alt" style="margin-top:8px" onclick="compareResult=null;sub('compare')">⚖️ Compare against Anthropic</button>
+      <button class="btn alt" style="margin-top:8px" onclick="startCompare()">⚖️ Compare against Anthropic</button>
       <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model. A text-only model such as qwen2.5:14b-instruct cannot read photos — pull something like <b>qwen2.5vl</b> or <b>llama3.2-vision</b> for that.</div>
     ` : ''}
 
@@ -3848,7 +3859,7 @@ function renderCompare(m){
         Only local found: ${onlyL.length ? onlyL.map(e=>esc(e.title)).join(', ') : 'nothing'}<br>
         <b>An event only one side found is either a miss by the other, or an invention by that one. Check the page.</b>
       </div></div>
-    <button class="btn alt" onclick="compareResult=null;render()">Try another</button>`;
+    <button class="btn alt" onclick="clearCompare()">Try another</button>`;
 }
 
 function renderSelfTest(m){
@@ -4072,6 +4083,111 @@ document.addEventListener('visibilitychange', ()=>{
   maybeCheckEmail();
   // The recipe app rewrites mealplan-out on every change; re-render on return.
   if(view.tab === 'meals' && !view.sub) render();
+});
+
+
+// --------------------------------------------------------------------------
+// Bridge for inline handlers.
+//
+// This file is an ES module, so its top-level functions are NOT global.
+// Inline onclick="foo()" attributes resolve against the global scope, so
+// every function named by one has to be published here or the button
+// silently does nothing -- no error, just a dead tap.
+//
+// tests-modules.js fails the build if any inline handler names something
+// that is neither defined nor listed here, so this cannot drift.
+// Generated from the markup; do not hand-edit.
+// --------------------------------------------------------------------------
+Object.assign(window, {
+  addItem,
+  addKid,
+  addList,
+  addReward,
+  addSender,
+  applyDedupe,
+  back,
+  bulkTagSheet,
+  calendarOptions,
+  cancelEventEdit,
+  cancelExportQueue,
+  clearChecked,
+  clearCompare,
+  clearEventSearch,
+  clearResolvedProblems,
+  closeChoreForm,
+  closeLinkSheet,
+  closeRecipeForm,
+  delKid,
+  dismissGroup,
+  dismissPendingEmail,
+  downloadQuarantine,
+  eventActions,
+  exportBackup,
+  exportNextInQueue,
+  forgetImportedEmails,
+  goToEvents,
+  manualPrune,
+  markAllRead,
+  mealActions,
+  mealPlanDiagnostic,
+  nav,
+  newChoreForm,
+  newRecipeForm,
+  onEventSearch,
+  openDedupe,
+  openLinkSheet,
+  openProblems,
+  openShareEvents,
+  openUrl,
+  redeem,
+  removeSender,
+  render,
+  restoreSnapshot,
+  save,
+  saveChoreForm,
+  saveEventEdit,
+  saveKey,
+  saveLocalModel,
+  saveReview,
+  saveWatcher,
+  scanAnother,
+  sendLegacyRecipes,
+  sendRecipe,
+  setAiProvider,
+  setDedupeKeep,
+  setEventFilter,
+  setLedgerKid,
+  setNewPersonType,
+  setReviewKid,
+  setScanContext,
+  shareAsCalendar,
+  shareAsText,
+  shareSelectAll,
+  skipBatchRecipe,
+  skipNextInQueue,
+  startCompare,
+  startFresh,
+  startPickedExport,
+  sub,
+  submitLink,
+  syncChoreTitle,
+  syncEventForm,
+  syncRecipeForm,
+  tagAll,
+  toggleAlert,
+  toggleAllExportPick,
+  toggleChore,
+  toggleChoreDay,
+  toggleEventPerson,
+  toggleEventSelect,
+  toggleExtraReminders,
+  toggleItem,
+  togglePastEvents,
+  togglePickExport,
+  toggleReview,
+  toggleSelectMode,
+  toggleSenderTag,
+  toggleShare
 });
 </script>
 </body>

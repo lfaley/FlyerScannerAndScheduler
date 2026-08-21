@@ -55,12 +55,21 @@ module.exports = async function runModuleTests(test){
   console.log('\nInline handlers still resolve');
 
   const html = fs.readFileSync('index.html', 'utf8');
-  const script = html.split('<script>')[1].split('</script>')[0];
+  const openTag = html.indexOf('<script type="module">') >= 0
+    ? '<script type="module">' : '<script>';
+  const script = html.split(openTag)[1].split('</script>')[0];
 
   const handlerNames = new Set();
+  // The handlers live inside template literals in the SCRIPT, not in static
+  // markup -- scanning the markup alone finds none. But comments in the script
+  // also mention handler syntax by way of explanation, and those produce
+  // phantom failures. So scan the script with its comments stripped.
+  const code = script
+    .replace(/^\s*\/\/.*$/gm, '')            // line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '');       // block comments
   const re = /on(?:click|change|input|submit)="\s*([A-Za-z_$][\w$]*)\s*\(/g;
   let m;
-  while((m = re.exec(html)) !== null) handlerNames.add(m[1]);
+  while((m = re.exec(code)) !== null) handlerNames.add(m[1]);
 
   test('every inline handler names something that exists', () => {
     const missing = [];
@@ -73,6 +82,17 @@ module.exports = async function runModuleTests(test){
     });
     assert.deepStrictEqual(missing, [],
       'handlers with no definition (a tap on these does nothing): ' + missing.join(', '));
+  });
+
+  console.log('\nService worker caches every module');
+
+  test('every js/ module index.html imports is in the service worker shell', () => {
+    const sw = fs.readFileSync('sw.js', 'utf8');
+    const imports = [...script.matchAll(/from\s+'(\.\/js\/[^']+)'/g)].map(m => m[1]);
+    assert.ok(imports.length > 0, 'expected at least one module import');
+    const missing = imports.filter(p => !sw.includes(p.replace('./', './')));
+    assert.deepStrictEqual(missing, [],
+      'not cached -- the installed app would fail to boot offline: ' + missing.join(', '));
   });
 
   test('there are handlers to check, so this guard is not vacuous', () => {
