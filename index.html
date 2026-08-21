@@ -1532,7 +1532,7 @@ async function fetchEmailQueue(){
   const fresh = items.filter(i => {
     if(!i.msgId){ noMsgId++; return false; }
     if(seen.has(i.msgId)){ alreadySeen++; return false; }
-    if(typeof i.raw === 'string' && i.raw.length) return true;   // not extracted yet
+    if(isMessageRef(i)) return true;                             // not extracted yet
     if(!(i.date >= today)){ inPast++; return false; }
     return true;
   });
@@ -1568,7 +1568,8 @@ async function saveSenders(list){
   return data.senders || [];
 }
 
-let watchedSenders = null;    // cached copy for the settings UI
+let watchedSenders = null;
+let lastEmailProblems = [];    // cached copy for the settings UI
 
 async function openSenderManager(){
   if(!watcherConfigured()){ alert('Connect the Gmail watcher first.'); return; }
@@ -1705,33 +1706,109 @@ async function openEmailReviewNow(){
 // Queue items arrive in one of two shapes: already-extracted events (the old
 // path) or raw email text for the app to extract (RAW_MODE). Handle both, so a
 // mixed queue during the changeover still works.
+// Ask the watcher for one message's prepared text and its attachments.
+// A queue entry is either a finished event (has a date/title) or a reference to
+// a message the app still needs to fetch and extract.
+function isMessageRef(i){
+  if(!i || !i.msgId) return false;
+  if(typeof i.raw === 'string' && i.raw.length) return true;   // legacy shape
+  return !i.date && !i.title;
+}
+
+async function fetchMessage(msgId){
+  const base = watcherBaseUrl();
+  const url = base + '?token=' + encodeURIComponent((S.settings.watcherToken||'').trim()) +
+    '&action=message&msgId=' + encodeURIComponent(msgId);
+  const data = await jsonpRequest(url, 60000);
+  if(!data || data.error) throw new Error((data && data.error) || 'no response');
+  return data;
+}
+
+// A single email can carry dates in the body AND on an attached flyer image.
+// Neither pass alone is enough: a text model cannot see the image, and reading
+// only the image loses the body. So run both and merge.
+function providerLabel(){
+  return aiProvider() === 'local' ? ((S.settings.localModel||'local').trim()) : MODEL;
+}
+
+async function extractFromEmailPayload(payload){
+  const found = [];
+  const problems = [];
+
+  // Pass 1 -- the body text. Any model can do this.
+  if(payload.text && payload.text.trim().length > 20){
+    try{
+      const text = await callAI([
+        {type:'text', text:'Email from ' + (payload.from||'unknown') +
+          '\nSubject: ' + (payload.subject||'') + '\n\n' + payload.text},
+        {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS);
+      (parseExtractedEvents(text)||[]).forEach(e => found.push(e));
+    }catch(err){ problems.push('body text: ' + err.message); }
+  }
+
+  // Pass 2 -- each attachment. Images need a vision model; PDFs only work on
+  // Anthropic, and callAI reports that clearly rather than failing silently.
+  const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+  for(const att of atts){
+    const isPdf = att.mediaType === 'application/pdf';
+    const block = isPdf
+      ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:att.data}}
+      : {type:'image', source:{type:'base64', media_type:att.mediaType, data:att.data}};
+    try{
+      const text = await callAI([block, {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS);
+      (parseExtractedEvents(text)||[]).forEach(e => found.push(e));
+    }catch(err){
+      problems.push((att.name || 'attachment') + ': ' + err.message);
+    }
+  }
+
+  // Merge: the same date can appear in both the body and the flyer. One event.
+  const merged = [];
+  found.forEach(e => {
+    if(!merged.some(m => looksDuplicate(m, e))) merged.push(e);
+  });
+  return { events: merged, problems };
+}
+
 async function extractFromRawItems(items){
   const out = [];
+  const failures = [];
+  const stamp = providerLabel();
+
   for(let i = 0; i < items.length; i++){
     const it = items[i];
-    sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…',
-                 hint: it.subject ? String(it.subject).slice(0,60) : ''});
+    const label = it.subject ? String(it.subject).slice(0,60) : '';
+    sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…', hint: label});
     try{
-      const text = await callAI(
-        [{type:'text', text:'Email from ' + (it.from||'unknown') +
-          '\nSubject: ' + (it.subject||'') + '\n\n' + (it.raw||'')},
-         {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS);
-      const events = parseExtractedEvents(text) || [];
+      const payload = await fetchMessage(it.msgId);
+      if(payload.attachments && payload.attachments.length){
+        sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…',
+                     hint: label + ' (+' + payload.attachments.length + ' attachment)'});
+      }
+      const { events, problems } = await extractFromEmailPayload(payload);
       events.forEach(e => out.push(Object.assign({}, e,
-        { msgId: it.msgId, from: it.from || null,
-          source: 'Email - ' + (it.subject||'') })));
+        { msgId: it.msgId, from: payload.from || it.from || null,
+          source: 'Email - ' + (payload.subject || it.subject || ''),
+          aiSource: stamp })));
+      problems.forEach(p => failures.push(label + ' — ' + p));
+      if(!events.length && !problems.length) failures.push(label + ' — no dates found');
     }catch(err){
-      console.log('extract failed for ' + it.msgId + ': ' + err.message);
+      failures.push(label + ' — ' + err.message);
     }
+  }
+
+  // Failures must be visible. console.log is invisible on a phone.
+  if(failures.length){
+    lastEmailProblems = failures;
   }
   return out;
 }
 
 async function openEmailReview(fresh){
-  const rawItems = fresh.filter(i => i && typeof i.raw === 'string' && i.raw.length);
+  const rawItems = fresh.filter(isMessageRef);
   if(rawItems.length){
     const extracted = await extractFromRawItems(rawItems);
-    fresh = fresh.filter(i => !(i && typeof i.raw === 'string' && i.raw.length)).concat(extracted);
+    fresh = fresh.filter(i => !isMessageRef(i)).concat(extracted);
   }
   pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
   pendingEvents = markDuplicates(fresh.map(i => {
@@ -2340,7 +2417,17 @@ function renderReview(m){
   const kids = allPeople();
   const n = pendingEvents.filter(e=>e.selected).length;
   const dups = pendingEvents.filter(e=>e.dup).length;
-  let html = `<div class="help">Found ${pendingEvents.length} item${pendingEvents.length===1?'':'s'}. Tap to include or skip.${dups?` ${dups} already tracked (unchecked for you).`:''}</div>`;
+  let html = '';
+  if(lastEmailProblems.length){
+    html += `<div class="card" style="border-left:5px solid var(--amber)">
+      <div style="font-weight:800;font-size:var(--t-sm);margin-bottom:4px">
+        ${lastEmailProblems.length} email${lastEmailProblems.length===1?'':'s'} had trouble</div>
+      <div class="meta" style="font-size:var(--t-cap)">
+        ${lastEmailProblems.slice(0,5).map(p=>esc(p)).join('<br>')}
+        ${lastEmailProblems.length>5?'<br>and '+(lastEmailProblems.length-5)+' more':''}</div>
+    </div>`;
+  }
+  html += `<div class="help">Found ${pendingEvents.length} item${pendingEvents.length===1?'':'s'}. Tap to include or skip.${dups?` ${dups} already tracked (unchecked for you).`:''}</div>`;
   const people = allPeople();
   if(people.length>1){
     html += `<div style="margin-bottom:10px"><span class="label" style="margin-right:6px">Tag all with:</span>` +
@@ -2400,6 +2487,7 @@ function dismissPendingEmail(){
   save();
   toast('Skipped — these will not come back');
   pendingEvents = [];
+  lastEmailProblems = [];
   view = {tab:'events', sub:null, data:null};
   render();
 }
@@ -2420,7 +2508,7 @@ function saveReview(){
   }
   for(const e of chosen){
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
-      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, exported:false, unread:true, deleted:false });
+      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, aiSource:e.aiSource||null, exported:false, unread:true, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
   // the screen leaves them in the queue for next time.
@@ -2431,6 +2519,7 @@ function saveReview(){
   save();
   toast(`Tracking ${chosen.length} item${chosen.length===1?'':'s'} — tap any event to add calendar alerts`);
   pendingEvents = [];
+  lastEmailProblems = [];
   view = {tab:'events', sub:null, data:null}; render();
 }
 
@@ -2474,8 +2563,14 @@ function renderEventEdit(m){
         onclick="toggleEventPerson('${k.id}')">${esc(k.name)}</span>`).join('') : ''}
     <div class="label">Location</div>
     <input type="text" id="efLoc" value="${esc(f.location)}">
-    ${(eventForm.ref && (S.events.find(x=>x.id===eventForm.ref)||{}).from) ? `<div class="label">Came from</div>
-      <div class="help" style="margin-top:0">${esc((S.events.find(x=>x.id===eventForm.ref)||{}).from)}</div>` : ''}
+    ${(function(){
+      const ev = eventForm.ref ? (S.events.find(x=>x.id===eventForm.ref)||{}) : {};
+      if(!ev.from && !ev.aiSource) return '';
+      return '<div class="label">Came from</div><div class="help" style="margin-top:0">' +
+        (ev.from ? esc(ev.from) : '') +
+        (ev.aiSource ? '<br><span style="opacity:.75">read by ' + esc(ev.aiSource) + '</span>' : '') +
+        '</div>';
+    })()}
     <div class="label">Notes</div>
     <textarea id="efNotes" rows="5" style="width:100%;min-height:110px;font-family:inherit;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;box-sizing:border-box;resize:vertical">${esc(f.notes)}</textarea>
     <div style="height:14px"></div>
@@ -3310,7 +3405,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.6 · fail loudly on unsupported content</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.7 · mixed-content emails, visible failures, provenance</div>`;
 }
 function manualPrune(){
   const n = pruneData();

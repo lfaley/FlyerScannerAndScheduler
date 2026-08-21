@@ -256,6 +256,67 @@ function gmailSearchWithRetry(query, start, max) {
   throw lastErr;
 }
 
+// Prepare a message body for extraction: prose plus any schedule tables already
+// flattened to one line per cell. Shared by checkMail and the on-demand endpoint
+// so both produce identical text.
+function preparedBody(msg) {
+  var body = msg.getPlainBody() || '';
+  var html = '';
+  try { html = msg.getBody() || ''; } catch (err) { html = ''; }
+  if (html && /<table/i.test(html)) {
+    var flat = '';
+    try { flat = tablesToPlainText(html); } catch (errT) { flat = ''; }
+    if (flat && flat.length > 40) {
+      body = body + '\n\n--- SCHEDULE TABLES (expanded) ---\n' + flat;
+    }
+  }
+  if (body.length > 60000) body = body.slice(0, 60000);
+  return body;
+}
+
+function senderAddress(msg) {
+  var fm = String(msg.getFrom() || '').match(/[\w.+-]+@[\w.-]+\.[\w.-]+/);
+  return fm ? fm[0].toLowerCase() : '';
+}
+
+// Images and PDFs both carry dates. Previously only PDFs were considered, so an
+// attached JPG flyer was never read at all.
+function isUsableAttachment(att) {
+  var ct = String(att.getContentType() || '').toLowerCase();
+  var ok = ct === 'application/pdf' ||
+           ct === 'image/jpeg' || ct === 'image/jpg' ||
+           ct === 'image/png'  || ct === 'image/webp';
+  return ok && att.getSize() < 4500000;
+}
+
+// Build one message's content on request: prepared text plus any attachments.
+function messagePayload(msgId) {
+  var msg = GmailApp.getMessageById(msgId);
+  if (!msg) return { error: 'message not found' };
+
+  var body = preparedBody(msg);
+  var out = {
+    ok: true,
+    msgId: msgId,
+    subject: msg.getSubject().slice(0, 160),
+    from: senderAddress(msg),
+    received: msg.getDate().toISOString(),
+    text: body,
+    attachments: []
+  };
+
+  var atts = msg.getAttachments();
+  for (var a = 0; a < atts.length && out.attachments.length < 4; a++) {
+    if (!isUsableAttachment(atts[a])) continue;
+    out.attachments.push({
+      name: String(atts[a].getName() || '').slice(0, 80),
+      mediaType: String(atts[a].getContentType() || '').toLowerCase().split(';')[0],
+      data: Utilities.base64Encode(atts[a].getBytes())
+    });
+  }
+  return out;
+}
+
 function parseEvents(text) {
   var arr;
   try { arr = JSON.parse(text); } catch (e) { return []; }
@@ -402,18 +463,25 @@ function checkMail() {
         // extraction with whichever model it is configured for (Anthropic or the
         // local Ollama one). Leave it false to keep extracting here.
         if (RAW_MODE) {
+          // Script Properties cap at 9KB per value, so the queue must stay tiny.
+          // We store a reference only; the app fetches the body and any
+          // attachments on demand via action=message.
+          var attCount = 0;
+          var allAtts = msg.getAttachments();
+          for (var ai = 0; ai < allAtts.length && ai < 5; ai++) {
+            if (isUsableAttachment(allAtts[ai])) attCount++;
+          }
           queue.push({
             msgId: id,
-            raw: body,
             subject: msg.getSubject().slice(0, 120),
-            from: (function () {
-              var fm = String(msg.getFrom() || '').match(/[\w.+-]+@[\w.-]+\.[\w.-]+/);
-              return fm ? fm[0].toLowerCase() : '';
-            })(),
-            received: msg.getDate().toISOString()
+            from: senderAddress(msg),
+            received: msg.getDate().toISOString(),
+            chars: body.length,
+            attachments: attCount
           });
           added++;
-          Logger.log('  forwarded raw (' + body.length + ' chars) -- app will extract');
+          Logger.log('  queued reference (' + body.length + ' chars, ' +
+            attCount + ' attachment(s)) -- app will fetch and extract');
           seen.push(id);
           seenSet[id] = true;
           continue;
@@ -510,6 +578,16 @@ function doGet(e) {
     }
     props().setProperty('SENDERS', clean.join(', '));
     return out({ ok: true, senders: clean });
+  }
+
+  if (action === 'message') {
+    var wanted = e.parameter.msgId || '';
+    if (!wanted) return out({ error: 'msgId required' });
+    try {
+      return out(messagePayload(wanted));
+    } catch (errM) {
+      return out({ error: String(errM && errM.message || errM) });
+    }
   }
 
   if (action === 'senders') {

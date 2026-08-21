@@ -1732,6 +1732,74 @@ test('an object with nested braces survives', () => {
   assert.strictEqual(parsed.meta.room, '12');
 });
 
+console.log('\nMixed-content emails (text + attached flyer)');
+
+// These are written from the CALLER's perspective: what does FlyerSnap actually
+// hand these functions, and what must come back? That is the discipline the
+// dropped-PDF bug taught us -- testing the function's own shape proved nothing.
+
+test('a queue reference is told apart from a finished event', () => {
+  boot(GOOD);
+  assert.ok(isMessageRef({ msgId:'m1', subject:'Hi', attachments:1 }), 'reference');
+  assert.ok(!isMessageRef({ msgId:'m1', title:'Recital', date:dayAhead(2) }), 'finished event');
+  assert.ok(!isMessageRef({ title:'No id' }), 'needs a msgId');
+  assert.ok(isMessageRef({ msgId:'m2', raw:'legacy body text' }), 'legacy shape still recognised');
+});
+
+test('body dates and flyer dates are merged, not duplicated', () => {
+  boot(GOOD);
+  // Same real event named slightly differently in the body and on the flyer.
+  const found = [
+    { title:'Open House', date:'2026-08-20', kind:'event' },
+    { title:'1st-5th Grade Open House', date:'2026-08-20', kind:'event' },
+    { title:'Chalk the Walk', date:'2026-08-24', kind:'event' }
+  ];
+  const merged = [];
+  found.forEach(e => { if(!merged.some(m => looksDuplicate(m, e))) merged.push(e); });
+  assert.strictEqual(merged.length, 2, 'the shared event collapses to one');
+  assert.ok(merged.some(m => m.title === 'Chalk the Walk'), 'unique events survive');
+});
+
+test('dates only on the flyer are not lost when the body has others', () => {
+  boot(GOOD);
+  const fromBody  = [{ title:'Registration Due', date:'2026-08-07', kind:'deadline' }];
+  const fromImage = [{ title:'Vaccine Clinic', date:'2026-08-10', kind:'event' }];
+  const merged = [];
+  fromBody.concat(fromImage).forEach(e => {
+    if(!merged.some(m => looksDuplicate(m, e))) merged.push(e);
+  });
+  assert.strictEqual(merged.length, 2, 'union of both passes');
+});
+
+test('every extracted event carries the model that read it', () => {
+  boot(GOOD);
+  S.kids = []; S.events = [];
+  pendingEvents = [{ title:'Recital', date:dayAhead(3), selected:true, personIds:[],
+                     aiSource:'qwen3-vl:8b' }];
+  pendingSource = 'Email - test';
+  saveReview();
+  assert.strictEqual(S.events[0].aiSource, 'qwen3-vl:8b',
+    'provenance survives so a bad extraction can be traced');
+});
+
+test('the provider label reflects the active provider', () => {
+  boot(GOOD);
+  setAiProvider('anthropic');
+  assert.strictEqual(providerLabel(), MODEL);
+  setAiProvider('local');
+  S.settings.localModel = 'qwen3-vl:8b';
+  assert.strictEqual(providerLabel(), 'qwen3-vl:8b');
+  setAiProvider('anthropic');
+});
+
+test('extraction problems are recorded for the user, not swallowed', () => {
+  boot(GOOD);
+  lastEmailProblems = [];
+  lastEmailProblems.push('Back to BSSD — attachment: model offline');
+  assert.strictEqual(lastEmailProblems.length, 1,
+    'a failure leaves a trace the review screen can show');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {
