@@ -1572,6 +1572,98 @@ test('an empty list groups to nothing rather than throwing', () => {
   assert.deepStrictEqual(groupedUpcoming([]), []);
 });
 
+console.log('\nAI provider dispatch');
+
+test('Anthropic stays the default and is never removed', () => {
+  boot(GOOD);
+  assert.strictEqual(aiProvider(), 'anthropic');
+  assert.strictEqual(typeof callClaude, 'function', 'the Anthropic path still exists');
+  assert.strictEqual(typeof callLocalModel, 'function', 'the local path is additional');
+});
+
+test('switching provider is remembered', () => {
+  boot(GOOD);
+  setAiProvider('local');
+  assert.strictEqual(aiProvider(), 'local');
+  setAiProvider('anthropic');
+  assert.strictEqual(aiProvider(), 'anthropic');
+});
+
+test('content blocks translate to the OpenAI shape', () => {
+  boot(GOOD);
+  const parts = blocksToOpenAI([
+    { type:'image', source:{ type:'base64', media_type:'image/jpeg', data:'AAAA' } },
+    { type:'text', text:'Read this' }
+  ]);
+  assert.strictEqual(parts.length, 2);
+  assert.strictEqual(parts[0].type, 'image_url');
+  assert.ok(parts[0].image_url.url.startsWith('data:image/jpeg;base64,AAAA'));
+  assert.strictEqual(parts[1].type, 'text');
+  assert.strictEqual(parts[1].text, 'Read this');
+});
+
+test('unknown block types are dropped rather than sent malformed', () => {
+  const parts = blocksToOpenAI([{ type:'document', source:{} }, { type:'text', text:'hi' }]);
+  assert.strictEqual(parts.length, 1);
+});
+
+test('the local model refuses to run without a URL', async () => {
+  boot(GOOD);
+  S.settings.localBaseUrl = '';
+  let threw = false;
+  try { await callLocalModel([{type:'text',text:'x'}], 10); }
+  catch(e){ threw = /No local model URL/.test(e.message); }
+  assert.ok(threw, 'fails loudly instead of silently doing nothing');
+});
+
+test('the persona carries the rules that prevent our real failures', () => {
+  assert.ok(/never invent clarity/i.test(SECRETARY_PERSONA), 'no hallucinated dates');
+  assert.ok(/suggestion is not a decision/i.test(SECRETARY_PERSONA), 'maybe is not an event');
+  assert.ok(/owner|deadline/i.test(SECRETARY_PERSONA), 'owner and deadline required');
+  assert.ok(/twelve items|not "training week"|collapse/i.test(SECRETARY_PERSONA),
+    'a week must not collapse into one item');
+});
+
+test('event grounding keeps the schedule-grid rules', () => {
+  assert.ok(/every non-empty cell is its own separate item/i.test(GROUNDING_EVENTS));
+  assert.ok(/Lunch, Dinner, or Break are not items/i.test(GROUNDING_EVENTS));
+  assert.ok(/endTime/.test(GROUNDING_EVENTS), 'ranges captured');
+});
+
+console.log('\nRaw email forwarding');
+
+test('raw items survive the date filter that would drop undated entries', () => {
+  boot(GOOD);
+  S.settings.seenMsgs = [];
+  const today = todayISO();
+  const items = [
+    { msgId:'m1', raw:'Some email text', subject:'Hi', from:'a@b.com' },
+    { msgId:'m2', title:'Old event', date:'2020-01-01' },
+    { msgId:'m3', title:'Future event', date:dayAhead(3) }
+  ];
+  const seen = new Set();
+  const fresh = items.filter(i => {
+    if(!i.msgId) return false;
+    if(seen.has(i.msgId)) return false;
+    if(typeof i.raw === 'string' && i.raw.length) return true;
+    return i.date >= today;
+  });
+  assert.strictEqual(fresh.length, 2, 'raw item kept, past-dated one dropped');
+  assert.ok(fresh.some(i => i.msgId === 'm1'), 'unextracted raw email survives');
+});
+
+test('a mixed queue keeps both shapes apart', () => {
+  const fresh = [
+    { msgId:'m1', raw:'text here' },
+    { msgId:'m2', title:'Already extracted', date:dayAhead(2) }
+  ];
+  const rawItems = fresh.filter(i => i && typeof i.raw === 'string' && i.raw.length);
+  const ready = fresh.filter(i => !(i && typeof i.raw === 'string' && i.raw.length));
+  assert.strictEqual(rawItems.length, 1);
+  assert.strictEqual(ready.length, 1);
+  assert.strictEqual(ready[0].title, 'Already extracted');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

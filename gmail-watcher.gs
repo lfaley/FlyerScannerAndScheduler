@@ -67,6 +67,10 @@ function claudePrompt(today) {
     '- If no real dates are found, return [].';
 }
 
+// When true the script does no AI work at all -- it just hands the app the
+// prepared text (prose + flattened tables) and lets the app extract.
+var RAW_MODE = true;
+
 function callClaude(contentBlocks) {
   var key = getProp('CLAUDE_KEY');
   if (!key) throw new Error('CLAUDE_KEY script property is not set');
@@ -394,6 +398,27 @@ function checkMail() {
 
         countCall();
         processed++;
+        // RAW_MODE forwards the prepared email text to the app, which then runs
+        // extraction with whichever model it is configured for (Anthropic or the
+        // local Ollama one). Leave it false to keep extracting here.
+        if (RAW_MODE) {
+          queue.push({
+            msgId: id,
+            raw: body,
+            subject: msg.getSubject().slice(0, 120),
+            from: (function () {
+              var fm = String(msg.getFrom() || '').match(/[\w.+-]+@[\w.-]+\.[\w.-]+/);
+              return fm ? fm[0].toLowerCase() : '';
+            })(),
+            received: msg.getDate().toISOString()
+          });
+          added++;
+          Logger.log('  forwarded raw (' + body.length + ' chars) -- app will extract');
+          seen.push(id);
+          seenSet[id] = true;
+          continue;
+        }
+
         var raw = callClaude(blocks);
         var events = parseEvents(raw);
         Logger.log('  Claude returned ' + events.length + ' event(s)' +

@@ -208,7 +208,8 @@ let S = load();
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[],
   redemptions:[], lists:[], listItems:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
-    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{} },
+    watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
+    aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true },
   schemaVersion: SCHEMA_VERSION }; }
 
 function migrate(s, fromVersion){
@@ -508,7 +509,123 @@ function toast(msg){
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-6';
 
-async function callClaude(contentBlocks, maxTokens){
+
+// ===========================================================================
+// SECRETARY PERSONA + GROUNDING
+//
+// Modelled on how a world-class executive assistant takes minutes. The rules
+// below are drawn from professional minute-taking practice, and each one exists
+// to prevent a specific failure we have actually seen:
+//
+//  - "owner, task, deadline" for every item   -> stops vague, unusable entries
+//  - "never invent clarity"                   -> stops inferred/hallucinated dates
+//  - "suggestion is not a decision"           -> stops 'maybe' becoming an event
+//  - "restraint vs elaboration"               -> stops a whole week collapsing
+//                                                into one generic item
+//  - "objective, no interpretation"           -> stops editorialising in notes
+// ===========================================================================
+const SECRETARY_PERSONA = `You are the executive secretary to a busy parent. You are a world-class note taker: precise, literal, and completely reliable. Your reputation rests on one thing -- what you write down is exactly what the source said, no more and no less.
+
+How you work:
+
+1. OWNER, TASK, DEADLINE. Every item you record answers three questions: what is happening, who it concerns, and exactly when. An item missing a date is not an item; leave it out rather than guessing.
+
+2. NEVER INVENT CLARITY. If the source is vague, your note is vague. You do not resolve ambiguity by guessing, and you never infer a date, time, or location that is not stated. A missing field is null. Inventing a plausible detail is the worst error you can make -- worse than omitting the item.
+
+3. A SUGGESTION IS NOT A DECISION. "We hope to schedule", "a sign-up sheet will be available", "more details to follow" are not events. Record only what is actually scheduled or actually due.
+
+4. RESTRAINT AND ELABORATION. Never collapse many things into one summary item. If a schedule lists twelve sessions, you record twelve items -- not "training week". Conversely, do not pad: no item needs a paragraph.
+
+5. OBJECTIVE AND LITERAL. Keep the source's own wording for names and titles, including instructor or room names in parentheses. Add no opinion, no interpretation, no encouragement.
+
+6. DEADLINES ARE DIFFERENT FROM EVENTS. A form due, registration cutoff, payment date, or RSVP-by is a deadline. Something you attend is an event.
+
+7. VERIFY BEFORE FINALISING. Re-read what you produced against the source. If a date, time, or name does not appear verbatim in the source, remove it.`;
+
+// Task-specific grounding, appended after the persona.
+const GROUNDING_EVENTS = `Working from the material provided, produce the calendar items.
+
+- Dates must be resolved to YYYY-MM-DD. If the source gives a weekday and a date ("Monday 8/3"), use the date. If the year is absent, infer it from today's date, choosing the nearest future occurrence.
+- Times are 24-hour HH:MM. Record both a start and an end when a range is given ("6:00-8:30 PM" -> time 18:00, endTime 20:30). A single time has a null endTime.
+- SCHEDULE GRIDS: when rows are time slots and columns are days, every non-empty cell is its own separate item. Its date comes from the column, its time from the row label, unless the cell states its own time -- which always wins. One column often holds several sessions; record every one. Rows labelled Lunch, Dinner, or Break are not items.
+- Keep the cell's own label as the title, including a name in parentheses, e.g. "Mini M.T. (Austin)".
+- notes: one short factual sentence only if the source adds something actionable (what to bring, where to park). Otherwise null.`;
+
+const GROUNDING_RECIPE = `Working from the photograph(s), transcribe the recipe exactly as written.
+
+- Do not adjust quantities, substitute ingredients, or improve the method.
+- Preserve the source's units and order.
+- If several photographs are provided, they are continued pages of one recipe: combine them, and do not repeat an ingredient or step that appears on more than one page.
+- If the image is not a recipe, say so rather than inventing one.`;
+
+// ---------------------------------------------------------------------------
+// Provider dispatch. Anthropic remains fully intact and is still the default;
+// the local model is an additional option, never a replacement.
+// ---------------------------------------------------------------------------
+function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
+
+async function callAI(contentBlocks, maxTokens, system){
+  if(aiProvider() === 'local'){
+    try{
+      return await callLocalModel(contentBlocks, maxTokens, system);
+    }catch(err){
+      if(S.settings.aiFallback){
+        toast('Local model unavailable — using Anthropic');
+        return await callClaude(contentBlocks, maxTokens, system);
+      }
+      throw new Error('Local model unavailable: ' + err.message +
+        '\n\nIs the desktop awake and Tailscale connected?');
+    }
+  }
+  return callClaude(contentBlocks, maxTokens, system);
+}
+
+// Ollama speaks the OpenAI Chat Completions shape, so Anthropic content blocks
+// are translated: text passes through, images become data-URL image_url parts.
+function blocksToOpenAI(contentBlocks){
+  const parts = [];
+  for(const b of contentBlocks){
+    if(b.type === 'text') parts.push({ type:'text', text:b.text });
+    else if(b.type === 'image' && b.source && b.source.type === 'base64'){
+      parts.push({ type:'image_url', image_url:{
+        url: 'data:' + b.source.media_type + ';base64,' + b.source.data } });
+    }
+  }
+  return parts;
+}
+
+async function callLocalModel(contentBlocks, maxTokens, system){
+  const base = (S.settings.localBaseUrl||'').trim().replace(/\/+$/,'');
+  if(!base) throw new Error('No local model URL saved.');
+  const model = (S.settings.localModel||'').trim() || 'qwen2.5:14b-instruct';
+
+  const messages = [{ role:'system', content: SECRETARY_PERSONA + (system ? '\n\n' + system : '') },
+                    { role:'user', content: blocksToOpenAI(contentBlocks) }];
+
+  const ctrl = new AbortController();
+  // The first call loads the model into VRAM and is slow; later ones are fast.
+  const timer = setTimeout(()=>ctrl.abort(), 180000);
+  let res;
+  try{
+    res = await fetch(base + '/chat/completions', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer local' },
+      body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: maxTokens || 2000 }),
+      signal: ctrl.signal
+    });
+  }catch(e){
+    clearTimeout(timer);
+    throw new Error(e.name === 'AbortError' ? 'timed out after 3 minutes' : e.message);
+  }
+  clearTimeout(timer);
+  if(!res.ok) throw new Error('model error ' + res.status + ': ' + (await res.text()).slice(0,200));
+  const json = await res.json();
+  const out = (json.choices && json.choices[0] && json.choices[0].message
+    && json.choices[0].message.content) || '';
+  return String(out).replace(/```json|```/g,'').trim();
+}
+
+async function callClaude(contentBlocks, maxTokens, system){
   if(!S.settings.apiKey) throw new Error('NO_API_KEY');
   const res = await fetch(API_URL, {
     method:'POST',
@@ -518,8 +635,10 @@ async function callClaude(contentBlocks, maxTokens){
       'anthropic-version':'2023-06-01',
       'anthropic-dangerous-direct-browser-access':'true'
     },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens||2000,
-      messages:[{role:'user', content: contentBlocks}] })
+    body: JSON.stringify(Object.assign(
+      { model: MODEL, max_tokens: maxTokens||2000,
+        messages:[{role:'user', content: contentBlocks}] },
+      system ? { system: SECRETARY_PERSONA + '\n\n' + system } : {}))
   });
   if(!res.ok){
     const body = await res.text();
@@ -574,7 +693,7 @@ async function extractAny(base64, mediaType, isPdf){
   const block = isPdf
     ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
     : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
-  const text = await callClaude([block,
+  const text = await callAI([block,
     {type:'text', text: CLASSIFY_PROMPT.replace('{TODAY}', todayISO())}], 3000);
   let out;
   try{ out = JSON.parse(text); }catch(e){ throw new Error('Could not read that. Try a clearer photo.'); }
@@ -591,7 +710,7 @@ async function extractEvents(base64, mediaType, isPdf){
   const block = isPdf
     ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
     : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
-  const text = await callClaude([block, {type:'text', text:eventPrompt()}], 3000);
+  const text = await callAI([block, {type:'text', text:eventPrompt()}], 3000);
   return parseExtractedEvents(text);
 }
 
@@ -599,7 +718,7 @@ async function extractEventsFromUrl(url){
   // Anthropic's servers fetch the URL — no browser CORS, no proxy needed.
   // Works cleanly for PDFs; HTML pages behind a login will return an error we translate below.
   const block = {type:'document', source:{type:'url', url}};
-  const text = await callClaude([block, {type:'text', text:eventPrompt()}], 3000);
+  const text = await callAI([block, {type:'text', text:eventPrompt()}], 3000);
   return parseExtractedEvents(text);
 }
 
@@ -626,7 +745,7 @@ ${many ? 'Combine every page into one complete recipe. Do not repeat ingredients
 If it is not a recipe, respond with {"title":null}.`;
   const blocks = images.map(im => ({type:'image', source:{type:'base64', media_type:im.mediaType, data:im.base64}}));
   blocks.push({type:'text', text:prompt});
-  const text = await callClaude(blocks);
+  const text = await callAI(blocks, 2000, GROUNDING_RECIPE);
   const r = JSON.parse(text);
   if(!r || !r.title) throw new Error('That does not look like a recipe.');
   return r;
@@ -1325,6 +1444,7 @@ async function fetchEmailQueue(){
   const fresh = items.filter(i => {
     if(!i.msgId){ noMsgId++; return false; }
     if(seen.has(i.msgId)){ alreadySeen++; return false; }
+    if(typeof i.raw === 'string' && i.raw.length) return true;   // not extracted yet
     if(!(i.date >= today)){ inPast++; return false; }
     return true;
   });
@@ -1477,7 +1597,7 @@ async function checkEmail(silent){
       save(); render();
       return;
     }
-    openEmailReview(fresh);
+    await openEmailReview(fresh);
   }catch(err){
     if(silent){ console.log('Email check failed: ' + err.message); return; }
     alert('Could not reach the watcher: ' + err.message);
@@ -1490,11 +1610,41 @@ async function openEmailReviewNow(){
   try{
     const { fresh } = await fetchEmailQueue();
     if(!fresh.length){ toast('Nothing new'); S.settings.pendingEmailCount = 0; save(); nav('events'); return; }
-    openEmailReview(fresh);
+    await openEmailReview(fresh);
   }catch(err){ alert('Could not reach the watcher: ' + err.message); back(); }
 }
 
-function openEmailReview(fresh){
+// Queue items arrive in one of two shapes: already-extracted events (the old
+// path) or raw email text for the app to extract (RAW_MODE). Handle both, so a
+// mixed queue during the changeover still works.
+async function extractFromRawItems(items){
+  const out = [];
+  for(let i = 0; i < items.length; i++){
+    const it = items[i];
+    sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…',
+                 hint: it.subject ? String(it.subject).slice(0,60) : ''});
+    try{
+      const text = await callAI(
+        [{type:'text', text:'Email from ' + (it.from||'unknown') +
+          '\nSubject: ' + (it.subject||'') + '\n\n' + (it.raw||'')},
+         {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS);
+      const events = parseExtractedEvents(text) || [];
+      events.forEach(e => out.push(Object.assign({}, e,
+        { msgId: it.msgId, from: it.from || null,
+          source: 'Email - ' + (it.subject||'') })));
+    }catch(err){
+      console.log('extract failed for ' + it.msgId + ': ' + err.message);
+    }
+  }
+  return out;
+}
+
+async function openEmailReview(fresh){
+  const rawItems = fresh.filter(i => i && typeof i.raw === 'string' && i.raw.length);
+  if(rawItems.length){
+    const extracted = await extractFromRawItems(rawItems);
+    fresh = fresh.filter(i => !(i && typeof i.raw === 'string' && i.raw.length)).concat(extracted);
+  }
   pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
   pendingEvents = markDuplicates(fresh.map(i => {
     const ppl = personsForSender(i.from);
@@ -2987,6 +3137,31 @@ function renderSettings(m){
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
 
+    <div class="sect">AI model</div>
+    <div class="help">Which model reads your flyers and emails. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
+    <div style="margin-bottom:10px">
+      <span class="chip ${aiProvider()==='anthropic'?'on':''}" onclick="setAiProvider('anthropic')">☁️ Anthropic</span>
+      <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">🏠 Local model</span>
+    </div>
+    ${aiProvider()==='local' ? `
+      <div class="label">Base URL</div>
+      <input type="text" id="localBase" placeholder="https://machine.tailnet.ts.net/v1"
+        autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||'')}">
+      <div class="label">Model</div>
+      <input type="text" id="localModel" placeholder="qwen2.5:14b-instruct"
+        autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localModel||'')}">
+      <label class="row" style="margin-top:10px">
+        <input type="checkbox" id="aiFallback" ${S.settings.aiFallback?'checked':''}
+          onchange="S.settings.aiFallback=this.checked;save()">
+        <span class="grow" style="font-size:var(--t-sm)">Fall back to Anthropic if the desktop is offline</span>
+      </label>
+      <div class="formrow" style="margin-top:10px">
+        <button class="btn" onclick="saveLocalModel()">Save</button>
+        <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
+      </div>
+      <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model. A text-only model such as qwen2.5:14b-instruct cannot read photos — pull something like <b>qwen2.5vl</b> or <b>llama3.2-vision</b> for that.</div>
+    ` : ''}
+
     <div class="sect">Gmail watcher</div>
     <div class="help">${watcherConfigured()
       ? 'Connected. Your Apps Script checks email every 15 minutes and FlyerSnap picks up anything new when you open it.'
@@ -3047,13 +3222,49 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.2 · grouped events, density and motion</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.3 · secretary persona + local model option</div>`;
 }
 function manualPrune(){
   const n = pruneData();
   S.settings.lastPrune = todayISO();
   save(); render();
   toast(n ? `Cleaned up ${n} old record${n===1?'':'s'}` : 'Nothing old enough to clean up');
+}
+
+function setAiProvider(p){
+  S.settings.aiProvider = p;
+  save(); render();
+  if(p === 'local' && !S.settings.localBaseUrl) toast('Add the base URL from the Admin panel');
+}
+
+function saveLocalModel(){
+  const b = document.getElementById('localBase');
+  const m = document.getElementById('localModel');
+  let url = (b ? b.value : '').trim().replace(/\/+$/,'');
+  if(url && !/^https:\/\//.test(url)){
+    alert('The URL must start with https://\n\nA page served over HTTPS cannot call a plain http:// address — use the Tailscale https://...ts.net address, not an IP.');
+    return;
+  }
+  if(url && !/\/v1$/.test(url)) url += '/v1';
+  S.settings.localBaseUrl = url;
+  S.settings.localModel = (m ? m.value : '').trim() || 'qwen2.5:14b-instruct';
+  save(); render();
+  toast('Saved — tap Test to check it');
+}
+
+async function testLocalModel(){
+  sub('busy', {msg:'Asking the local model…', hint:'The first call is slow while the model loads'});
+  try{
+    const out = await callLocalModel(
+      [{type:'text', text:'Reply with exactly: READY'}], 20, 'Answer in one word.');
+    nav('settings');
+    alert('Local model answered:\n\n' + out.slice(0,120) +
+      '\n\nModel: ' + (S.settings.localModel||'') );
+  }catch(err){
+    nav('settings');
+    alert('Could not reach the local model:\n\n' + err.message +
+      '\n\nCheck: desktop awake, Tailscale on, OLLAMA_HOST=0.0.0.0 set, and the origin allowed in OLLAMA_ORIGINS.');
+  }
 }
 
 function saveWatcher(){
