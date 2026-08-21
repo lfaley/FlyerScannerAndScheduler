@@ -53,5 +53,20 @@ vm.runInContext(app, box, { filename: 'index.html' });
 vm.runInContext(fs.readFileSync(__dirname + '/tests-cases.js', 'utf8'), box,
   { filename: 'tests-cases.js' });
 
-console.log('\n' + box.results.passed + ' passed, ' + box.results.failed + ' failed\n');
-process.exitCode = box.results.failed ? 1 : 0;
+// Module-layer tests run after the in-page ones. They use real ES module
+// imports, so they must be awaited -- hence the async wrapper.
+(async () => {
+  try {
+    const runModuleTests = require(__dirname + '/tests-modules.js');
+    await runModuleTests((name, fn) => {
+      try { fn(); box.results.passed++; console.log('  ok    ' + name); }
+      catch(e){ box.results.failed++; console.log('  FAIL  ' + name + '\n        ' + e.message); }
+    });
+  } catch(e){
+    box.results.failed++;
+    console.log('  FAIL  module tests could not run\n        ' + e.message);
+  }
+
+  console.log('\n' + box.results.passed + ' passed, ' + box.results.failed + ' failed\n');
+  process.exitCode = box.results.failed ? 1 : 0;
+})();
