@@ -2,7 +2,7 @@
  * FlyerSnap Gmail Watcher -- Google Apps Script
  *
  * Runs on Google's servers every 15 minutes, reads only emails from senders you
- * list, asks Claude to pull out dates, and holds them in a small queue that the
+ * list, has Gordon pull out dates, and holds them in a small queue that the
  * FlyerSnap app fetches.
  *
  * Nothing is emailed, deleted, or replied to. Read-only.
@@ -19,9 +19,9 @@ var LOOKBACK = '7d';       // how far back to search on each run
 
 // --- Cost guards. Without these a single unreadable email retries every 15
 // --- minutes forever, which is ~96 paid API calls a day going nowhere.
-var MAX_PER_RUN = 12;      // most messages we'll send to Claude in one run
+var MAX_PER_RUN = 12;      // most messages we'll send for reading in one run
 var MAX_TRIES = 3;         // give up on a message after this many failures
-var DAILY_CALL_CAP = 80;   // hard ceiling on Claude calls per day
+var DAILY_CALL_CAP = 80;   // hard ceiling on model calls per day
 
 function props() { return PropertiesService.getScriptProperties(); }
 function getProp(k) { return props().getProperty(k); }
@@ -50,7 +50,7 @@ function countCall() {
   return rec.count;
 }
 
-// ---------- Claude ----------
+// ---------- Model calls ----------
 
 function claudePrompt(today) {
   return 'You are reading an email sent to a parent -- school flyers, dance studio notices, ' +
@@ -88,7 +88,7 @@ function callClaude(contentBlocks) {
   });
 
   if (res.getResponseCode() !== 200) {
-    throw new Error('Claude API ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+    throw new Error('model API ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
   }
 
   var data = JSON.parse(res.getContentText());
@@ -489,7 +489,7 @@ function checkMail() {
 
         var raw = callClaude(blocks);
         var events = parseEvents(raw);
-        Logger.log('  Claude returned ' + events.length + ' event(s)' +
+        Logger.log('  read back ' + events.length + ' event(s)' +
           (events.length === 0 && raw && raw.length > 50
             ? ' -- response did not parse; first 200 chars: ' + raw.slice(0, 200)
             : ''));
@@ -533,7 +533,7 @@ function checkMail() {
   props().setProperty('FAILS', JSON.stringify(fails));
   props().setProperty('LAST_RUN', new Date().toISOString());
 
-  Logger.log('Scanned ' + threads.length + ' threads, sent ' + processed + ' to Claude, added ' +
+  Logger.log('Scanned ' + threads.length + ' threads, sent ' + processed + ' for reading, added ' +
     added + ' events. Queue: ' + queue.length + '. Calls today: ' + callsUsedToday() + '/' + DAILY_CALL_CAP);
 }
 
@@ -640,7 +640,7 @@ function resetWatcher() {
 function watcherStatus() {
   var fails = JSON.parse(getProp('FAILS') || '{}');
   var stuck = Object.keys(fails);
-  Logger.log('Claude calls today: ' + callsUsedToday() + ' / ' + DAILY_CALL_CAP +
+  Logger.log('Model calls today: ' + callsUsedToday() + ' / ' + DAILY_CALL_CAP +
     '\nQueue: ' + JSON.parse(getProp('QUEUE') || '[]').length + ' events' +
     '\nLast run: ' + (getProp('LAST_RUN') || 'never') +
     '\nMessages retrying: ' + (stuck.length ? stuck.length + ' (give up at ' + MAX_TRIES + ' tries)' : 'none'));
