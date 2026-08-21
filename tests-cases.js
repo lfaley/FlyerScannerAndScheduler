@@ -1800,6 +1800,39 @@ test('extraction problems are recorded for the user, not swallowed', () => {
     'a failure leaves a trace the review screen can show');
 });
 
+console.log('\nSelf-test and comparison');
+
+test('the comparison restores the original provider even when a side fails', async () => {
+  boot(GOOD);
+  S.settings.aiProvider = 'anthropic';
+  S.settings.aiFallback = true;
+  // readImageDownscaled will throw on a non-file; the finally block must still run.
+  await compareProviders({ name:'not-a-real-file' });
+  assert.strictEqual(S.settings.aiProvider, 'anthropic', 'provider restored');
+  assert.strictEqual(S.settings.aiFallback, true, 'fallback setting restored');
+});
+
+test('comparison disables fallback so neither provider answers for the other', () => {
+  // Documented intent: without this, a failing local call silently returns
+  // Anthropic's answer and the comparison would show two identical columns.
+  const src = String(compareProviders);
+  assert.ok(/aiFallback = false/.test(src), 'fallback is switched off during the run');
+  assert.ok(/finally/.test(src), 'and restored in a finally block');
+});
+
+test('the self-test checks every stage the scanner depends on', () => {
+  const src = String(runLocalSelfTest);
+  ['Base URL saved','Server reachable','Chosen model is installed',
+   'Text request works','Thinking is off','Vision works','Returns parseable JSON']
+    .forEach(stage => assert.ok(src.indexOf(stage) >= 0, 'covers: ' + stage));
+});
+
+test('the self-test verifies thinking rather than assuming it', () => {
+  const src = String(runLocalSelfTest);
+  assert.ok(/<think>|Thinking/.test(src),
+    'looks for a leaked reasoning trace instead of trusting think:false');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

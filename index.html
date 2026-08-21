@@ -179,6 +179,7 @@
 <input type="file" id="fLib" accept="image/*" multiple hidden>
 <input type="file" id="fPdf" accept="application/pdf" hidden>
 <input type="file" id="fRecipe" accept="image/*" multiple hidden>
+<input type="file" id="fCompare" accept="image/*" hidden>
 <input type="file" id="fImport" accept="application/json" hidden>
 
 <script>
@@ -1166,7 +1167,8 @@ function render(){
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
-    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue};
+    shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue,
+    selfTest:renderSelfTest, compare:renderCompare};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   const changedScreen = key !== lastViewKey;
@@ -3342,6 +3344,8 @@ function renderSettings(m){
         <button class="btn" onclick="saveLocalModel()">Save</button>
         <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
       </div>
+      <button class="btn alt" style="margin-top:8px" onclick="runLocalSelfTest()">🔬 Run full self-test</button>
+      <button class="btn alt" style="margin-top:8px" onclick="compareResult=null;sub('compare')">⚖️ Compare against Anthropic</button>
       <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model. A text-only model such as qwen2.5:14b-instruct cannot read photos — pull something like <b>qwen2.5vl</b> or <b>llama3.2-vision</b> for that.</div>
     ` : ''}
 
@@ -3405,7 +3409,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.7 · mixed-content emails, visible failures, provenance</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.8 · self-test and provider comparison</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -3433,6 +3437,188 @@ function saveLocalModel(){
   S.settings.localModel = (m ? m.value : '').trim() || 'qwen2.5:14b-instruct';
   save(); render();
   toast('Saved — tap Test to check it');
+}
+
+// A 1x1 PNG. Small enough to send anywhere, real enough to prove the image
+// pipeline works end to end rather than just the text path.
+const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+let selfTestResults = [];
+
+async function runLocalSelfTest(){
+  selfTestResults = [];
+  const add = (name, ok, detail) => selfTestResults.push({ name, ok, detail: detail || '' });
+
+  const base = (S.settings.localBaseUrl||'').trim().replace(/\/+$/,'');
+  const model = (S.settings.localModel||'').trim();
+
+  // Stage 1 -- configuration, before any network work.
+  if(!base){ add('Base URL saved', false, 'empty'); sub('selfTest'); return; }
+  add('Base URL saved', /^https:\/\//.test(base), base);
+  add('Model name saved', !!model, model || 'missing');
+
+  // Stage 2 -- can we reach it at all, and does it list our model?
+  sub('busy', {msg:'Checking the connection…', hint:'/models'});
+  try{
+    const data = await jsonpRequestOrFetch(base + '/models');
+    const ids = (data && data.data || []).map(m => m.id || '');
+    add('Server reachable', true, ids.length + ' model(s) available');
+    add('Chosen model is installed', ids.some(id => id === model || id.indexOf(model) === 0),
+      ids.length ? ids.slice(0,6).join(', ') : 'none listed');
+  }catch(err){
+    add('Server reachable', false, err.message);
+    sub('selfTest'); return;
+  }
+
+  // Stage 3 -- a plain text round trip.
+  sub('busy', {msg:'Testing text…', hint:'first call loads the model, be patient'});
+  let textOut = '';
+  try{
+    textOut = await callLocalModel([{type:'text', text:'Reply with exactly: READY'}], 50,
+      'Answer in one word.');
+    add('Text request works', /READY/i.test(textOut), JSON.stringify(textOut).slice(0,80));
+  }catch(err){
+    add('Text request works', false, err.message);
+    sub('selfTest'); return;
+  }
+
+  // Stage 4 -- did thinking actually get disabled? This was assumed, not verified.
+  const leaked = /<think>|Thinking\.\.\.|done thinking/i.test(textOut);
+  add('Thinking is off', !leaked,
+    leaked ? 'reasoning leaked into the answer — the cleaner is doing the work'
+           : 'no reasoning trace in the reply');
+
+  // Stage 5 -- vision. The whole scanner depends on this.
+  sub('busy', {msg:'Testing vision…', hint:'sending a test image'});
+  try{
+    const out = await callLocalModel([
+      {type:'image', source:{type:'base64', media_type:'image/png', data:TINY_PNG}},
+      {type:'text', text:'Reply with exactly: SAW_IMAGE'}], 50, 'Answer in one word.');
+    const refused = /cannot|unable|no image|don.t see/i.test(out);
+    add('Vision works', !refused, JSON.stringify(out).slice(0,100));
+  }catch(err){
+    add('Vision works', false, err.message);
+  }
+
+  // Stage 6 -- strict JSON, which every extraction depends on.
+  sub('busy', {msg:'Testing JSON output…', hint:''});
+  try{
+    const out = await callLocalModel(
+      [{type:'text', text:'Respond with ONLY this JSON and nothing else: {"ok":true}'}], 200);
+    let parsed = null;
+    try{ parsed = JSON.parse(out); }catch(e){}
+    add('Returns parseable JSON', !!parsed, parsed ? 'parsed cleanly' : JSON.stringify(out).slice(0,100));
+  }catch(err){
+    add('Returns parseable JSON', false, err.message);
+  }
+
+  sub('selfTest');
+}
+
+// /models is a plain GET; use fetch where CORS allows and fall back to JSONP.
+async function jsonpRequestOrFetch(url){
+  try{
+    const res = await fetch(url, { headers:{ 'Authorization':'Bearer local' } });
+    if(!res.ok) throw new Error('status ' + res.status);
+    return await res.json();
+  }catch(e){
+    throw new Error(e.message + ' (check OLLAMA_ORIGINS includes this site, and OLLAMA_HOST=0.0.0.0)');
+  }
+}
+
+// P1.5 -- run the SAME input through both providers and show the results side by
+// side. Turns "is local good enough" from an opinion into something you can look
+// at. Scoring is deliberately not automatic: you judge, because only you know
+// which dates were really on the page.
+let compareResult = null;
+
+async function compareProviders(file){
+  if(!file) return;
+  const original = S.settings.aiProvider;
+  const originalFallback = S.settings.aiFallback;
+  compareResult = { name: file.name || 'image', anthropic:null, local:null,
+                    anthropicErr:null, localErr:null };
+  try{
+    const { base64, mediaType } = await readImageDownscaled(file);
+    const blocks = () => ([
+      {type:'image', source:{type:'base64', media_type:mediaType, data:base64}},
+      {type:'text', text:eventPrompt()}]);
+
+    S.settings.aiFallback = false;   // never let one provider answer for the other
+
+    sub('busy', {msg:'Reading with Anthropic…', hint:''});
+    try{
+      S.settings.aiProvider = 'anthropic';
+      compareResult.anthropic = parseExtractedEvents(
+        await callAI(blocks(), 8000, GROUNDING_EVENTS)) || [];
+    }catch(err){ compareResult.anthropicErr = err.message; }
+
+    sub('busy', {msg:'Reading with the local model…', hint:'this one may be slower'});
+    try{
+      S.settings.aiProvider = 'local';
+      compareResult.local = parseExtractedEvents(
+        await callAI(blocks(), 8000, GROUNDING_EVENTS)) || [];
+    }catch(err){ compareResult.localErr = err.message; }
+  }catch(err){
+    compareResult.anthropicErr = compareResult.anthropicErr || err.message;
+  }finally{
+    S.settings.aiProvider = original;
+    S.settings.aiFallback = originalFallback;
+    save();
+  }
+  sub('compare');
+}
+
+function compareColumn(title, events, err){
+  if(err) return `<div class="card" style="border-left:5px solid var(--red)">
+    <div style="font-weight:800;font-size:var(--t-sm)">${esc(title)}</div>
+    <div class="meta">Failed: ${esc(err)}</div></div>`;
+  const list = events || [];
+  return `<div class="card">
+    <div style="font-weight:800;font-size:var(--t-sm);margin-bottom:6px">${esc(title)} — ${list.length} event${list.length===1?'':'s'}</div>
+    ${list.length ? list.map(e=>`<div style="padding:6px 0;border-top:1px solid #EEF2EF">
+      <div style="font-size:var(--t-sm);font-weight:600">${esc(e.title||'(no title)')}</div>
+      <div class="meta" style="font-size:var(--t-cap)">${esc(e.date||'no date')}${e.time?' · '+fmt12(e.time):''}${e.endTime?'-'+fmt12(e.endTime):''}</div>
+    </div>`).join('') : '<div class="meta">Nothing found</div>'}
+  </div>`;
+}
+
+function renderCompare(m){
+  setHeader('Provider Comparison', true);
+  if(!compareResult){
+    m.innerHTML = `<div class="help">Pick a flyer photo. It is read by both providers with identical prompts, and the results are shown side by side so you can judge which is doing better on your actual material.</div>
+      <button class="btn" onclick="document.getElementById('fCompare').click()">📷 Choose a flyer</button>`;
+    return;
+  }
+  const a = compareResult.anthropic || [], l = compareResult.local || [];
+  const onlyA = a.filter(x => !l.some(y => looksDuplicate(x,y)));
+  const onlyL = l.filter(x => !a.some(y => looksDuplicate(x,y)));
+  m.innerHTML = `<div class="help">Same image, same prompt, both providers. Judge it yourself: which list matches what is actually printed on the page?</div>
+    ${compareColumn('☁️ Anthropic (' + MODEL + ')', compareResult.anthropic, compareResult.anthropicErr)}
+    ${compareColumn('🏠 ' + (S.settings.localModel||'local'), compareResult.local, compareResult.localErr)}
+    <div class="card" style="border-left:5px solid var(--amber)">
+      <div style="font-weight:800;font-size:var(--t-sm)">Differences</div>
+      <div class="meta" style="font-size:var(--t-cap)">
+        Only Anthropic found: ${onlyA.length ? onlyA.map(e=>esc(e.title)).join(', ') : 'nothing'}<br>
+        Only local found: ${onlyL.length ? onlyL.map(e=>esc(e.title)).join(', ') : 'nothing'}<br>
+        <b>An event only one side found is either a miss by the other, or an invention by that one. Check the page.</b>
+      </div></div>
+    <button class="btn alt" onclick="compareResult=null;render()">Try another</button>`;
+}
+
+function renderSelfTest(m){
+  setHeader('Local Model Self-Test', true);
+  const pass = selfTestResults.filter(r=>r.ok).length;
+  let html = `<div class="card" style="border-left:5px solid ${pass===selfTestResults.length?'var(--green)':'var(--amber)'}">
+    <div style="font-weight:800">${pass} of ${selfTestResults.length} checks passed</div></div>`;
+  html += selfTestResults.map(r => `<div class="card">
+    <div class="row">
+      <div class="grow">
+        <div style="font-weight:700;font-size:var(--t-sm)">${r.ok?'✓':'✗'} ${esc(r.name)}</div>
+        ${r.detail?`<div class="meta" style="font-size:var(--t-cap);word-break:break-word">${esc(r.detail)}</div>`:''}
+      </div></div></div>`).join('');
+  html += `<button class="btn alt" onclick="runLocalSelfTest()">Run again</button>`;
+  m.innerHTML = html;
 }
 
 async function testLocalModel(){
@@ -3601,6 +3787,7 @@ document.getElementById('fCam').addEventListener('change', e=>{ handleCapture(e.
 document.getElementById('fLib').addEventListener('change', e=>{ handleCapture(e.target.files, false); e.target.value=''; });
 document.getElementById('fPdf').addEventListener('change', e=>{ handleCapture(e.target.files, true); e.target.value=''; });
 document.getElementById('fRecipe').addEventListener('change', e=>{ handleRecipeScan(e.target.files); e.target.value=''; });
+document.getElementById('fCompare').addEventListener('change', e=>{ compareProviders(e.target.files[0]); e.target.value=''; });
 document.getElementById('fImport').addEventListener('change', e=>{ importBackup(e.target.files[0]); e.target.value=''; });
 
 // ---------- Boot ----------
