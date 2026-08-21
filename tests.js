@@ -45,11 +45,23 @@ const box = {
 box.globalThis = box;
 vm.createContext(box);
 
-// Stand in for the ES import at the top of index.html's module. Loaded from the
-// real js/format.js source so the sandbox cannot drift from what ships.
-const fmtSrc = fs.readFileSync(__dirname + '/js/format.js', 'utf8')
-  .replace(/^export\s+/gm, '');
-vm.runInContext(fmtSrc, box, { filename: 'js/format.js' });
+// Stand in for the ES imports at the top of index.html's module. Every file in
+// js/ is loaded from source with `export` stripped, so the sandbox can never
+// drift from what actually ships -- and a new module needs no runner change.
+function loadModulesInto(ctx){
+  const dir = __dirname + '/js';
+  if(!fs.existsSync(dir)) return;
+  fs.readdirSync(dir)
+    .filter(f => f.endsWith('.js'))
+    .sort()                                   // deterministic order
+    .forEach(f => {
+      const code = fs.readFileSync(dir + '/' + f, 'utf8')
+        .replace(/^export\s+/gm, '')
+        .replace(/^import\s[^;]*;\s*$/gm, '');   // deps are all loaded here anyway
+      vm.runInContext(code, ctx, { filename: 'js/' + f });
+    });
+}
+loadModulesInto(box);
 
 const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
 
@@ -60,7 +72,7 @@ const openTag = html.indexOf('<script type="module">') >= 0
   ? '<script type="module">' : '<script>';
 let app = html.split(openTag)[1].split('</script>')[0]
   .split('// ---------- File input wiring ----------')[0]
-  .replace(/^import\s+\{[^}]*\}\s+from\s+'[^']*';\s*$/m, '');
+  .replace(/^import\s+\{[^}]*\}\s+from\s+'[^']*';\s*$/gm, '');
 
 // The bridge assigns to window, which the sandbox does not need and which would
 // fail on names trimmed off with the file-input wiring above.
