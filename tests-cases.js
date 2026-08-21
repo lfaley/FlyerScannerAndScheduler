@@ -1664,6 +1664,54 @@ test('a mixed queue keeps both shapes apart', () => {
   assert.strictEqual(ready[0].title, 'Already extracted');
 });
 
+console.log('\nReasoning-model output');
+
+test('the Thinking.../done thinking. wrapper is removed', () => {
+  const raw = 'Thinking...\nSo, let me look at the image. There may be dates.\n...done thinking.\n[{"title":"Open House","date":"2026-08-20"}]';
+  const out = cleanModelText(raw);
+  assert.ok(out.startsWith('['), 'narration gone, JSON first');
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed[0].title, 'Open House');
+});
+
+test('<think> tags are removed', () => {
+  const raw = '<think>weighing the options</think>{"title":"Recital","date":"2026-09-10"}';
+  assert.strictEqual(JSON.parse(cleanModelText(raw)).title, 'Recital');
+});
+
+test('prose before and after the JSON is discarded', () => {
+  const raw = 'Here are the events I found:\n[{"title":"Picture Day","date":"2026-08-13"}]\nLet me know if you need more.';
+  const parsed = JSON.parse(cleanModelText(raw));
+  assert.strictEqual(parsed[0].title, 'Picture Day');
+});
+
+test('a brace inside a title does not truncate the JSON', () => {
+  const raw = '[{"title":"Mini M.T. (Austin) {special}","date":"2026-08-03"}]';
+  const parsed = JSON.parse(cleanModelText(raw));
+  assert.strictEqual(parsed[0].title, 'Mini M.T. (Austin) {special}');
+});
+
+test('markdown fences are still stripped', () => {
+  const raw = '```json\n{"title":"X","date":"2026-08-01"}\n```';
+  assert.strictEqual(JSON.parse(cleanModelText(raw)).title, 'X');
+});
+
+test('an unterminated thinking block still yields the answer', () => {
+  const raw = 'Thinking...\nlots of reasoning here\n...done thinking.\n{"title":"Y","date":"2026-08-02"}';
+  assert.strictEqual(JSON.parse(cleanModelText(raw)).title, 'Y');
+});
+
+test('plain text with no JSON passes through unharmed', () => {
+  assert.strictEqual(cleanModelText('READY'), 'READY');
+  assert.strictEqual(cleanModelText('Thinking...\nhmm\n...done thinking.\nREADY'), 'READY');
+});
+
+test('an object with nested braces survives', () => {
+  const raw = '{"title":"A","meta":{"room":"12"},"date":"2026-08-05"}';
+  const parsed = JSON.parse(cleanModelText(raw));
+  assert.strictEqual(parsed.meta.room, '12');
+});
+
 console.log('\nSharing');
 
 test('shared events carry no provenance', () => {

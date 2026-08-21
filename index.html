@@ -594,6 +594,50 @@ function blocksToOpenAI(contentBlocks){
   return parts;
 }
 
+// Reasoning models (qwen3-vl, deepseek-r1 and friends) narrate before answering:
+// "Thinking..." / "...done thinking.", or <think>...</think>. FlyerSnap runs
+// JSON.parse on the result, and a parse failure yields ZERO items rather than
+// partial ones -- so the symptom is a silent "found nothing". Strip the narration
+// and, if prose still surrounds the payload, cut it down to the JSON itself.
+function stripThinking(text){
+  let t = String(text || '');
+  t = t.replace(/<think>[\s\S]*?<\/think>/gi, ' ');
+  t = t.replace(/<thinking>[\s\S]*?<\/thinking>/gi, ' ');
+  // "Thinking..." through "...done thinking." (the CLI/Ollama style)
+  t = t.replace(/(^|\n)\s*Thinking\.\.\.[\s\S]*?\.\.\.\s*done thinking\.?/gi, ' ');
+  // An unterminated thinking block: drop everything before the last marker.
+  const done = t.lastIndexOf('...done thinking.');
+  if(done >= 0) t = t.slice(done + '...done thinking.'.length);
+  return t.replace(/```json|```/g, '').trim();
+}
+
+// Pull the outermost JSON value out of surrounding prose, respecting strings so
+// a brace inside a title cannot end the scan early.
+function extractJson(text){
+  const t = String(text || '');
+  const starts = [t.indexOf('{'), t.indexOf('[')].filter(i => i >= 0);
+  if(!starts.length) return t.trim();
+  const start = Math.min.apply(null, starts);
+  const open = t[start];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0, inStr = false, esc = false;
+  for(let i = start; i < t.length; i++){
+    const c = t[i];
+    if(esc){ esc = false; continue; }
+    if(c === '\\'){ esc = true; continue; }
+    if(c === '"'){ inStr = !inStr; continue; }
+    if(inStr) continue;
+    if(c === open) depth++;
+    else if(c === close){ depth--; if(depth === 0) return t.slice(start, i + 1); }
+  }
+  return t.slice(start).trim();   // unbalanced; hand back what we have
+}
+
+function cleanModelText(text){
+  const stripped = stripThinking(text);
+  return /[{\[]/.test(stripped) ? extractJson(stripped) : stripped;
+}
+
 async function callLocalModel(contentBlocks, maxTokens, system){
   const base = (S.settings.localBaseUrl||'').trim().replace(/\/+$/,'');
   if(!base) throw new Error('No local model URL saved.');
@@ -622,7 +666,7 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   const json = await res.json();
   const out = (json.choices && json.choices[0] && json.choices[0].message
     && json.choices[0].message.content) || '';
-  return String(out).replace(/```json|```/g,'').trim();
+  return cleanModelText(out);
 }
 
 async function callClaude(contentBlocks, maxTokens, system){
@@ -3222,7 +3266,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.3 · secretary persona + local model option</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v6.4 · handle reasoning-model output</div>`;
 }
 function manualPrune(){
   const n = pruneData();
