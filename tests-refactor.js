@@ -278,7 +278,8 @@ module.exports = function runRefactorTests(test){
 
   test('every remaining top-level function can be located cleanly', () => {
     const html = fs.readFileSync('index.html', 'utf8');
-    const js = html.split('<script type="module">')[1].split('</script>')[0];
+    const openTag = html.includes('<script type="module">') ? '<script type="module">' : '<script>';
+    const js = html.split(openTag)[1].split('</script>')[0];
     const names = [...js.matchAll(/^function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map(m => m[1]);
     assert.ok(names.length > 100, 'expected many functions, found ' + names.length);
 

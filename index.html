@@ -182,11 +182,271 @@
 <input type="file" id="fCompare" accept="image/*" hidden>
 <input type="file" id="fImport" accept="application/json" hidden>
 
-<script type="module">import { SCHEMA_VERSION, migrate } from './js/migrate.js';
+<script>'use strict';
+// ---------------------------------------------------------------------------
+// MODULES ARE INLINED HERE ON PURPOSE.
+//
+// These four blocks live in js/*.js and are the source of truth for the tests.
+// They are inlined into this file for delivery because loading them as real ES
+// modules broke the installed iOS PWA: an import that fails to resolve kills
+// the whole module, and the app renders as a bare background with no visible
+// error. One file has no imports to fail.
+//
+// Keep editing js/*.js -- the build step re-inlines them, and a test asserts
+// the two copies stay identical.
+// ---------------------------------------------------------------------------
+
+// ===== inlined from js/format.js =====
+/**
+ * Formatting helpers. Pure functions -- no DOM, no app state, no side effects.
+ *
+ * This is the first module extracted from index.html. It was chosen because it
+ * is entirely pure and already well covered by tests, so moving it proves the
+ * pattern works without risking anything.
+ */
+
+// --- dates -----------------------------------------------------------------
+
+function todayISO(d){
+  const t = d || new Date();
+  return t.getFullYear() + '-' +
+    String(t.getMonth() + 1).padStart(2, '0') + '-' +
+    String(t.getDate()).padStart(2, '0');
+}
+
+function daysUntil(dateStr, today){
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const target = new Date(y, m - 1, d);
+  const now = today ? new Date(today) : new Date();
+  now.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  return Math.round((target - now) / 86400000);
+}
+
+// --- times -----------------------------------------------------------------
+
+/**
+ * 24-hour to 12-hour for display. Stored data and the .ics file stay 24-hour;
+ * the iCalendar standard requires it and the phone renders it per its own
+ * settings. Only what the user reads changes here.
+ */
+function fmt12(t){
+  if(!t || !/^\d{1,2}:\d{2}$/.test(t)) return t || '';
+  let [h, m] = t.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12; if(h === 0) h = 12;
+  return h + ':' + String(m).padStart(2, '0') + ' ' + ampm;
+}
+
+function fmtTimeRange(e){
+  if(!e || !e.time) return '';
+  return e.endTime ? fmt12(e.time) + '–' + fmt12(e.endTime) : fmt12(e.time);
+}
+
+// --- text ------------------------------------------------------------------
+
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ===== inlined from js/matching.js =====
+/**
+ * Event matching and grouping. Pure -- no DOM, no app state.
+ *
+ * The thresholds were tuned against real failures. Short titles need full
+ * containment because "Mini Jazz" and "Mini M.T." share a word by chance;
+ * longer ones need 0.8 overlap because 0.5 merged unrelated school events.
+ */
+
+// The same announcement can reach us twice -- once photographed, once by email --
+// and Claude words the two slightly differently ("&" vs "and", extra qualifiers).
+// Matching therefore has to be on meaning, not on the exact string.
+function normTitle(t){
+  return String(t || '').toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\b(the|a|an|of|for|to|at|on|in|our|your|please|note)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Overlap measured against the shorter title, so "Picture Day" still matches
+// "Fall Picture Day for Grades 1-5".
+function titleSimilarity(a, b){
+  const A = normTitle(a).split(' ').filter(Boolean);
+  const B = normTitle(b).split(' ').filter(Boolean);
+  if(!A.length || !B.length) return 0;
+  const setB = new Set(B);
+  const overlap = A.filter(w => setB.has(w)).length;
+  return overlap / Math.min(A.length, B.length);
+}
+
+function looksDuplicate(a, b){
+  if(!a || !b || a.date !== b.date) return false;          // same day is required
+  const na = normTitle(a.title), nb = normTitle(b.title);
+  if(!na || !nb) return false;
+  if(na === nb) return true;                                // identical after normalizing
+  // For anything else, demand a strong match. Short titles (1-2 words) are too
+  // easy to collide by chance ("Mini Jazz" vs "Mini M.T."), so for those we
+  // require one title to fully contain the other rather than mere word overlap.
+  const wa = na.split(' ').filter(Boolean), wb = nb.split(' ').filter(Boolean);
+  const shorter = Math.min(wa.length, wb.length);
+  if(shorter <= 2){
+    return na.indexOf(nb) >= 0 || nb.indexOf(na) >= 0;     // full containment only
+  }
+  return titleSimilarity(a.title, b.title) >= 0.8;         // was 0.6 — too loose
+}
+
+// Group upcoming events into scannable time buckets. A flat list of 25 cards
+// gives the eye nothing to anchor on; headers let you navigate by scanning.
+function timeBucket(days){
+  if(days <= 0) return 'Today';
+  if(days === 1) return 'Tomorrow';
+  if(days <= 7) return 'This week';
+  if(days <= 14) return 'Next week';
+  if(days <= 31) return 'This month';
+  return 'Later';
+}
+
+// Duplicates that are already saved -- e.g. a flyer scanned by hand and the same
+// announcement arriving by email before matching was improved.
+function pairKey(a, b){ return [a.id, b.id].sort().join('~'); }
+
+// ===== inlined from js/prompts.js =====
+/**
+ * Gordon's persona and task grounding. Plain constants, no behaviour.
+ *
+ * Every rule exists because of a failure we actually saw, not as general
+ * advice. "Never invent clarity" is the fix for hallucinated dates;
+ * "restraint and elaboration" is the fix for a whole dance week collapsing
+ * into one generic entry.
+ */
+
+// ===========================================================================
+// SECRETARY PERSONA + GROUNDING
+//
+// Modelled on how a world-class executive assistant takes minutes. The rules
+// below are drawn from professional minute-taking practice, and each one exists
+// to prevent a specific failure we have actually seen:
+//
+//  - "owner, task, deadline" for every item   -> stops vague, unusable entries
+//  - "never invent clarity"                   -> stops inferred/hallucinated dates
+//  - "suggestion is not a decision"           -> stops 'maybe' becoming an event
+//  - "restraint vs elaboration"               -> stops a whole week collapsing
+//                                                into one generic item
+//  - "objective, no interpretation"           -> stops editorialising in notes
+// ===========================================================================
+const SECRETARY_PERSONA = `You are the executive secretary to a busy parent. You are a world-class note taker: precise, literal, and completely reliable. Your reputation rests on one thing -- what you write down is exactly what the source said, no more and no less.
+
+How you work:
+
+1. OWNER, TASK, DEADLINE. Every item you record answers three questions: what is happening, who it concerns, and exactly when. An item missing a date is not an item; leave it out rather than guessing.
+
+2. NEVER INVENT CLARITY. If the source is vague, your note is vague. You do not resolve ambiguity by guessing, and you never infer a date, time, or location that is not stated. A missing field is null. Inventing a plausible detail is the worst error you can make -- worse than omitting the item.
+
+3. A SUGGESTION IS NOT A DECISION. "We hope to schedule", "a sign-up sheet will be available", "more details to follow" are not events. Record only what is actually scheduled or actually due.
+
+4. RESTRAINT AND ELABORATION. Never collapse many things into one summary item. If a schedule lists twelve sessions, you record twelve items -- not "training week". Conversely, do not pad: no item needs a paragraph.
+
+5. OBJECTIVE AND LITERAL. Keep the source's own wording for names and titles, including instructor or room names in parentheses. Add no opinion, no interpretation, no encouragement.
+
+6. DEADLINES ARE DIFFERENT FROM EVENTS. A form due, registration cutoff, payment date, or RSVP-by is a deadline. Something you attend is an event.
+
+7. VERIFY BEFORE FINALISING. Re-read what you produced against the source. If a date, time, or name does not appear verbatim in the source, remove it.`;
+
+// Task-specific grounding, appended after the persona.
+const GROUNDING_EVENTS = `Working from the material provided, produce the calendar items.
+
+- Dates must be resolved to YYYY-MM-DD. If the source gives a weekday and a date ("Monday 8/3"), use the date. If the year is absent, infer it from today's date, choosing the nearest future occurrence.
+- Times are 24-hour HH:MM. Record both a start and an end when a range is given ("6:00-8:30 PM" -> time 18:00, endTime 20:30). A single time has a null endTime.
+- SCHEDULE GRIDS: when rows are time slots and columns are days, every non-empty cell is its own separate item. Its date comes from the column, its time from the row label, unless the cell states its own time -- which always wins. One column often holds several sessions; record every one. Rows labelled Lunch, Dinner, or Break are not items.
+- Keep the cell's own label as the title, including a name in parentheses, e.g. "Mini M.T. (Austin)".
+- notes: this is where a good secretary earns their keep. Capture what the parent will actually need to know on the day, drawn from anywhere in the source -- the item itself, the surrounding paragraphs, or a covering email.
+
+  Include when stated: what to bring or wear; cost, fee, or payment deadline; where exactly to go (door, room, building); whether to RSVP or sign up and by when; who it is for (which grade, which team, parents or students only); who to contact; what to do beforehand; and any consequence of missing it.
+
+  Write it as plain factual phrases, semicolon-separated, in the source's own words where possible. Two or three sentences at most. Example: "Wear all black, hair up; bring water bottle, healthy snacks and all dance shoes; returning parents bring the company handbook binder."
+
+  Do NOT pad. If the source says nothing beyond the date and title, notes is null. Never invent a requirement that is not stated -- a made-up instruction is worse than no note at all.`;
+
+const GROUNDING_RECIPE = `Working from the photograph(s), transcribe the recipe exactly as written.
+
+- Do not adjust quantities, substitute ingredients, or improve the method.
+- Preserve the source's units and order.
+- If several photographs are provided, they are continued pages of one recipe: combine them, and do not repeat an ingredient or step that appears on more than one page.
+- If the image is not a recipe, say so rather than inventing one.`;
+
+const MULTI_SOURCE_NOTE = `The material above may come from more than one place: the body of an email, and one or more attachments (flyers, schedules, letters).
+
+Treat them as ONE set of facts about the same events. A date may appear only on a flyer while what to bring is only in the email, or the reverse. Combine them: each event gets the best date, time and location found anywhere, and notes drawn from every source that says something useful about it.
+
+If the same event appears in two places, produce ONE item, not two.`;
+
+// ===== inlined from js/migrate.js =====
+/**
+ * Schema migration. Pure: takes a saved object, returns it upgraded.
+ *
+ * This is the most consequential code in the app. Every existing install runs
+ * it on load, and a mistake here does not fail loudly -- it silently damages
+ * data people cannot get back. It lives on its own so it can be read, reasoned
+ * about and tested in isolation.
+ *
+ * Rules:
+ *  - Migrations only ever ADD or TRANSFORM. Never delete a field you do not
+ *    fully understand; an unknown field may belong to a newer version.
+ *  - Each step is guarded by `from < N` and must be safe to run once, in order.
+ *  - Bumping SCHEMA_VERSION without adding the matching block means old saves
+ *    are stamped as current without being upgraded.
+ */
+
+// Bump when the saved shape changes, and add a migration step below.
+// v1 = everything up to and including v2.1 (implicit; no version field was stored).
+// v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
+// NOTE: declared before load() runs, since blank() reads it at startup.
+const SCHEMA_VERSION = 4;
+
+function migrate(s, fromVersion){
+  const from = Number(fromVersion) || 1;
+  if(from >= SCHEMA_VERSION){ s.schemaVersion = SCHEMA_VERSION; return s; }
+
+  if(from < 2){
+    // FlyerSnap no longer owns recipes or meal plans — the recipe app does.
+    // Keep the rows (harmless, and a user may want them exported) but stop
+    // treating them as live data. Nothing is deleted here on purpose: a
+    // migration that destroys data is the thing we most want to avoid.
+    s.legacyRecipes = Array.isArray(s.recipes) ? s.recipes : [];
+    s.legacyMeals   = Array.isArray(s.meals)   ? s.meals   : [];
+    delete s.recipes;
+    delete s.meals;
+  }
+
+  if(from < 3){
+    // People can now be adults, and events can be tagged to several people.
+    // Existing kids become type 'kid'; existing single kidId becomes a
+    // one-entry personIds list. kidId is preserved so the star/chore system,
+    // which is deliberately kids-only, keeps working untouched.
+    (s.kids || []).forEach(k => { if(!k.type) k.type = 'kid'; });
+    (s.events || []).forEach(e => {
+      if(!Array.isArray(e.personIds)){
+        e.personIds = e.kidId ? [e.kidId] : [];
+      }
+    });
+  }
+
+  if(from < 4){
+    // Events can now be flagged unread. Everything already in the app counts as
+    // seen, so nobody opens the app to a wall of "new" items.
+    (s.events || []).forEach(e => { if(e.unread === undefined) e.unread = false; });
+  }
+
+  s.schemaVersion = SCHEMA_VERSION;
+  return s;
+}
 
 let loadError = null;
 let storageWarned = false;
-let S = load();
 
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
   redemptions:[], lists:[], listItems:[],
@@ -194,10 +454,6 @@ function blank(){ return { events:[], kids:[], chores:[], completions:[], reward
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
     aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true },
   schemaVersion: SCHEMA_VERSION }; }
-import { SECRETARY_PERSONA, GROUNDING_EVENTS, GROUNDING_RECIPE, MULTI_SOURCE_NOTE } from './js/prompts.js';
-import { normTitle, titleSimilarity, looksDuplicate, timeBucket, pairKey } from './js/matching.js';
-import { todayISO, daysUntil, fmt12, fmtTimeRange, esc } from './js/format.js';
-'use strict';
 // ============================================================
 // FlyerSnap PWA — single file, zero dependencies.
 // Data: localStorage JSON. Reminders: .ics calendar files w/ alarms.
@@ -209,6 +465,10 @@ const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA']
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const SLOTS = ['breakfast','lunch','snack','dinner','dessert'];
+
+// MUST come after the constants above: load() -> migrate()/blank() reads them,
+// and const/let are in the temporal dead zone until their line executes.
+let S = load();
 
 function load(){
   const base = blank();
@@ -3509,7 +3769,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.5 · tested refactoring tool</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.6 · single-file delivery restored</div>`;
 }
 function manualPrune(){
   const n = pruneData();

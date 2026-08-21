@@ -61,7 +61,11 @@ function loadModulesInto(ctx){
       vm.runInContext(code, ctx, { filename: 'js/' + f });
     });
 }
-loadModulesInto(box);
+// index.html now inlines the js/ modules for delivery (a failed ES import in
+// the installed PWA blanks the whole app), so loading them here as well would
+// redeclare them. tests-modules.js still imports them properly and a test
+// asserts the inlined copies match the files.
+// loadModulesInto(box);
 
 const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
 

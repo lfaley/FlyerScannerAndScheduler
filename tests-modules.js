@@ -129,13 +129,21 @@ module.exports = async function runModuleTests(test){
 
   console.log('\nService worker caches every module');
 
-  test('every js/ module index.html imports is in the service worker shell', () => {
-    const sw = fs.readFileSync('sw.js', 'utf8');
-    const imports = [...script.matchAll(/from\s+'(\.\/js\/[^']+)'/g)].map(m => m[1]);
-    assert.ok(imports.length > 0, 'expected at least one module import');
-    const missing = imports.filter(p => !sw.includes(p.replace('./', './')));
-    assert.deepStrictEqual(missing, [],
-      'not cached -- the installed app would fail to boot offline: ' + missing.join(', '));
+  test('the inlined copies match js/ exactly', () => {
+    // index.html inlines the modules for delivery, because a failed ES import
+    // in the installed PWA kills the whole script and renders a blank screen.
+    // That means two copies exist, and the tests exercise the js/ files. If the
+    // copies drift, the tests are validating code that does not ship.
+    const drifted = [];
+    fs.readdirSync('js').filter(f => f.endsWith('.js')).forEach(f => {
+      const body = fs.readFileSync('js/' + f, 'utf8')
+        .replace(/^export\s+/gm, '').trim();
+      // Compare on collapsed whitespace: indentation differs after inlining.
+      const norm = s => s.replace(/\s+/g, ' ').trim();
+      if(!norm(script).includes(norm(body))) drifted.push(f);
+    });
+    assert.deepStrictEqual(drifted, [],
+      'inlined copy differs from source -- re-run the inline step for: ' + drifted.join(', '));
   });
 
   test('there are handlers to check, so this guard is not vacuous', () => {
