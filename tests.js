@@ -87,6 +87,12 @@ vm.runInContext(fs.readFileSync(__dirname + '/tests-cases.js', 'utf8'), box,
 // imports, so they must be awaited -- hence the async wrapper.
 (async () => {
   try {
+    const runRefactorTests = require(__dirname + '/tests-refactor.js');
+    runRefactorTests((name, fn) => {
+      try { fn(); box.results.passed++; console.log('  ok    ' + name); }
+      catch(e){ box.results.failed++; console.log('  FAIL  ' + name + '\n        ' + e.message); }
+    });
+
     const runModuleTests = require(__dirname + '/tests-modules.js');
     await runModuleTests((name, fn) => {
       try { fn(); box.results.passed++; console.log('  ok    ' + name); }
