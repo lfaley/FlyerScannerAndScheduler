@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.1 · **Tests:** 260 passing
+**Updated:** August 22, 2026 · **Live version:** v9.2 · **Tests:** 263 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -42,6 +42,12 @@ written straight into the folder.
 The repo moved from `FlyerAndScheduler\flyersnap-pwa` to `Repos\FlyerSnap`;
 older docs may still name the old path, which is dead.
 
+Docs in the repo: **CLAUDE.md** (architecture + rules, read first),
+**HANDOFF.md** (this file), **UI-MODERNIZATION-PLAN.md** (the design work),
+**GMAIL-WATCHER-SETUP.md**, **LOCAL-MODEL-PLAN.md**, **VISION-MODEL-SETUP.md**,
+**RETIRED-CODE-REFERENCE.md**, the RECIPE-APP-*.md integration notes, and
+**DEPLOY.md** (historical one-time Pages setup).
+
 A UI modernization is in flight, driven by an upcoming presentation to
 industry experts. See **UI-MODERNIZATION-PLAN.md** for the six-phase plan and
 a per-version progress log.
@@ -53,14 +59,26 @@ a per-version progress log.
 | v8.8 | Design tokens, dark mode, WCAG contrast test, preview harness, CSS source files |
 | v8.9 | 40-icon inline SVG sprite replacing all emoji chrome |
 | v9.0 | Empty states, undo toast replacing `confirm()`, Meals action row |
-| v9.1 | Accessibility pass (this release) |
+| v9.1 | Accessibility pass (WCAG 2.2), DOM audit tool |
+| v9.2 | Self-contained-boot guard; deleted the doc that recommended the v8.1 mistake |
+
+**v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
+build if the shipped `index.html` ever gains a `<script type="module">`, a
+`<script src>`, a `<link rel=stylesheet>`, or an `import`/`export` in its own
+script — i.e. anything that must be FETCHED to boot. Mutation-tested against
+the real v8.1 change to prove they catch it. `ARCHITECTURE-PLAN.md` was
+deleted: it predated the incident and still recommended
+`<script type="module" src="js/app.js">`, so a future agent could have
+reintroduced the outage in good faith. Its surviving conclusions (the
+`state.js` constraint, why not to rewrite object-oriented) moved into
+CLAUDE.md; the full text remains in git history.
 
 **Next up: Phase 5** — PWA and platform hygiene: maskable icons with safe-zone
 padding, `apple-touch-icon` at 180px, manifest `id`/screenshots, a recorded
 Lighthouse run. Then **Phase 6**, `EXPERT-QA.md`: the anticipated questions and
 honest answers for the presentation.
 
-## Recent work in detail (v8.7 – v9.1)
+## Recent work in detail (v8.7 – v9.2)
 
 **v8.7 — the missing scan button.** Logan reported the manual scan button was
 gone. It was not gone: `<main>`'s screen-entry animation included a
@@ -117,9 +135,10 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 260 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 263 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
-  fixed-position safety, accessibility, WCAG contrast in both themes.
+  fixed-position safety, accessibility, WCAG contrast in both themes, and the
+  self-contained-boot guard.
 - `node tools/preview.js [outDir]` — screenshots every tab, light and dark.
 - `node tools/a11y-audit.js` — accessible names and tap targets in the real DOM.
 - `node tools/inline.js --check` — CSS source/inline drift.
@@ -133,7 +152,8 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 2. **Never guess.** Verify in the repo, a browser, or research first.
 3. `grep` for a function name before writing one (duplicate `logProblem`).
 4. No `transform`/`perspective`/`filter` on ancestors of `.fab` (v8.6).
-5. No real ES module imports in the shipped file (v8.1–v8.5 blank screen).
+5. No real ES module imports — or ANY fetched subresource — in the shipped
+   file (v8.1–v8.5 blank screen). Enforced by tests; do not delete them.
 6. PowerShell 5.1: no `2>&1` from a native command under `$ErrorActionPreference
    = "Stop"` — one stderr line from a PASSING test aborts the script.
 7. Bump `sw.js` `CACHE` every release or phones serve the old app.
@@ -145,8 +165,8 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 - **Snacks & dessert meal slots** — FlyerSnap accepts them; blocked on the
   separate recipe app publishing them (`RECIPE-APP-SNACK-DESSERT-REQUEST.md`).
 - **`state.js` extraction** — blocked on a real constraint: `S` is reassigned
-  and ES import bindings are read-only. Three options in ARCHITECTURE-PLAN.md.
-  No urgency.
+  and ES import bindings are read-only. The three options are documented in
+  CLAUDE.md. No urgency; the dangerous logic (`migrate`) is already isolated.
 - **Logan's iOS version** — unconfirmed. If it is 26.0, updating may remove
   the bottom-gap symptom the `nav::after` cover works around.
 - Phases 5 and 6 of the UI plan (see above).

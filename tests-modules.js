@@ -269,6 +269,53 @@ module.exports = async function runModuleTests(test){
   // build with the exact pair named.
   // -------------------------------------------------------------------------
   // -------------------------------------------------------------------------
+  // THE PRODUCTION GUARD. This is the one that exists because the app went
+  // dark for real users.
+  //
+  // v8.1-v8.5 shipped index.html with <script type="module"> and real ES
+  // imports. In an installed iOS PWA a failed subresource import kills the
+  // ENTIRE script silently: blank background, no error, no console anyone can
+  // reach. It reached production and had to be emergency-reverted in v8.6.
+  //
+  // Modular SOURCE is good and stays (js/*.js, css/*.css). What must never
+  // ship is a shipped file that depends on FETCHING anything to boot. If
+  // real modules are ever wanted again they need verification on an actual
+  // installed PWA first -- the Node sandbox faked imports and green tests
+  // gave false confidence. Deleting this test is not the way to pass it.
+  // -------------------------------------------------------------------------
+  console.log('\nShipped file boots with no subresources');
+
+  test('index.html loads no external script, stylesheet or module', () => {
+    const offenders = [];
+    if(/<script[^>]*\btype=["']module["']/.test(html)) offenders.push('<script type="module">');
+    if(/<script[^>]*\bsrc=/.test(html)) offenders.push('<script src=...>');
+    if(/<link[^>]*rel=["']stylesheet["']/.test(html)) offenders.push('<link rel="stylesheet">');
+    assert.deepStrictEqual(offenders, [],
+      'the shipped file must be self-contained -- a failed fetch blanks the '
+      + 'installed PWA (v8.1-v8.5): ' + offenders.join(', '));
+  });
+
+  test('the shipped script has no import/export of its own', () => {
+    // js/*.js keep their export keywords -- those are SOURCE. The inlined
+    // copies must have them stripped, or the script is a module by accident.
+    const bad = script.split('\n')
+      .map((l, i) => [i + 1, l])
+      .filter(([, l]) => /^\s*(?:import\s|export\s|export\{|import\()/.test(l))
+      .map(([n, l]) => n + ': ' + l.trim().slice(0, 60));
+    assert.deepStrictEqual(bad, [],
+      'import/export in the shipped script turns it into a module: ' + bad.join(' | '));
+  });
+
+  test('the service worker can cache everything the app needs to boot', () => {
+    // Belt and braces on the same failure: if boot ever needs a file the SW
+    // does not cache, the app breaks offline instead of on a bad network.
+    const sw = fs.readFileSync('sw.js', 'utf8');
+    const shell = (sw.match(/const SHELL\s*=\s*\[([^\]]*)\]/) || [,''])[1];
+    ['index.html', 'manifest.json'].forEach(f =>
+      assert.ok(shell.includes(f), 'sw.js SHELL is missing ' + f));
+  });
+
+  // -------------------------------------------------------------------------
   // Accessibility guards. Each one maps to a WCAG 2.2 success criterion and
   // to a failure that is invisible to a sighted developer -- which is exactly
   // why it belongs in the build rather than in a checklist someone re-walks.

@@ -12,8 +12,9 @@
  * mechanically so nobody ever hand-syncs; tests-modules.js fails the build if
  * the copies drift anyway (belt and braces).
  *
- * The js/ side predates this script and is still inlined by hand (see
- * ARCHITECTURE-PLAN.md); extending this script to js/ is welcome future work.
+ * The js/ side predates this script and is still inlined by hand; extending
+ * this script to cover js/ too is welcome future work. Whatever it covers,
+ * the output must stay INLINE -- never emit a <link> or a module import.
  */
 'use strict';
 const fs = require('fs');

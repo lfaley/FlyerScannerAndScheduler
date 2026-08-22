@@ -1,7 +1,7 @@
 # FlyerSnap — UI Modernization Plan
 
 **Written:** August 22, 2026 · **Baseline:** v8.7 (239 tests passing)
-**Status:** Phases 1–4 SHIPPED (v8.8–v9.1 — 260 tests). Phases 5–6 pending.
+**Status:** Phases 1–4 SHIPPED (v8.8–v9.2 — 263 tests). Phases 5–6 pending.
 
 > Progress log
 > - **v9.1 / Phase 4 done:** `user-scalable=no` removed (SC 1.4.4 — an
