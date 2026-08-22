@@ -1404,6 +1404,18 @@ module.exports = async function runModuleTests(test){
       .forEach(s => assert.strictEqual(rt16.quickRoute(s, { names:['Costco'] }), null, s));
   });
 
+  // v9.22 split Settings into a hub plus six pages, so "is it reachable from
+  // Settings" now means the whole family of screens, not one function.
+  // The shared section helpers count too: the pages call them rather than
+  // inlining their markup, so a control living in diagnosticsSection() is just
+  // as reachable as one written into renderSetTrouble directly.
+  const settingsFamily = ['renderSettings', 'renderSetPeople', 'renderSetAI',
+    'renderSetCapabilities', 'renderSetReminders', 'renderSetAppearance',
+    'renderSetBackup', 'renderSetTrouble',
+    'diagnosticsSection', 'appearanceSection', 'aiCapabilitySection']
+    .map(n => (script.split('function ' + n + '(')[1] || '').split('\nfunction ')[0])
+    .join('\n');
+
   console.log('\nThe benchmark runs inside the app (v9.17)');
 
   const benchMod = await import('./js/bench-cases.js');
@@ -1485,16 +1497,17 @@ module.exports = async function runModuleTests(test){
   test('the benchmark is offered whichever provider is selected', () => {
     // It measures ROUTING, not local-model health, so hiding it inside the
     // local-model branch (where the self-test lives) would be wrong.
-    const settings = script.split('function renderSettings(')[1].split('\nfunction ')[0];
-    assert.ok(/runRoutingBench\(\)/.test(settings), 'not reachable from Settings');
-    const localOnly = settings.split("aiProvider()==='local' ? `")[1] || '';
-    assert.ok(!/runRoutingBench/.test(localOnly.split('` : ')[0]),
-      'the benchmark is hidden behind the local-model branch');
+    assert.ok(/runRoutingBench\(\)/.test(settingsFamily), 'not reachable from Settings');
+    // It measures ROUTING, not local-model health, so it must not sit inside a
+    // provider-conditional branch the way the self-test does.
+    const trouble = script.split('function renderSetTrouble(')[1].split('\nfunction ')[0];
+    const localOnly = (trouble.split("aiProvider() === 'local' ? `")[1] || '');
+    assert.ok(!/runRoutingBench|runExtractionBench/.test(localOnly),
+      'a benchmark is hidden behind the local-model branch');
   });
 
   test('the screen says plainly that running it changes nothing', () => {
-    const settings = script.split('function renderSettings(')[1].split('\nfunction ')[0];
-    assert.ok(/nothing is added, changed or deleted/i.test(settings),
+    assert.ok(/nothing is added, changed or deleted/i.test(settingsFamily),
       'a button that makes 34 model calls must say what it will not do');
   });
 
@@ -1565,10 +1578,9 @@ module.exports = async function runModuleTests(test){
   });
 
   test('both benchmarks are offered, and both say they change nothing', () => {
-    const settings = script.split('function renderSettings(')[1].split('\nfunction ')[0];
-    assert.ok(/runExtractionBench\(\)/.test(settings), 'the reading benchmark is unreachable');
-    assert.ok(/runRoutingBench\(\)/.test(settings), 'the routing benchmark is unreachable');
-    const claims = settings.match(/nothing is added, changed or deleted/gi) || [];
+    assert.ok(/runExtractionBench\(\)/.test(settingsFamily), 'the reading benchmark is unreachable');
+    assert.ok(/runRoutingBench\(\)/.test(settingsFamily), 'the routing benchmark is unreachable');
+    const claims = settingsFamily.match(/nothing is added, changed or deleted/gi) || [];
     assert.ok(claims.length >= 2,
       'a button that makes a dozen model calls must say what it will not do: found '
       + claims.length + ' such statements');
@@ -1646,6 +1658,138 @@ module.exports = async function runModuleTests(test){
     const m = sw.match(/const CACHE = 'flyersnap-v(\d+)'/);
     assert.ok(m, 'no CACHE constant');
     assert.ok(Number(m[1]) >= 103, 'CACHE was not bumped for this release: v' + m[1]);
+  });
+
+  console.log('\nAsk is reachable from everywhere (v9.21)');
+
+  test('the Ask button is no longer hidden on sub-screens', () => {
+    // It used to appear on the five tabs only -- 5 of 28 screens. The reason
+    // given was that a sub-screen means mid-task and leaving would lose your
+    // place. That was a real objection with the wrong fix.
+    const fn = script.split('function setHeader(')[1].split('\n}')[0];
+    assert.ok(!/!view\.sub/.test(fn.split('const canAsk')[1].split(';')[0]),
+      'setHeader still refuses to offer Ask on sub-screens');
+    assert.ok(/view\.sub !== 'ask'/.test(fn),
+      'Ask must not offer a button to itself');
+    assert.ok(/aiEnabled\(\)/.test(fn) && /__locked/.test(fn),
+      'the button must still disappear with AI off, and on locked data');
+  });
+
+  test('opening Ask remembers exactly where you were', () => {
+    const fn = script.split('function openAsk(')[1].split('\n}')[0];
+    assert.ok(/askOrigin = \{ tab: view\.tab, sub: view\.sub, data: view\.data \}/.test(fn),
+      'the origin is not captured, so returning cannot be exact');
+    assert.ok(/view\.sub === 'ask'/.test(fn), 'opening Ask from Ask would lose the real origin');
+  });
+
+  test('leaving Ask restores that screen, including its data', () => {
+    // back() drops to the top of a tab, which would strand someone who asked
+    // a question from a list or a half-filled form.
+    const fn = script.split('function closeAsk(')[1].split('\n}')[0];
+    assert.ok(/view = \{ tab: o\.tab, sub: o\.sub, data: o\.data \}/.test(fn),
+      'the sub-screen data is not restored -- listDetail would open empty');
+    assert.ok(/if\(!o\) return back\(\)/.test(fn),
+      'with no origin this must still go somewhere; a dead end is worse');
+    const ask = script.split('function renderAsk(')[1].split('\n}')[0];
+    assert.ok(/setHeader\('Ask ' \+ aiName\(\), true, 'closeAsk\(\)'\)/.test(ask),
+      "the Ask screen's back button does not use closeAsk");
+  });
+
+  test('choosing a tab is a deliberate departure and clears the origin', () => {
+    const fn = script.split('function nav(tab){')[1].split('\n')[0];
+    assert.ok(/askOrigin = null/.test(fn),
+      'a stale origin would teleport the user somewhere they did not choose');
+  });
+
+  test('Edit Event builds its own header and still offers Ask', () => {
+    // It does not use setHeader, so it is the one screen that can silently
+    // miss out.
+    const fn = script.split('function renderEventEdit(')[1].split('const f = eventForm')[0];
+    assert.ok(/openAsk\(\)/.test(fn), 'Edit Event has no Ask button');
+    assert.ok(/aiEnabled\(\)/.test(fn), 'and it ignores the global AI off switch');
+  });
+
+  test('Ask stays a screen rather than becoming an overlay', () => {
+    // On evidence, not taste. NN/g's study of overlay dismissal on mobile
+    // found users "lose their work" when they choose the wrong dismissal
+    // method, and recommends "avoiding overlays entirely when possible,
+    // preferring separate pages". The Ask screen holds a typed draft and
+    // sometimes a pending confirm-this-action, which is exactly that risk.
+    const ask = script.split('function renderAsk(')[1].split('\n}')[0];
+    assert.ok(!/position:fixed;[^"]*inset:0/.test(ask), 'Ask became a full-screen overlay');
+    assert.ok(/subs = \{[\s\S]*?ask:renderAsk/.test(script),
+      'Ask must remain a real screen in the sub-screen map');
+  });
+
+  console.log('\nSettings is a hub, not a 6.8-screen scroll (v9.22)');
+
+  test('nothing that was in Settings was lost in the split', () => {
+    // The rule this enforces: never remove a feature while reorganising one.
+    // Every control that existed on the old single page must still be reachable
+    // somewhere in the family.
+    const mustSurvive = [
+      'addKid()', 'delKid(', 'setNewPersonType(',            // People
+      'saveKey()',                                            // API key
+      "setAiProvider('anthropic')", "setAiProvider('local')", // Gordon
+      'saveLocalModel()', 'testLocalModel()',
+      'runLocalSelfTest()', 'startCompare()',
+      'runRoutingBench()', 'runExtractionBench()',            // benchmarks
+      'saveWatcher()', 'openSenderManager()', 'forgetImportedEmails()',
+      'exportBackup()', 'restoreSnapshot(', 'manualPrune()',  // Backup
+      "toggleAlert('deadline'", "toggleAlert('event'", 'toggleExtraReminders()',
+      'exportDiagnostics()', 'openProblems()',                // troubleshooting
+      'setAiEnabled(',                                        // the global off switch
+    ];
+    const missing = mustSurvive.filter(c => !settingsFamily.includes(c));
+    assert.deepStrictEqual(missing, [], 'lost in the reorganisation: ' + missing.join(', '));
+  });
+
+  test('the hub is a menu, not another form', () => {
+    // If fields creep back onto the hub it becomes the long scroll again.
+    const hub = script.split('function renderSettings(')[1].split('\nfunction ')[0];
+    assert.ok(!/<input/.test(hub), 'an input field is back on the hub');
+    assert.ok(!/<textarea/.test(hub), 'a textarea is back on the hub');
+    assert.ok(!/class="sect"/.test(hub), 'section headings are back on the hub');
+    assert.ok((hub.match(/settingsRow\(/g) || []).length >= 6, 'fewer than six destinations');
+  });
+
+  test('every hub row points at a screen that actually exists', () => {
+    // A row leading nowhere renders a blank page with a back button.
+    const hub = script.split('function renderSettings(')[1].split('\nfunction ')[0];
+    // Matching the whole call is unreliable -- the arguments contain nested
+    // parens like allPeople().length. The destinations are the only 'setFoo'
+    // string literals on the hub, so match those directly.
+    const targets = [...new Set([...hub.matchAll(/'(set[A-Z]\w*)'/g)].map(m => m[1]))];
+    assert.ok(targets.length >= 6, 'could not read the hub targets, found ' + targets.length);
+    const subsBlock = (script.match(/const subs = \{[\s\S]*?\};/) || [''])[0];
+    targets.forEach(t => assert.ok(subsBlock.includes(t + ':'),
+      'hub row points at "' + t + '", which is not a registered screen'));
+  });
+
+  test('each row says what it is currently set to', () => {
+    // The point of a hub over a scroll: "Appearance / Dark" answers the
+    // question without opening anything. A row that only names itself makes
+    // you go and look.
+    const hub = script.split('function renderSettings(')[1].split('\nfunction ')[0];
+    ['THEME_LABELS', 'aiProvider()', 'lastBackup', 'activeProblems()', 'allPeople()']
+      .forEach(sig => assert.ok(hub.includes(sig),
+        'the hub does not read live state for: ' + sig));
+  });
+
+  test('the rows are operable by keyboard, not just tappable', () => {
+    // They are divs with a role, so Enter and Space have to be wired by hand.
+    const fn = script.split('function settingsRow(')[1].split('\n}')[0];
+    assert.ok(/role="button"/.test(fn) && /tabindex="0"/.test(fn), 'not focusable');
+    assert.ok(/onkeydown=/.test(fn) && /event\.key==='Enter'/.test(fn), 'Enter does nothing');
+    assert.ok(/aria-label=/.test(fn), 'the row has no accessible name of its own');
+  });
+
+  test('the capability disclosure kept its full detail', () => {
+    // It was two screens tall and that was the reason it got its own page --
+    // not a reason to shorten a disclosure that exists deliberately (HAX G1/G2).
+    const fn = script.split('function renderSetCapabilities(')[1].split('\n}')[0];
+    assert.ok(/aiCapabilitySection\(\)/.test(fn),
+      'the capability page no longer renders the real list');
   });
 
   console.log('\nEvery screen is audited (v9.15)');

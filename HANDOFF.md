@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.20 · **Tests:** 463 passing
+**Updated:** August 22, 2026 · **Live version:** v9.22 · **Tests:** 475 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -81,6 +81,8 @@ a per-version progress log.
 | v9.18 | One matching implementation; duplicate detection missed identical stop-word titles |
 | v9.19 | The reading benchmark runs in the app too — the app's primary job finally has a number |
 | v9.20 | Service worker serves cache-first: launches paint instantly instead of waiting on 124KB |
+| v9.21 | Ask reachable from all 28 screens, returning you exactly where you were |
+| v9.22 | Settings became a six-page hub: 5,794px of scroll down to a 590px menu |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -132,6 +134,91 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.22 — Settings stopped being a wall.**
+
+Logan: *"there is a lot going on with it and its hard to find anything."*
+Measured before touching it: **5,794px — 6.8 phone screens**, 11 sections, 27
+controls, one flat scroll. "What Gordon can and cannot do" was **1,731px** of
+that on its own. I had added three of those sections myself in this session.
+
+Now a hub of six rows, **590px, fits on one screen without scrolling**:
+
+| | height | |
+|---|---|---|
+| hub | 590px | People · Gordon and AI · Reminders and email · Appearance · Backup · When something goes wrong |
+| setPeople | 452px | |
+| setAI | 958px | key, provider, local model, link to the capability list |
+| setCapabilities | 1,783px | the full disclosure, on its own page |
+| setReminders | 1,077px | alerts + Gmail watcher |
+| setAppearance | 259px | |
+| setBackup | 579px | |
+| setTrouble | 1,298px | diagnostics, problem log, both benchmarks, local-model checks |
+
+**Hub-and-spoke rather than accordions, on evidence.** NN/g find accordions on
+mobile "conserve space but can also cause disorientation and too much
+scrolling". A drill-down list is also the pattern every iPhone owner already
+knows from iOS Settings, and the app already had a proven sub-screen system —
+so the seven new screens inherited the back button, the swipe rules and the
+a11y audit for free. The audit now covers **35 screens**.
+
+**Every row carries its current state**, which is the main thing a hub buys
+over a scroll: "Appearance / Dark" answers the question without opening
+anything. Rows that need attention turn amber — "Never exported", "1 problem to
+look at". A test asserts the hub reads live state rather than printing static
+labels, because that is the easy half to leave out.
+
+**The guard that matters most: nothing was lost in the reorganisation.** A test
+lists 24 controls that existed on the old page — `addKid`, `saveWatcher`,
+`manualPrune`, `toggleExtraReminders`, `restoreSnapshot`, and the rest — and
+fails if any becomes unreachable. Renaming one handler makes it fail, which is
+mutation-tested. The section helpers count as reachable, since the pages call
+them rather than inlining their markup.
+
+The capability list kept **all** its detail. It was two screens tall inside a
+seven-screen page; that is a reason to give it a page, not a reason to shorten
+a disclosure that exists deliberately (HAX G1/G2) and is rendered from the same
+list the code uses so it cannot drift.
+
+Also guarded: the hub must stay a menu — a test fails if an `<input>`,
+`<textarea>` or section heading reappears on it, which is how it would slide
+back into being a long scroll. And the rows are divs with `role="button"`, so
+Enter and Space are wired by hand and tested.
+
+**v9.21 — Gordon is reachable from every screen.**
+
+Logan: *"the ai chat being on every page."* It was on **5 of 28** — the five
+top-level tabs. `setHeader` hid it whenever `view.sub` was set, and `openAsk()`
+refused outright on a sub-screen. The reason recorded in the code was that a
+sub-screen means mid-task and leaving would lose your place.
+
+That objection was real; the fix was wrong. Leaving now **remembers exactly
+where you were**: `openAsk()` captures `{tab, sub, data}` and `closeAsk()`
+restores all three. `back()` could not do this — it drops to the top of a tab,
+which would strand anyone who asked a question from a list or a half-filled
+form. Choosing a tab from inside Ask clears the origin, because that is a
+deliberate departure.
+
+`renderEventEdit` builds its header by hand rather than through `setHeader`
+(Back has to cancel the edit), so it got the button explicitly — otherwise it
+would have been the one screen silently missing out.
+
+**It stays a screen rather than becoming an overlay, and that is on evidence.**
+The obvious reading of "on every page" is a slide-over panel. NN/g's study of
+overlay dismissal on mobile found users "lose their work" when they pick the
+wrong dismissal method, and their recommendation is to avoid "overlays entirely
+when possible, preferring separate pages". The Ask screen holds a typed draft
+and sometimes a pending confirm-this-action — precisely the work that an
+accidental tap-outside destroys. So the research argued against what I was
+about to build, and the real defect was never that it was a page: it was that
+it was unreachable from 23 screens.
+
+Verified in Chromium: all five tabs offer it; Edit Event offers it; opening
+from a half-edited form and coming back leaves the edit intact ("Winter Recital
+EDITED" still in the field); `listDetail` returns with its `data:{id}` payload;
+the draft survives the round trip; Ask offers no button to itself; tapping a
+tab clears the origin; and with AI off the button is gone everywhere. The a11y
+audit covers the new button on all 28 screens.
 
 **v9.20 — launches paint instantly, and a stale-JSONP bug went with it.**
 
@@ -809,7 +896,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 463 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 475 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
@@ -885,3 +972,8 @@ if the shell is not in the FlyerSnap folder, and by gating the git commands on
   beat fifty invented ones. Strip surnames, addresses and phone numbers —
   the file is in a public repo.
 - **Multi-device sync** — today it is one phone, one copy, manual backups.
+- **A shared login page from the admin console** (Logan, v9.21). Parked with the
+  rest of the security work; see SECURITY-PLAN.md §3.2 for the constraint that
+  decides its shape — on an installed iOS PWA, magic link, popup and
+  `signInWithRedirect` are all unavailable, so email + password is the method
+  that works. Whatever the console ships must survive that.

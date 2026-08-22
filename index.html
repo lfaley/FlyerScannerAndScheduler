@@ -3506,8 +3506,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.20';
-const APP_TAGLINE = 'instant launch';
+const APP_VERSION = 'v9.22';
+const APP_TAGLINE = 'Settings, sorted';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
@@ -4130,7 +4130,7 @@ const TABS = [
 let view = {tab:'events', sub:null, data:null};
 let lastViewKey = '';
 
-function nav(tab){ closeSheet(); view = {tab, sub:null, data:null}; render(); }
+function nav(tab){ closeSheet(); askOrigin = null; view = {tab, sub:null, data:null}; render(); }
 function sub(name, data){ closeSheet(); view.sub = name; view.data = data||null; render(); }
 function back(){ closeSheet(); view.sub = null; view.data = null; render(); }
 
@@ -4143,14 +4143,25 @@ function renderNav(){
       <span class="ic">${t.ic}</span>${t.label}</button>`;
   }).join('');
 }
-function setHeader(title, showBack){
-  // Ask is reachable from every top-level screen, not just Events -- a
-  // capability people cannot find is a capability they do not have
-  // (HAX G7, support efficient invocation). Hidden on sub-screens, where the
-  // user is mid-task, and whenever AI is switched off.
-  const canAsk = !showBack && !view.sub && aiEnabled() && !S.__locked;
+function setHeader(title, showBack, onBack){
+  // Ask is reachable from EVERY screen -- a capability people cannot find is a
+  // capability they do not have (HAX G7, support efficient invocation).
+  //
+  // v9.21 removed the "not on sub-screens" rule. It was there because a
+  // sub-screen means mid-task, and leaving would lose your place. That was a
+  // real objection with the wrong fix: openAsk() now remembers exactly where
+  // you were and closeAsk() puts you back, form state and all. So the answer
+  // is to make returning safe, not to hide the button on 23 of 28 screens.
+  //
+  // Deliberately NOT an overlay, on evidence. NN/g's study of overlay
+  // dismissal on mobile found users "lose their work" when they pick the wrong
+  // dismissal method, and recommends "avoiding overlays entirely when possible,
+  // preferring separate pages". The Ask screen holds a typed draft and
+  // sometimes a pending confirm-this-action; an accidental tap-outside there
+  // is exactly the work loss they describe.
+  const canAsk = view.sub !== 'ask' && aiEnabled() && !S.__locked;
   document.getElementById('header').innerHTML =
-    (showBack?`<button class="back" aria-label="Back" onclick="back()">${ico('chevron-left')}</button>`:'')
+    (showBack?`<button class="back" aria-label="Back" onclick="${esc(onBack || 'back()')}">${ico('chevron-left')}</button>`:'')
     + `<h1 class="htitle">${esc(title)}</h1>`
     + (canAsk ? `<button class="headerbtn" aria-label="Ask ${esc(aiName())} a question"
         onclick="openAsk()">${ico('message')}</button>` : '');
@@ -4192,6 +4203,9 @@ function render(){
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
     shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue,
     problems:renderProblems,     selfTest:renderSelfTest, compare:renderCompare, bench:renderBench,
+    setPeople:renderSetPeople, setAI:renderSetAI, setCapabilities:renderSetCapabilities,
+    setReminders:renderSetReminders, setAppearance:renderSetAppearance,
+    setBackup:renderSetBackup, setTrouble:renderSetTrouble,
     ask:renderAsk};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
@@ -4612,7 +4626,7 @@ function saveConversation(){
 }
 
 function renderAsk(m){
-  setHeader('Ask ' + aiName(), true);
+  setHeader('Ask ' + aiName(), true, 'closeAsk()');
   // The composer is fixed above the nav; without this the last message hides
   // behind it.
   m.classList.add('hascomposer');
@@ -5617,7 +5631,27 @@ async function openEmailReview(fresh){
 // nothing links back to this app and nothing is shared that wasn't ticked.
 let shareSel = null;
 
-function openAsk(){ if(!view.sub) sub('ask'); }
+// Where Ask was opened from, so leaving it puts the user back exactly there
+// rather than at the top of a tab. Null whenever Ask is not open.
+let askOrigin = null;
+
+function openAsk(){
+  if(view.sub === 'ask') return;
+  askOrigin = { tab: view.tab, sub: view.sub, data: view.data };
+  sub('ask');
+}
+
+// The only way out of Ask that preserves where you were. Falls back to the
+// ordinary back() if somehow there is no origin -- a dead end is worse than a
+// slightly wrong destination.
+function closeAsk(){
+  const o = askOrigin;
+  askOrigin = null;
+  if(!o) return back();
+  closeSheet();
+  view = { tab: o.tab, sub: o.sub, data: o.data };
+  render();
+}
 function openShareEvents(){ shareSel = new Set(); sub('shareEvents'); }
 function toggleShare(id){ shareSel.has(id) ? shareSel.delete(id) : shareSel.add(id); render(); }
 function shareSelectAll(){
@@ -6310,9 +6344,14 @@ function renderEventEdit(m){
   // F5: every other screen gets its title through setHeader, which renders an
   // <h1>. This one wrote a bare text node, leaving the screen with no heading
   // at all.
+  // Built by hand rather than via setHeader because Back must cancel the edit
+  // rather than navigate. The Ask button is added explicitly so this is not
+  // the one screen missing it.
   document.getElementById('header').innerHTML =
     `<button class="back" aria-label="Back" onclick="cancelEventEdit()">${ico('chevron-left')}</button>`
-    + `<h1 class="htitle">Edit Event</h1>`;
+    + `<h1 class="htitle">Edit Event</h1>`
+    + (aiEnabled() && !S.__locked ? `<button class="headerbtn" aria-label="Ask ${esc(aiName())} a question"
+        onclick="openAsk()">${ico('message')}</button>` : '');
   m.classList.add('isform');            // F3: room for Save to clear the tab bar
   const f = eventForm;
   const err = f.errors || {};
@@ -7147,11 +7186,56 @@ function nextBatchRecipe(){
 }
 
 // ---------- Settings tab ----------
+function settingsRow(icon, title, subtitle, target, tone){
+  // State on the row itself. A menu that only says "Appearance" makes you open
+  // it to find out what it is set to; one that says "Dark" answers on the hub.
+  return `<div class="card row" role="button" tabindex="0"
+      aria-label="${esc(title)} — ${esc(subtitle)}"
+      onclick="sub('${esc(target)}')"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sub('${esc(target)}')}">
+    ${ico(icon, {cls:'rowicon'})}
+    <div class="grow">
+      <div class="title" style="font-size:15px">${esc(title)}</div>
+      <div class="meta" style="font-size:12px${tone ? ';color:var(--' + tone + ')' : ''}">${esc(subtitle)}</div>
+    </div>
+    ${ico('chevron-right', {cls:'rowicon'})}
+  </div>`;
+}
+
 function renderSettings(m){
   setHeader('Settings', false);
-  const kids = justKids();
-  m.innerHTML = `
-    <div class="sect">People</div>
+  const people = allPeople().length;
+  const openProblems = activeProblems().length;
+  const badCalls = summarize(S.aiLog || []).failed;
+  const trouble = openProblems
+    ? openProblems + ' problem' + (openProblems === 1 ? '' : 's') + ' to look at'
+    : (badCalls ? badCalls + ' failed AI call' + (badCalls === 1 ? '' : 's') : 'Nothing reported');
+  const alerts = (S.settings.alerts.deadline || []).length + (S.settings.alerts.event || []).length;
+
+  m.innerHTML =
+    settingsRow('tag', 'People', people
+      ? people + ' ' + (people === 1 ? 'person' : 'people') + ' to tag events to'
+      : 'Nobody added yet', 'setPeople', people ? null : 'amber-accent') +
+    settingsRow('sparkles', aiName() + ' and AI', !aiEnabled() ? 'AI is switched off'
+      : (aiProvider() === 'local'
+          ? 'Local model · ' + (S.settings.localModel || 'not set')
+          : 'Anthropic · ' + (S.settings.apiKey ? 'key saved' : 'no key saved')),
+      'setAI', aiEnabled() && aiProvider() === 'anthropic' && !S.settings.apiKey ? 'amber-accent' : null) +
+    settingsRow('bell', 'Reminders and email',
+      alerts + ' alert' + (alerts === 1 ? '' : 's') + ' · ' +
+      (watcherConfigured() ? 'watcher connected' : 'no email watcher'), 'setReminders') +
+    settingsRow('image', 'Appearance', THEME_LABELS[themePref(S.settings)], 'setAppearance') +
+    settingsRow('cloud', 'Backup', S.settings.lastBackup
+      ? 'Last export ' + friendly(S.settings.lastBackup)
+      : 'Never exported', 'setBackup', S.settings.lastBackup ? null : 'amber-accent') +
+    settingsRow('flask', 'When something goes wrong', trouble, 'setTrouble',
+      (openProblems || badCalls) ? 'amber-accent' : null) +
+    `<div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap ${APP_VERSION} · ${APP_TAGLINE}</div>`;
+}
+
+function renderSetPeople(m){
+  setHeader('People', true);
+  m.innerHTML = `<div class="sect">People</div>
     <div class="help">Add the people you tag events to. Kids also appear in chores and star rewards; adults are for events only.</div>
     <div class="formrow">
       <input type="text" id="kidName" aria-label="Person name" placeholder="Name" onkeydown="if(event.key==='Enter')addKid()">
@@ -7164,25 +7248,12 @@ function renderSettings(m){
     allPeople().map(k=>`<div class="card row" style="padding:12px">
       <span style="width:12px;height:12px;border-radius:6px;background:${k.color};flex-shrink:0"></span>
       <div class="grow" style="font-weight:600">${esc(k.name)} <span class="meta" style="font-weight:400;font-size:11px">· ${(k.type||'kid')==='adult'?'adult':'kid'}</span></div>
-      <button class="linkbtn red" onclick="delKid('${k.id}')">Remove</button></div>`).join('') + `
+      <button class="linkbtn red" onclick="delKid('${k.id}')">Remove</button></div>`).join('') + ``;
+}
 
-    <div class="sect">Anthropic API key</div>
-    <div class="help">${S.settings.apiKey
-      ? 'A key is saved on this device. Paste a new one to replace it.'
-      : (aiProvider() === 'local'
-          ? 'Not needed while the local model is selected, but keep it here so the Anthropic fallback works when the desktop is asleep.'
-          : 'FlyerSnap sends your photos to the Claude API to read them. Create a key at console.anthropic.com and paste it here. It is stored only in this phone\u2019s browser.')}</div>
-    <div class="formrow">
-      <input type="password" id="apiKey" aria-label="Anthropic API key" placeholder="sk-ant-...">
-      <button class="btn sm" onclick="saveKey()">Save</button>
-    </div>
-
-    ${diagnosticsSection()}
-
-    ${appearanceSection()}
-    ${aiCapabilitySection()}
-
-    <div class="sect">Gordon</div>
+function renderSetAI(m){
+  setHeader(aiName() + ' and AI', true);
+  m.innerHTML = `<div class="sect">Gordon</div>
     <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
     <div style="margin-bottom:10px">
       <span class="chip ${aiProvider()==='anthropic'?'on':''}" onclick="setAiProvider('anthropic')">${ico('cloud')}Anthropic</span>
@@ -7204,67 +7275,44 @@ function renderSettings(m){
         <button class="btn" onclick="saveLocalModel()">Save</button>
         <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
       </div>
-      <button class="btn alt" style="margin-top:8px" onclick="runLocalSelfTest()">${ico('flask')}Run full self-test</button>
-      <button class="btn alt" style="margin-top:8px" onclick="startCompare()">${ico('scale')}Compare against Anthropic</button>
       <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model. A text-only model such as qwen2.5:14b-instruct cannot read photos — pull something like <b>qwen2.5vl</b> or <b>llama3.2-vision</b> for that.</div>
     ` : ''}
 
-    <div class="sect">How well does ${aiName()} understand you?</div>
-    <div class="help">Runs ${BENCH.cases.length} example sentences through whatever model is
-      selected above and scores what each one was understood to mean — including
-      whether a plain question was ever taken as an instruction to change
-      something. It makes ${BENCH.cases.length} short calls and takes a minute or two.
-      It only classifies: nothing is added, changed or deleted by any of it.</div>
-    <button class="btn alt" onclick="runRoutingBench()">${ico('flask')}Run the routing benchmark</button>
-    ${benchState && benchState.done ? `<div class="help" style="margin-top:8px">
-      Last run: ${benchSummary().passed}/${benchSummary().cases} passed.
-      <button class="linkbtn" onclick="sub('bench')">See the results</button></div>` : ''}
-
-    <div class="sect">How well does it read paperwork?</div>
-    <div class="help">Runs ${EXTRACT_BENCH.cases.length} sample flyers and emails through the model
-      selected above and scores what it pulled out — including whether it ever
-      invented an event that was not there. ${EXTRACT_BENCH.cases.length} calls, about a minute.
-      Nothing is added, changed or deleted by any of it.</div>
-    <button class="btn alt" onclick="runExtractionBench()">${ico('flask')}Run the reading benchmark</button>
-
-    <div class="sect">Gmail watcher</div>
-    <div class="help">${watcherConfigured()
-      ? 'Connected. Your Apps Script checks email every 15 minutes and FlyerSnap picks up anything new when you open it.'
-      : 'Optional. A Google Apps Script running in your own account watches chosen senders and pulls out dates automatically. See gmail-watcher.gs in the repo for setup.'}</div>
-    <label class="label" for="watcherUrl">Web app URL</label>
-    <input type="text" id="watcherUrl" placeholder="https://script.google.com/macros/s/…/exec"
-      value="${esc(S.settings.watcherUrl||'')}" autocapitalize="none" autocorrect="off" spellcheck="false">
-    <label class="label" for="watcherToken">Secret token</label>
-    <input type="password" id="watcherToken" placeholder="the SECRET from your script"
-      value="${esc(S.settings.watcherToken||'')}" autocapitalize="none" autocorrect="off">
-    <div class="formrow" style="margin-top:10px">
-      <button class="btn" onclick="saveWatcher()">Save</button>
-      ${watcherConfigured() ? `<button class="btn alt" style="width:auto" onclick="testWatcher()">Test</button>` : ''}
-    </div>
-    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">${ico('mail')}Manage watched senders</button>
-    <button class="btn alt" style="margin-top:8px" onclick="forgetImportedEmails()">${ico('refresh')}Re-import past emails (${(S.settings.seenMsgs||[]).length})</button>
-    <div class="help" style="margin-top:4px">Use this if an email was read badly the first time. Clears FlyerSnap's memory of which emails it has already imported, so their events can be offered again.</div>` : ''}
-
-    <div class="sect">Backup</div>
-    <div class="help">Everything lives in this phone's browser storage — there is no server holding a copy.
-      iOS can clear that storage on its own, so an exported file is the only real safety net.
-      ${S.settings.lastBackup ? 'Last export: '+friendly(S.settings.lastBackup)+'.' : '<b>You have never exported one.</b>'}</div>
+    <div class="sect">Anthropic API key</div>
+    <div class="help">${S.settings.apiKey
+      ? 'A key is saved on this device. Paste a new one to replace it.'
+      : (aiProvider() === 'local'
+          ? 'Not needed while the local model is selected, but keep it here so the Anthropic fallback works when the desktop is asleep.'
+          : 'FlyerSnap sends your photos to the Claude API to read them. Create a key at console.anthropic.com and paste it here. It is stored only in this phone\u2019s browser.')}</div>
     <div class="formrow">
-      <button class="btn alt" onclick="exportBackup()">${ico('download')}Export backup</button>
-      <button class="btn alt" onclick="document.getElementById('fImport').click()">${ico('upload')}Restore</button>
+      <input type="password" id="apiKey" aria-label="Anthropic API key" placeholder="sk-ant-...">
+      <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
-    <div class="help" style="margin-top:10px">Automatic snapshots (kept on this phone, once a day, last ${SNAP_KEEP}):</div>
-    ${snapshotKeys().reverse().map(k=>`<div class="card row" style="padding:10px">
-      <div class="grow" style="font-size:13px">${k.replace(SNAP_PREFIX,'')}</div>
-      <button class="linkbtn" onclick="restoreSnapshot('${k}')">Restore</button></div>`).join('')
-      || `<div class="help" style="font-style:italic">None yet — the first appears after a day of use.</div>`}
-    <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.
-      ${S.settings.lastPrune ? 'Last cleanup: '+friendly(S.settings.lastPrune)+'.' : ''}</div>
-    <button class="btn alt" onclick="manualPrune()">${ico('sparkles')}Clean up old data</button>
-    <div class="help" style="font-size:12px;margin-top:6px">Removes chore history over a year old (star totals are kept),
-      deleted items over 90 days old, and events over two years old.</div>
 
-    <div class="sect">Alerts</div>
+    <div class="card row" role="button" tabindex="0"
+        aria-label="What ${esc(aiName())} can and cannot do"
+        onclick="sub('setCapabilities')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sub('setCapabilities')}">
+      ${ico('book', {cls:'rowicon'})}
+      <div class="grow"><div class="title" style="font-size:15px">What ${esc(aiName())} can and cannot do</div>
+        <div class="meta" style="font-size:12px">Every AI feature, and where each one falls down</div></div>
+      ${ico('chevron-right', {cls:'rowicon'})}
+    </div>`;
+}
+
+function renderSetCapabilities(m){
+  setHeader('What ' + aiName() + ' can do', true);
+  // Deliberately kept in FULL. This is the honest disclosure of what the AI can
+  // and cannot do, rendered from the same list the code uses so it cannot drift
+  // from what actually happens (HAX G1/G2). It was two screens tall inside a
+  // seven-screen page, which is why it now has a page of its own -- not a
+  // reason to shorten it.
+  m.innerHTML = aiCapabilitySection();
+}
+
+function renderSetReminders(m){
+  setHeader('Reminders and email', true);
+  m.innerHTML = `<div class="sect">Alerts</div>
     <div class="help">Pick when you want to be warned. <b>iPhone Calendar only keeps 2 alerts per event</b> — the two closest to the date become the event's alerts.</div>
 
     <div class="label">Deadlines (registration, forms due)</div>
@@ -7287,8 +7335,83 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap ${APP_VERSION} · ${APP_TAGLINE}</div>`;
+    <div class="sect">Gmail watcher</div>
+    <div class="help">${watcherConfigured()
+      ? 'Connected. Your Apps Script checks email every 15 minutes and FlyerSnap picks up anything new when you open it.'
+      : 'Optional. A Google Apps Script running in your own account watches chosen senders and pulls out dates automatically. See gmail-watcher.gs in the repo for setup.'}</div>
+    <label class="label" for="watcherUrl">Web app URL</label>
+    <input type="text" id="watcherUrl" placeholder="https://script.google.com/macros/s/…/exec"
+      value="${esc(S.settings.watcherUrl||'')}" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <label class="label" for="watcherToken">Secret token</label>
+    <input type="password" id="watcherToken" placeholder="the SECRET from your script"
+      value="${esc(S.settings.watcherToken||'')}" autocapitalize="none" autocorrect="off">
+    <div class="formrow" style="margin-top:10px">
+      <button class="btn" onclick="saveWatcher()">Save</button>
+      ${watcherConfigured() ? `<button class="btn alt" style="width:auto" onclick="testWatcher()">Test</button>` : ''}
+    </div>
+    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">${ico('mail')}Manage watched senders</button>
+    <button class="btn alt" style="margin-top:8px" onclick="forgetImportedEmails()">${ico('refresh')}Re-import past emails (${(S.settings.seenMsgs||[]).length})</button>
+    <div class="help" style="margin-top:4px">Use this if an email was read badly the first time. Clears FlyerSnap's memory of which emails it has already imported, so their events can be offered again.</div>` : ''}`;
 }
+
+function renderSetAppearance(m){
+  setHeader('Appearance', true);
+  m.innerHTML = appearanceSection();
+}
+
+function renderSetBackup(m){
+  setHeader('Backup', true);
+  m.innerHTML = `<div class="sect">Backup</div>
+    <div class="help">Everything lives in this phone's browser storage — there is no server holding a copy.
+      iOS can clear that storage on its own, so an exported file is the only real safety net.
+      ${S.settings.lastBackup ? 'Last export: '+friendly(S.settings.lastBackup)+'.' : '<b>You have never exported one.</b>'}</div>
+    <div class="formrow">
+      <button class="btn alt" onclick="exportBackup()">${ico('download')}Export backup</button>
+      <button class="btn alt" onclick="document.getElementById('fImport').click()">${ico('upload')}Restore</button>
+    </div>
+    <div class="help" style="margin-top:10px">Automatic snapshots (kept on this phone, once a day, last ${SNAP_KEEP}):</div>
+    ${snapshotKeys().reverse().map(k=>`<div class="card row" style="padding:10px">
+      <div class="grow" style="font-size:13px">${k.replace(SNAP_PREFIX,'')}</div>
+      <button class="linkbtn" onclick="restoreSnapshot('${k}')">Restore</button></div>`).join('')
+      || `<div class="help" style="font-style:italic">None yet — the first appears after a day of use.</div>`}
+    <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.
+      ${S.settings.lastPrune ? 'Last cleanup: '+friendly(S.settings.lastPrune)+'.' : ''}</div>
+    <button class="btn alt" onclick="manualPrune()">${ico('sparkles')}Clean up old data</button>
+    <div class="help" style="font-size:12px;margin-top:6px">Removes chore history over a year old (star totals are kept),
+      deleted items over 90 days old, and events over two years old.</div>`;
+}
+
+function renderSetTrouble(m){
+  setHeader('When something goes wrong', true);
+  m.innerHTML = diagnosticsSection() + `
+
+    <div class="sect">How well does ${aiName()} understand you?</div>
+    <div class="help">Runs ${BENCH.cases.length} example sentences through whatever model is
+      selected above and scores what each one was understood to mean — including
+      whether a plain question was ever taken as an instruction to change
+      something. It makes ${BENCH.cases.length} short calls and takes a minute or two.
+      It only classifies: nothing is added, changed or deleted by any of it.</div>
+    <button class="btn alt" onclick="runRoutingBench()">${ico('flask')}Run the routing benchmark</button>
+    ${benchState && benchState.done ? `<div class="help" style="margin-top:8px">
+      Last run: ${benchSummary().passed}/${benchSummary().cases} passed.
+      <button class="linkbtn" onclick="sub('bench')">See the results</button></div>` : ''}
+
+    <div class="sect">How well does it read paperwork?</div>
+    <div class="help">Runs ${EXTRACT_BENCH.cases.length} sample flyers and emails through the model
+      selected above and scores what it pulled out — including whether it ever
+      invented an event that was not there. ${EXTRACT_BENCH.cases.length} calls, about a minute.
+      Nothing is added, changed or deleted by any of it.</div>
+    <button class="btn alt" onclick="runExtractionBench()">${ico('flask')}Run the reading benchmark</button>` +
+    // Only meaningful with the local model selected: they test that setup.
+    (aiProvider() === 'local' ? `
+    <div class="sect">Local model checks</div>
+    <div class="help">These test the desktop running your own model — whether it
+      is reachable, whether it can read a photo, and how its answers compare with
+      Anthropic's on the same flyer.</div>
+      <button class="btn alt" style="margin-top:8px" onclick="runLocalSelfTest()">${ico('flask')}Run full self-test</button>
+      <button class="btn alt" style="margin-top:8px" onclick="startCompare()">${ico('scale')}Compare against Anthropic</button>` : '');
+}
+
 function manualPrune(){
   const n = pruneData();
   S.settings.lastPrune = todayISO();

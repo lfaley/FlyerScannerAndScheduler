@@ -127,6 +127,16 @@ const SCREENS = [
         target:null, collection:'lists' };
       sub('ask')` },
 
+  // v9.22: Settings is a hub plus six pages. Each is a real screen and each
+  // is audited -- that is the whole point of keeping the SCREENS table honest.
+  { key:'setPeople',       setup:`sub('setPeople')` },
+  { key:'setAI',           setup:`S.settings.aiProvider='local'; sub('setAI')` },
+  { key:'setCapabilities', setup:`sub('setCapabilities')` },
+  { key:'setReminders',    setup:`sub('setReminders')` },
+  { key:'setAppearance',   setup:`sub('setAppearance')` },
+  { key:'setBackup',       setup:`sub('setBackup')` },
+  { key:'setTrouble',      setup:`S.settings.aiProvider='local'; sub('setTrouble')` },
+
   { key:'capture',    setup:`sub('capture')` },
   { key:'review',     setup:`
       pendingEvents = [{ title:'Winter Recital', date:'2026-12-01', time:'18:00', endTime:null,
