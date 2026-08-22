@@ -2251,3 +2251,53 @@ test('extra lead times become their own entries when asked', () => {
 });
 
 
+
+console.log('\nUndo instead of confirm');
+
+// v9.0 replaced confirm() on destructive actions with an undo toast. That is
+// only safe because these deletes were ALWAYS soft (deleted=true) -- so undo
+// is a flag flip and nothing is ever actually destroyed. These cases pin that
+// down: a delete must hide the row, an undo must bring back the SAME row with
+// its children intact, and neither may touch anything else.
+test('deleting a list hides it but keeps the row and its items', () => {
+  boot(null);
+  S.lists.push({ id:'l1', name:'Costco', deleted:false });
+  S.listItems.push({ id:'i1', listId:'l1', text:'Paper towels', checked:false, deleted:false });
+  delList('l1');
+  assert.strictEqual(S.lists.length, 1, 'the row is kept, not spliced out');
+  assert.strictEqual(S.lists[0].deleted, true, 'it is hidden');
+  assert.strictEqual(S.listItems[0].deleted, false, 'its items are untouched, so undo restores everything');
+});
+
+test('undo restores a deleted list exactly', () => {
+  boot(null);
+  S.lists.push({ id:'l1', name:'Costco', deleted:false });
+  const before = JSON.stringify(S.lists[0]);
+  const undo = delList('l1');
+  undo();                                   // exactly what the Undo button calls
+  assert.strictEqual(JSON.stringify(S.lists[0]), before, 'restored byte for byte');
+});
+
+test('deleting a chore keeps its completed history', () => {
+  boot(null);
+  S.chores.push({ id:'c1', title:'Make bed', kidId:'k1', stars:1, deleted:false });
+  S.completions.push({ id:'x1', choreId:'c1', kidId:'k1', date:'2026-08-01', stars:1 });
+  delChoreById('c1');
+  assert.strictEqual(S.completions.length, 1, 'stars already earned are never removed');
+  assert.strictEqual(S.chores[0].deleted, true);
+});
+
+test('deleting one row leaves its neighbours alone', () => {
+  boot(null);
+  S.lists.push({ id:'l1', name:'A', deleted:false }, { id:'l2', name:'B', deleted:false });
+  delList('l1');
+  assert.strictEqual(S.lists.find(l=>l.id==='l2').deleted, false);
+});
+
+test('deleting an id that is not there does nothing at all', () => {
+  boot(null);
+  S.lists.push({ id:'l1', name:'A', deleted:false });
+  const before = JSON.stringify(S.lists);
+  delList('nope');
+  assert.strictEqual(JSON.stringify(S.lists), before);
+});

@@ -23,7 +23,8 @@ const store = {
   key(i){ return Object.keys(this._d)[i]; },
   get length(){ return Object.keys(this._d).length; }
 };
-const el = () => ({ innerHTML:'', className:'', value:'', classList:{ add(){}, remove(){} },
+const el = () => ({ innerHTML:'', className:'', value:'', textContent:'',
+  classList:{ add(){}, remove(){}, toggle(){} },
   appendChild(){}, append(){}, remove(){}, click(){}, set href(v){} });
 
 const box = {

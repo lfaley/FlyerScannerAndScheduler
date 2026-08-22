@@ -22,7 +22,10 @@
 // because a typo would otherwise render a silent blank box.
 export function ico(name, opts){
   const o = opts || {};
-  const cls = 'ico' + (o.cls ? ' ' + o.cls : '');
+  // An icon that carries its own accessible name IS the whole control, so it
+  // needs no gap before a label. CSS :only-child cannot express this: it
+  // ignores text-node siblings and would match every labelled button icon.
+  const cls = 'ico' + (o.title ? ' ico-solo' : '') + (o.cls ? ' ' + o.cls : '');
   const style = o.size ? ` style="width:${o.size}px;height:${o.size}px"` : '';
   // An icon-only button needs an accessible name; a labelled one must stay
   // silent so screen readers do not announce the same thing twice.

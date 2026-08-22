@@ -11,7 +11,7 @@
     background:var(--bg);color:var(--ink);font-size:var(--t-body);line-height:1.5;
     padding-top:env(safe-area-inset-top);padding-bottom:calc(88px + env(safe-area-inset-bottom))}
   header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
-    font-weight:700;font-size:17px;z-index:10;display:flex;align-items:center;gap:10px;
+    font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
     padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
   header .back{background:none;border:none;color:var(--on-accent);font-size:20px;padding:0 4px;font-weight:700}
   main{padding:var(--s4);max-width:640px;margin:0 auto;padding-bottom:var(--s5)}
@@ -101,7 +101,15 @@
   .formrow{display:flex;gap:8px;margin-bottom:10px}
   .label{font-size:var(--t-cap);font-weight:700;color:var(--muted);margin:var(--s4) 0 var(--s2);
     text-transform:uppercase;letter-spacing:.06em}
-  .empty{text-align:center;padding:50px 24px;color:var(--muted)}
+  .empty{text-align:center;padding:44px 24px 40px;color:var(--muted)}
+  /* Empty-state mark: large, quiet, unmistakably the same family as the
+     controls. Tinted surface rather than a heavy outline so it recedes. */
+  .empty .art{width:66px;height:66px;margin:0 auto 18px;border-radius:22px;
+    background:var(--green-lt);display:flex;align-items:center;justify-content:center}
+  .empty .art .ico{width:31px;height:31px;stroke-width:1.5;color:var(--accent);margin:0}
+  /* Equal-width actions on one line. Labels stay short enough to fit three. */
+  .actionrow{display:flex;gap:var(--s2);margin-bottom:var(--s3)}
+  .actionrow .btn{flex:1;padding:12px 8px;font-size:var(--t-sm);width:auto}
   .empty .et{font-size:var(--t-lg);font-weight:800;color:var(--ink);margin-bottom:var(--s2)}
   .empty .eb{font-size:var(--t-body);line-height:1.6;max-width:34ch;margin:0 auto}
   .sect{font-size:var(--t-lg);font-weight:800;margin:var(--s6) 0 var(--s2);letter-spacing:-.02em}
@@ -128,8 +136,15 @@
     font-weight:700;color:var(--accent);margin-bottom:12px}
   .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     background:var(--ink);color:var(--bg);padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
-    z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none}
+    z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none;
+    display:inline-flex;align-items:center;gap:var(--s3)}
   .toast.show{opacity:1}
+  /* Only a toast offering an action may take taps -- otherwise it would eat
+     taps meant for the screen underneath while it fades. */
+  .toast.interactive{pointer-events:auto}
+  .toast-action{background:none;border:none;color:var(--accent);font-weight:800;
+    font-size:var(--t-sm);padding:6px 2px;min-height:32px;white-space:nowrap;
+    text-decoration:underline;text-underline-offset:3px}
   .strike{text-decoration:line-through;color:var(--faint)}
   .dim{opacity:.55}
   .slot{display:flex;align-items:center;gap:10px;padding:6px 0}
@@ -159,8 +174,10 @@
      icon-specific rules. Sized in em so an icon tracks its text. */
   .ico{width:1.15em;height:1.15em;flex-shrink:0;vertical-align:-.18em;margin-right:.4em;
     fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-  /* An icon standing alone IS the control (delete, back) -- no label to space from. */
-  .ico:only-child{margin-right:0}
+  /* An icon standing alone IS the control (delete, back) -- no label to space
+     from. Marked by ico() when the icon carries its own accessible name;
+     :only-child cannot be used here because CSS ignores text-node siblings. */
+  .ico-solo{margin-right:0}
   nav button .ic{display:flex;align-items:center;justify-content:center;height:22px}
   nav button .ic .ico{width:23px;height:23px;stroke-width:1.6}
   .card.row>.ico{width:26px;height:26px;stroke-width:1.5;color:var(--accent)}

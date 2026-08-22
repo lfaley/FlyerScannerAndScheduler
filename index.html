@@ -73,7 +73,7 @@
     background:var(--bg);color:var(--ink);font-size:var(--t-body);line-height:1.5;
     padding-top:env(safe-area-inset-top);padding-bottom:calc(88px + env(safe-area-inset-bottom))}
   header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
-    font-weight:700;font-size:17px;z-index:10;display:flex;align-items:center;gap:10px;
+    font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
     padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
   header .back{background:none;border:none;color:var(--on-accent);font-size:20px;padding:0 4px;font-weight:700}
   main{padding:var(--s4);max-width:640px;margin:0 auto;padding-bottom:var(--s5)}
@@ -163,7 +163,15 @@
   .formrow{display:flex;gap:8px;margin-bottom:10px}
   .label{font-size:var(--t-cap);font-weight:700;color:var(--muted);margin:var(--s4) 0 var(--s2);
     text-transform:uppercase;letter-spacing:.06em}
-  .empty{text-align:center;padding:50px 24px;color:var(--muted)}
+  .empty{text-align:center;padding:44px 24px 40px;color:var(--muted)}
+  /* Empty-state mark: large, quiet, unmistakably the same family as the
+     controls. Tinted surface rather than a heavy outline so it recedes. */
+  .empty .art{width:66px;height:66px;margin:0 auto 18px;border-radius:22px;
+    background:var(--green-lt);display:flex;align-items:center;justify-content:center}
+  .empty .art .ico{width:31px;height:31px;stroke-width:1.5;color:var(--accent);margin:0}
+  /* Equal-width actions on one line. Labels stay short enough to fit three. */
+  .actionrow{display:flex;gap:var(--s2);margin-bottom:var(--s3)}
+  .actionrow .btn{flex:1;padding:12px 8px;font-size:var(--t-sm);width:auto}
   .empty .et{font-size:var(--t-lg);font-weight:800;color:var(--ink);margin-bottom:var(--s2)}
   .empty .eb{font-size:var(--t-body);line-height:1.6;max-width:34ch;margin:0 auto}
   .sect{font-size:var(--t-lg);font-weight:800;margin:var(--s6) 0 var(--s2);letter-spacing:-.02em}
@@ -190,8 +198,15 @@
     font-weight:700;color:var(--accent);margin-bottom:12px}
   .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     background:var(--ink);color:var(--bg);padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
-    z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none}
+    z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none;
+    display:inline-flex;align-items:center;gap:var(--s3)}
   .toast.show{opacity:1}
+  /* Only a toast offering an action may take taps -- otherwise it would eat
+     taps meant for the screen underneath while it fades. */
+  .toast.interactive{pointer-events:auto}
+  .toast-action{background:none;border:none;color:var(--accent);font-weight:800;
+    font-size:var(--t-sm);padding:6px 2px;min-height:32px;white-space:nowrap;
+    text-decoration:underline;text-underline-offset:3px}
   .strike{text-decoration:line-through;color:var(--faint)}
   .dim{opacity:.55}
   .slot{display:flex;align-items:center;gap:10px;padding:6px 0}
@@ -221,8 +236,10 @@
      icon-specific rules. Sized in em so an icon tracks its text. */
   .ico{width:1.15em;height:1.15em;flex-shrink:0;vertical-align:-.18em;margin-right:.4em;
     fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-  /* An icon standing alone IS the control (delete, back) -- no label to space from. */
-  .ico:only-child{margin-right:0}
+  /* An icon standing alone IS the control (delete, back) -- no label to space
+     from. Marked by ico() when the icon carries its own accessible name;
+     :only-child cannot be used here because CSS ignores text-node siblings. */
+  .ico-solo{margin-right:0}
   nav button .ic{display:flex;align-items:center;justify-content:center;height:22px}
   nav button .ic .ico{width:23px;height:23px;stroke-width:1.6}
   .card.row>.ico{width:26px;height:26px;stroke-width:1.5;color:var(--accent)}
@@ -268,7 +285,7 @@
 <symbol id="i-note" viewBox="0 0 24 24"><rect x="4" y="3.4" width="16" height="17.2" rx="2.4"/><path d="M8.2 8.6h7.6M8.2 12.4h7.6M8.2 16.2h4.6"/></symbol>
 <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.6A1.6 1.6 0 0 1 5.6 3H17a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H5.6A1.6 1.6 0 0 1 4 15.4z"/><path d="M19 19v2H6.2A2.2 2.2 0 0 1 4 18.8"/></symbol>
 <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20.2l1.2-4.2L16.6 4.6a2.3 2.3 0 0 1 3.2 3.2L8.2 19z"/><path d="M4 20.2l4.2-1.2M14.6 6.6l3.2 3.2"/></symbol>
-<symbol id="i-pan" viewBox="0 0 24 24"><path d="M3.2 11.6h12.4v2.2a6.2 6.2 0 0 1-12.4 0z"/><path d="M15.6 12.6h2.6a2.6 2.6 0 0 0 0-5.2h-.9"/><path d="M6.4 8.6c0-1.4 1.6-1.4 1.6-2.8M10 8.6c0-1.4 1.6-1.4 1.6-2.8"/></symbol>
+<symbol id="i-pan" viewBox="0 0 24 24"><path d="M3.8 9.2h16.4v6.4a4.2 4.2 0 0 1-4.2 4.2H8a4.2 4.2 0 0 1-4.2-4.2z"/><path d="M2 11.8h1.8M20.2 11.8H22M8.6 4.6v2.4M12 3.8v3.2M15.4 4.6v2.4"/></symbol>
 <symbol id="i-gift" viewBox="0 0 24 24"><path d="M3.6 11.4h16.8v8.2a1.4 1.4 0 0 1-1.4 1.4H5a1.4 1.4 0 0 1-1.4-1.4z"/><rect x="2.6" y="7.6" width="18.8" height="3.8" rx="1.3"/><path d="M12 7.6V21"/><path d="M12 7.6H7.9a2.3 2.3 0 1 1 0-4.6C10.6 3 12 7.6 12 7.6zM12 7.6h4.1a2.3 2.3 0 1 0 0-4.6C13.4 3 12 7.6 12 7.6z"/></symbol>
 <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2.9l8.6 4.4L12 11.7 3.4 7.3z"/><path d="M3.4 12.2L12 16.6l8.6-4.4M3.4 16.6L12 21l8.6-4.4"/></symbol>
 <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 4.5L7.5 12l7.5 7.5"/></symbol>
@@ -587,7 +604,10 @@ function blank(){ return { events:[], kids:[], chores:[], completions:[], reward
 // because a typo would otherwise render a silent blank box.
 function ico(name, opts){
   const o = opts || {};
-  const cls = 'ico' + (o.cls ? ' ' + o.cls : '');
+  // An icon that carries its own accessible name IS the whole control, so it
+  // needs no gap before a label. CSS :only-child cannot express this: it
+  // ignores text-node siblings and would match every labelled button icon.
+  const cls = 'ico' + (o.title ? ' ico-solo' : '') + (o.cls ? ' ' + o.cls : '');
   const style = o.size ? ` style="width:${o.size}px;height:${o.size}px"` : '';
   // An icon-only button needs an accessible name; a labelled one must stay
   // silent so screen readers do not announce the same thing twice.
@@ -853,11 +873,40 @@ function eventHasPerson(e, personId){
 }
 
 let toastTimer;
-function toast(msg){
+function toast(msg, action){
   const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('show');
+  // Message goes in as TEXT -- it carries list names and event titles.
+  t.textContent = msg;
+  t.classList.toggle('interactive', !!action);
+  if(action){
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.onclick = () => { hideToast(); action.fn(); };
+    t.appendChild(b);
+  }
+  t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>t.classList.remove('show'), 2600);
+  // An undo needs long enough to notice, read and reach. 2.6s is fine for a
+  // confirmation nobody has to act on; it is not fine for a decision.
+  toastTimer = setTimeout(hideToast, action ? 7000 : 2600);
+}
+function hideToast(){
+  clearTimeout(toastTimer);
+  const t = document.getElementById('toast');
+  t.classList.remove('show'); t.classList.remove('interactive');
+}
+// Soft-delete anything that lives in a top-level array, with one undo.
+// Returns the undo function, so a caller can offer the same escape hatch
+// through another surface -- and so tests can exercise the real undo path
+// rather than a reimplementation of it.
+function softDelete(coll, id, label){
+  const row = (S[coll]||[]).find(x => x.id === id);
+  if(!row) return null;
+  row.deleted = true; save(); render();
+  const undo = () => { row.deleted = false; save(); render(); toast('Restored ' + label); };
+  toast('Deleted ' + label, { label:'Undo', fn:undo });
+  return undo;
 }
 
 // ---------- Claude API ----------
@@ -1808,8 +1857,8 @@ function renderEvents(m){
       html += `<div class="empty"><div class="et">Nothing upcoming to show</div>
         <div class="eb">You have ${totalEvents} event${totalEvents===1?'':'s'} saved${eventFilter?', but the filter above is limiting this list':''}. ${eventFilter?'Tap <b>All</b> to see everything.':'They may all be in the past — check below.'}</div></div>`;
     } else {
-      html += `<div class="empty"><div class="et">Nothing tracked yet</div>
-        <div class="eb">Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.</div></div>`;
+      html += emptyState('camera', 'Nothing tracked yet',
+        'Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.');
     }
   } else {
     // Always available. These used to be hidden while an export queue was
@@ -2717,6 +2766,18 @@ function eventActions(id){
   ]);
 }
 
+// An empty screen is a designed state, not an absence. One icon, one title,
+// one sentence, at most one action -- more competes with the thing the user
+// came to do once the screen has content.
+function emptyState(icon, title, body, cta){
+  return `<div class="empty">
+    <div class="art">${ico(icon)}</div>
+    ${title ? `<div class="et">${esc(title)}</div>` : ''}
+    <div class="eb">${body}</div>
+    ${cta ? `<div style="margin-top:16px">${cta}</div>` : ''}
+  </div>`;
+}
+
 // ---------- Capture & Review ----------
 let pendingEvents = [], pendingSource = '', captureAppend = false;
 
@@ -3161,8 +3222,8 @@ function renderChores(m){
   const allDone = chores.length>0 && chores.every(c=>completionFor(c.id,t));
   if(allDone) html += `<div class="celebrate">🎉 All chores done today!</div>`;
   if(!chores.length){
-    html += `<div class="empty"><div class="et">No chores due today</div>
-      <div class="eb">Add daily routines or weekly chores — tag them to a kid and set star values.</div></div>`;
+    html += emptyState('check-circle', 'No chores due today',
+      'Add daily routines or weekly chores — tag them to a kid and set star values.');
   } else {
     html += chores.map(c=>{
       const done = completionFor(c.id, t);
@@ -3251,7 +3312,7 @@ function completeChore(c, kidId){
 }
 function delChoreById(id){
   const c = S.chores.find(x=>x.id===id);
-  if(confirm(`Delete "${c.title}"? Past stars are kept.`)){ c.deleted=true; save(); render(); }
+  return c ? softDelete('chores', id, '"' + c.title + '"') : null;  // past stars are kept either way
 }
 function delChore(ev,id){ ev.preventDefault(); delChoreById(id); return false; }
 
@@ -3266,7 +3327,7 @@ function renderRewards(m){
       <span style="color:${k.color}">${esc(k.name)}</span> ⭐ ${bal[k.id]||0}</span>`).join('') +
     `<button class="btn sm alt" style="border-radius:16px;white-space:nowrap" onclick="sub('ledger')">${ico('history')}History</button></div>`;
   if(!rewards.length){
-    html += `<div class="empty"><div class="et">No rewards yet</div>
+    html += `<div class="empty"><div class="art">${ico('gift')}</div><div class="et">No rewards yet</div>
       <div class="eb">Add things worth working toward — movie night, ice cream run, extra screen time — and set the star cost.</div></div>`;
   } else {
     html += rewards.map(r=>`<div class="card row" onclick="redeem('${r.id}')">
@@ -3292,7 +3353,7 @@ function addReward(){
 }
 function delReward(id){
   const r = S.rewards.find(x=>x.id===id);
-  if(confirm(`Delete "${r.title}"? Past redemptions are kept.`)){ r.deleted=true; save(); render(); }
+  return r ? softDelete('rewards', id, '"' + r.title + '"') : null;  // past redemptions kept either way
 }
 function redeem(id){
   const r = S.rewards.find(x=>x.id===id);
@@ -3354,8 +3415,8 @@ function renderLists(m){
   const lists = S.lists.filter(l=>!l.deleted);
   let html = '';
   if(!lists.length){
-    html += `<div class="empty"><div class="et">No lists yet</div>
-      <div class="eb">Groceries, packing lists for dance competitions, back-to-school shopping — make as many as you need.</div></div>`;
+    html += emptyState('cart', 'No lists yet',
+      'Groceries, packing lists for dance competitions, back-to-school shopping — make as many as you need.');
   } else {
     html += lists.map(l=>{
       const open = S.listItems.filter(i=>i.listId===l.id && !i.deleted && !i.checked).length;
@@ -3381,7 +3442,7 @@ function addList(){
 }
 function delList(id){
   const l = S.lists.find(x=>x.id===id);
-  if(confirm(`Delete "${l.name}" and its items?`)){ l.deleted=true; save(); render(); }
+  return l ? softDelete('lists', id, '"' + l.name + '"') : null;
 }
 function renderListDetail(m){
   const list = S.lists.find(l=>l.id===view.data.id);
@@ -3541,25 +3602,22 @@ function renderMeals(m){
   let html = '';
 
   if(!env){
-    html += `<div class="empty">
-      <div class="et">No meal plan yet</div>
-      <div class="eb">Meals are planned in the Recipe app. Once you plan a week there, it shows up here on your calendar with links back to each recipe.</div>
-    </div>
-    <button class="btn" onclick="openUrl(RECIPE_APP_URL)">${ico('pan')}Open Recipe app</button>
-    <div style="text-align:center;margin-top:10px">
-      <button class="linkbtn" onclick="sub('recipeBox')">${ico('camera')}Scan a recipe</button>
-      <button class="linkbtn" onclick="mealPlanDiagnostic()">${ico('search')}Why don't I see my meals?</button>
-    </div>`;
+    html += emptyState('utensils', 'No meal plan yet',
+      'Meals are planned in the Recipe app. Once you plan a week there, it shows up here with links back to each recipe.',
+      `<button class="btn" onclick="openUrl(RECIPE_APP_URL)">${ico('pan')}Open Recipe app</button>`)
+      + `<div class="actionrow" style="margin-top:10px">
+        <button class="btn alt" onclick="sub('recipeBox')">${ico('camera')}Scan a recipe</button>
+        <button class="btn alt" onclick="mealPlanDiagnostic()">${ico('search')}Why no meals?</button>
+      </div>`;
     m.innerHTML = html;
     return;
   }
 
-  html += `<div class="formrow">
+  html += `<div class="actionrow">
     <button class="btn alt" onclick="openUrl(RECIPE_APP_URL)">${ico('pan')}Recipe app</button>
     <button class="btn alt" onclick="openUrl(shoppingUrl())">${ico('cart')}Shopping list</button>
-  </div>
-  <div style="text-align:right;margin-bottom:6px">
-    <button class="linkbtn" style="padding:2px 8px" onclick="sub('recipeBox')">${ico('camera')}Scan a recipe</button></div>`;
+    <button class="btn alt" onclick="sub('recipeBox')">${ico('camera')}Scan a recipe</button>
+  </div>`;
 
   if(!dates.length){
     html += `<div class="empty"><div class="eb">Nothing planned for the days ahead. Plan a week in the Recipe app and it'll appear here.</div>
@@ -3914,7 +3972,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.9 · SVG icon system, no emoji chrome</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v9.0 · empty states, undo instead of confirm</div>`;
 }
 function manualPrune(){
   const n = pruneData();

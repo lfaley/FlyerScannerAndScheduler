@@ -1,9 +1,22 @@
 # FlyerSnap — UI Modernization Plan
 
 **Written:** August 22, 2026 · **Baseline:** v8.7 (239 tests passing)
-**Status:** Phases 1–2 SHIPPED (v8.8, v8.9 — 246 tests). Phases 3–6 pending.
+**Status:** Phases 1–3 SHIPPED (v8.8, v8.9, v9.0 — 251 tests). Phases 4–6 pending.
 
 > Progress log
+> - **v9.0 / Phase 3 done:** `emptyState()` helper — empty screens now carry a
+>   tinted icon tile, title, one line of copy and at most one action (Events,
+>   Chores, Lists, Meals, Rewards); Meals' orphaned right-aligned link became
+>   a three-up `.actionrow`; **confirm() replaced by an undo toast** on list,
+>   chore and reward delete via `softDelete()` — safe because those deletes
+>   were always soft, and it returns the undo handle so tests exercise the
+>   real path (5 new behaviour cases, incl. "undo restores byte for byte" and
+>   "deleting a chore keeps its earned stars"); toast gained an action button
+>   with pointer-events only when interactive; header 17px/700 -> 19px/800.
+>   Fixed two icon bugs found in the render harness: `.ico:only-child` matched
+>   every labelled button icon (CSS ignores text-node siblings) — replaced by
+>   an explicit `ico-solo` class; and the skillet glyph read as a coffee cup
+>   at 24px — redrawn as a lidded pot.
 > - **v8.9 / Phase 2 done:** 40-symbol inline SVG sprite (`<symbol>` defs in
 >   index.html's body) + `ico()` helper in `js/icons.js`; ~65 call sites
 >   converted across nav, capture, sheets, chores, lists, meals and settings;
@@ -25,6 +38,7 @@
 >   harness (all tabs × light/dark, seeded demo data); CSS extracted to
 >   css/tokens.css + css/components.css with tools/inline.js sync +
 >   drift test, mirroring the js/ pattern; CLAUDE.md added for agents.
+
 **Goal:** a visual system that reads as professionally designed to a design-literate audience, with every known "pokeable" item addressed — without changing what any feature does.
 
 ## Ground rules (from hard-won incidents — do not relax)
