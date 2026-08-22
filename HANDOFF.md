@@ -245,6 +245,17 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
   cannot see rendering, and Chromium is not WebKit. Every phase above was
   verified on-device before the next one started.
 
+## Working with Logan's machine — read before touching git
+
+The folder bridge can READ his repo but **cannot delete files**. Running any
+git command through it leaves `.git/index.lock` behind and wedges the repo
+until he removes the lock by hand. It has already cost him a blocked commit.
+Ask him to run git himself and paste the output.
+
+Give him **one self-contained command per line**. A multi-line block can lose
+a newline on paste, joining two lines into nonsense (`cd ...FlyerSnapgit push`)
+and running everything afterwards in the wrong directory — which has happened.
+
 ## Traps — all of these have bitten before
 
 1. **Never remove or replace a feature without asking.** Add alongside.

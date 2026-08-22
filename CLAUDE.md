@@ -107,13 +107,27 @@ having checked it.
    ancestors of `.fab` — `position:fixed` descendants lose the viewport as
    containing block. Shipped as the v8.6 "missing scan button" bug; test
    "Fixed-position safety" guards it.
-7. PowerShell 5.1: never `2>&1` a native command under `$ErrorActionPreference
+7. **NEVER run git through the folder bridge** (`device_bash` on the mounted
+   repo). The bridge cannot delete files, so any git command that takes
+   `.git/index.lock` leaves it behind and WEDGES the repo — Logan then cannot
+   commit until he deletes the lock by hand. This actually happened: a
+   diagnostic `git status` blocked his v9.7 commit. Reading files through the
+   bridge is fine; running git is not. Ask Logan to run git in his own
+   PowerShell and paste the output.
+8. **Act on a warning the moment it appears.** That same command printed
+   "unable to unlink index.lock: Operation not permitted" and it was noted in
+   passing rather than fixed. A warning in tool output is a finding.
+9. **Hand Logan ONE self-contained command per line.** A pasted multi-line
+   block can lose a newline and silently join two lines
+   (`cd ...FlyerSnapgit push`), after which everything runs in whatever
+   directory the shell was already in — including, once, the wrong repo.
+10. PowerShell 5.1: never `2>&1` a native command under `$ErrorActionPreference
    = "Stop"` — deploy.ps1 uses Start-Process file redirection instead.
-8. iOS PWA quirks: no new tabs from installed apps (use downloads), separate
+11. iOS PWA quirks: no new tabs from installed apps (use downloads), separate
    storage from Safari, service worker cache list needs manual bumping
    (`sw.js` `CACHE` const — bump every release), and the iOS 26 short-viewport
    bug (nav::after paints white below the nav on purpose).
-9. Run `node tests.js` before every deploy; add a regression test with every
+12. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.
 
 ## Verification tooling
