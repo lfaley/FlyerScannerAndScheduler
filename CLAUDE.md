@@ -141,7 +141,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 439 tests: data safety, migrations, inline-handler
+- `node tests.js` — 449 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -161,6 +161,17 @@ having checked it.
   corpus in `eval/`. Costs API tokens, so it is NOT in `node tests.js`; run it
   before and after any prompt change and commit `eval/last-run.json`.
   `--dry` self-checks the scorer for free.
+- **Settings → "How well does Gordon understand you?"** — the routing
+  benchmark run IN THE APP (v9.17). The API key lives in the phone's browser
+  storage, so a desktop script cannot reach the provider actually in use; this
+  is the only run that measures what Logan really has configured. It exports a
+  file, read with `node tools/eval-router.js --read <file>`.
+  **The runner classifies and scores and must NEVER act** — the corpus
+  contains "Delete the dentist appointment", and a runner that reached
+  `performRoute` would offer to delete a real event. A test enforces it.
+  `js/bench-cases.js` is GENERATED from `eval/router-cases.json` by
+  `tools/build-bench-corpus.py`; edit the corpus, then regenerate, or the
+  drift test fails.
 - `node tools/eval-router.js` — ROUTING accuracy against `eval/router-cases.json`.
   Three tiers: `--dry` (scorer self-check), `--offline` (the properties that
   need no model — this tier also runs inside `node tests.js`), and the default

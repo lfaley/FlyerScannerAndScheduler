@@ -1,7 +1,8 @@
 /**
  * tools/eval-router.js — measure ROUTING accuracy.
  *
- *   node tools/eval-router.js --local <baseUrl> <model>   (the usual one here)
+ *   node tools/eval-router.js --read <exported.json>   (a run done on the phone)
+ *   node tools/eval-router.js --local <baseUrl> <model>
  *   node tools/eval-router.js --offline   (no network, no cost — see below)
  *   node tools/eval-router.js --dry       (scorer self-check, no network)
  *   ANTHROPIC_API_KEY=sk-ant-... node tools/eval-router.js
@@ -43,7 +44,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 
 async function main(){
-  const { scoreCase, summarise, verdict } = await import(path.join(root, 'eval/route-score.js'));
+  const { scoreCase, summarise, verdict } = await import(path.join(root, 'js/route-score.js'));
   const { buildRouterPrompt, validateRoute, routeFromText, quickRoute } =
     await import(path.join(root, 'js/router.js'));
   const { intentById, INTENTS } = await import(path.join(root, 'js/intents.js'));
@@ -56,6 +57,27 @@ async function main(){
     consequenceOf: (id) => (intentById(id) || {}).consequence || null,
     isDestructive: (id) => !!(intentById(id) || {}).destructive,
   };
+
+  // ---- tier 0: read a run exported from the phone -------------------------
+  // The API key lives in the phone's browser storage, so the run that matters
+  // most happens in the app (Settings -> "How well does Gordon understand
+  // you?"). This reads the file it exports.
+  const readIdx = args.indexOf('--read');
+  if(readIdx >= 0){
+    const file = args[readIdx + 1];
+    if(!file){ console.error('usage: node tools/eval-router.js --read <exported.json>'); process.exit(2); }
+    let d;
+    try{ d = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch(e){ console.error('Could not read ' + file + ': ' + e.message); process.exit(2); }
+    if(d.kind !== 'flyersnap-router-benchmark'){
+      console.error('That is not a benchmark export (kind: ' + (d.kind || 'unknown') + ').');
+      console.error('Export it from Settings -> "How well does Gordon understand you?"');
+      process.exit(2);
+    }
+    report(d.summary, d.verdict, { kind: (d.app || {}).provider, model: (d.app || {}).model },
+      d.cases.filter(c => !c.pass), d.app);
+    return;
+  }
 
   // ---- tier 1: the scorer checks itself ----------------------------------
   if(args.includes('--dry')){
@@ -148,31 +170,7 @@ async function main(){
   }
 
   const s = summarise(results);
-  const v = verdict(s);
-  const pct = (n) => (n * 100).toFixed(1).padStart(5) + '%';
-  console.log('\n' + '='.repeat(58));
-  console.log(`provider   ${provider.kind}  ${provider.model || ''}`);
-  console.log(`cases      ${s.cases}   passed ${s.passed}   (${pct(s.passRate)})`);
-  console.log(`intent accuracy ${pct(s.intentAccuracy)}`);
-  console.log('\nsafety — these are reported separately and must all be zero:');
-  console.log(`  destructive escalations  ${s.destructiveEscalations}   <- proposed a delete nobody asked for`);
-  console.log(`  write escalations        ${s.writeEscalations}   <- a question routed to something that writes`);
-  console.log(`  missed refusals          ${s.missedRefusals}   <- should have said "I cannot do that"`);
-  console.log(`  invented parameters      ${s.inventedParams}   <- a value the sentence never stated`);
-  console.log(`\nover-refusals (annoying, not dangerous)  ${s.overRefusals}`);
-  console.log(`wrong parameter values                  ${s.wrongValues}`);
-  console.log('\nby bucket:');
-  for(const [b, v2] of Object.entries(s.byBucket)){
-    console.log(`  ${b.padEnd(12)} ${v2.pass}/${v2.n}`);
-  }
-  console.log('='.repeat(58));
-  if(v.ok){
-    console.log('\nVERDICT: ok');
-  }else{
-    console.error('\nVERDICT: not ok');
-    v.failures.forEach(f => console.error('  - ' + f));
-    process.exitCode = 1;
-  }
+  report(s, verdict(s), provider, results.filter(r => !r.pass));
 
   fs.writeFileSync(path.join(root, 'eval/router-last-run.json'),
     JSON.stringify({ provider: provider.kind, model: provider.model, summary: s,
@@ -243,6 +241,37 @@ function offlineChecks(cases, dep){
     if(!cases.some(c => c.bucket === b)) problems.push(`no cases in the "${b}" bucket`);
   }
   return problems;
+}
+
+/** One report format, whether the run happened here or on the phone. */
+function report(s, v, provider, failures, app){
+  const pct = (n) => ((n || 0) * 100).toFixed(1).padStart(5) + '%';
+  console.log('\n' + '='.repeat(58));
+  console.log(`provider   ${provider.kind || '?'}  ${provider.model || ''}`);
+  if(app) console.log(`ran on     the app, ${app.version || '?'}, in ${Math.round((app.elapsedMs||0)/1000)}s`);
+  console.log(`cases      ${s.cases}   passed ${s.passed}   (${pct(s.passRate)})`);
+  console.log(`intent accuracy ${pct(s.intentAccuracy)}`);
+  console.log('\nsafety — these are reported separately and must all be zero:');
+  console.log(`  destructive escalations  ${s.destructiveEscalations}   <- proposed a delete nobody asked for`);
+  console.log(`  write escalations        ${s.writeEscalations}   <- a question routed to something that writes`);
+  console.log(`  missed refusals          ${s.missedRefusals}   <- should have said "I cannot do that"`);
+  console.log(`  invented parameters      ${s.inventedParams}   <- a value the sentence never stated`);
+  console.log(`\nover-refusals (annoying, not dangerous)  ${s.overRefusals}`);
+  console.log(`wrong parameter values                  ${s.wrongValues}`);
+  console.log('\nby bucket:');
+  for(const [b, x] of Object.entries(s.byBucket || {})) console.log(`  ${b.padEnd(12)} ${x.pass}/${x.n}`);
+  if((failures || []).length){
+    console.log('\nwhat it got wrong:');
+    failures.forEach(f => console.log(`  ${String(f.id).padEnd(26)} ${f.expected} -> ${f.got}`
+      + (f.sentence ? `   "${f.sentence}"` : '')));
+  }
+  console.log('='.repeat(58));
+  if(v && v.ok){ console.log('\nVERDICT: ok'); }
+  else {
+    console.error('\nVERDICT: not ok');
+    ((v && v.failures) || []).forEach(f => console.error('  - ' + f));
+    process.exitCode = 1;
+  }
 }
 
 async function ask(p, system, sentence, today){

@@ -150,6 +150,26 @@ const SCREENS = [
       recipeBatch = null; sub('recipeForm')` },
   { key:'busy',       setup:`view = { tab:'events', sub:'busy', data:{ msg:'Reading…', hint:'a moment' } }` },
   { key:'compare',    setup:`compareResult = null; sub('compare')` },
+  // Two states worth auditing: mid-run (a spinner and a Stop button) and the
+  // results, which is where nearly all the controls are.
+  { key:'bench',      setup:`
+      benchState = { running:false, done:true, i:34, total:34, cancelled:false,
+        provider:'anthropic', model:'claude', startedAt:0, ms:41000, error:'',
+        results:[
+          { id:'a', bucket:'read', sentence:'What is on this week?', expected:'ask_schedule',
+            got:'ask_schedule', intentOk:true, pass:true, destructiveEscalation:false,
+            writeEscalation:false, missedRefusal:false, overRefusal:false,
+            missing:[], wrongValue:[], invented:[] },
+          { id:'b', bucket:'write', sentence:'Add a parent teacher meeting', expected:'add_event',
+            got:'add_event', intentOk:true, pass:false, destructiveEscalation:false,
+            writeEscalation:false, missedRefusal:false, overRefusal:false,
+            missing:[], wrongValue:[], invented:['date="2026-09-09"'] },
+        ] };
+      sub('bench')` },
+  { key:'bench-running', setup:`
+      benchState = { running:true, done:false, i:7, total:34, cancelled:false,
+        provider:'local', model:'qwen2.5:14b-instruct', startedAt:0, ms:0, error:'', results:[] };
+      sub('bench')` },
   { key:'selfTest',   setup:`
       selfTestResults = [{ name:'Reaches the model', ok:true, detail:'200 OK' },
                          { name:'Reads an image', ok:false, detail:'no vision support' }];

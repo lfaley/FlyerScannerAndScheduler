@@ -37,6 +37,15 @@
  *     acted on.
  *  5. Plain intent accuracy, and parameter accuracy within correct intents.
  *
+ * WHY THIS LIVES IN js/ RATHER THAN eval/. Everything in js/ ships, so the
+ * rule is that tooling-only code belongs in eval/ or tools/. This started
+ * there and moved when the benchmark became runnable from inside the app
+ * (Settings -> "Check how well Gordon understands you"). The API key lives in
+ * the phone's browser storage, so a desktop Node script cannot reach it --
+ * the only place the benchmark can run against the provider actually in use
+ * is the app itself. Moving it here keeps ONE scorer: the run on the phone
+ * and the run from the terminal cannot disagree.
+ *
  * A DELIBERATE, STATED BIAS. These cases were written by whoever wrote the
  * router prompt, which is the weakest kind of eval: it measures whether the
  * model does what the author expected, not whether the author expected the
