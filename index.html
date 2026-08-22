@@ -98,7 +98,15 @@
   header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
     font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
     padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
-  header .back{background:none;border:none;color:var(--on-accent);font-size:20px;padding:0 4px;font-weight:700}
+  /* The back chevron is the primary escape route on seventeen sub-screens and
+     was a 24x39px tap target -- the smallest control in the app, in the corner
+     hardest to hit one-handed. The box is now a full 44px square; the negative
+     margins absorb it so the header bar keeps its height and the icon keeps
+     its position. (WCAG 2.5.8 sets 24px as the AA floor; Apple HIG asks 44,
+     which is what the rest of this app already uses.) */
+  header .back{background:none;border:none;color:var(--on-accent);font-size:20px;font-weight:700;
+    min-width:var(--tap);min-height:var(--tap);margin:calc((var(--tap) - 24px) / -2) 0;
+    padding:0 4px;display:inline-flex;align-items:center;justify-content:flex-start}
   /* Real headings now (h1 in the bar, h2 on empty states) so heading
      navigation works. Strip the UA margins/sizes -- the design owns those. */
   .htitle{margin:0;font-size:inherit;font-weight:inherit;letter-spacing:inherit}
@@ -1655,6 +1663,29 @@ function resolveEntity(spoken, candidates, nameKey){
 // the assistant can do instead. Chosen to fail towards disclosure rather than
 // towards a wrong action, which is the asymmetry that matters: a wrong answer
 // wastes a tap, a wrong ACTION touches their data.
+/**
+ * The router. One model call, then code takes over.
+ *
+ * This is Anthropic's ROUTING workflow, not an agent, and the choice is
+ * deliberate. Their own criteria for when an agent is the wrong tool all
+ * apply here: the task is high-frequency and low-complexity, the output must
+ * be verifiable, and every extra model call compounds error. The line they
+ * draw is "control flow is predefined in code, not produced by the LLM" --
+ * so the model's entire job is to turn one sentence into
+ * {intent, params, confidence} and then stop. It never decides what happens
+ * next, never calls a tool, never loops.
+ *
+ * Everything below the model call is pure and hostile to what comes back.
+ * A model reply is UNTRUSTED INPUT: it can be prose, fenced, truncated,
+ * the wrong shape, name an intent that does not exist, or carry a parameter
+ * of the wrong type. Every one of those has a test.
+ */
+
+
+// Below this, we do not act on the classification -- we show the user what
+// the assistant can do instead. Chosen to fail towards disclosure rather than
+// towards a wrong action, which is the asymmetry that matters: a wrong answer
+// wastes a tap, a wrong ACTION touches their data.
 const MIN_CONFIDENCE = 0.6;
 
 /**
@@ -1846,7 +1877,30 @@ function describeIntent(route, resolved){
  * anything that could change data. If it is not sure, it returns null and the
  * model decides.
  */
-function quickRoute(text){
+// What this app is actually about. A question that touches none of it is not
+// a question this app can answer, whatever shape it has.
+const TOPIC = new RegExp([
+  'event','calendar','schedule','diary','appointment','practice','rehearsal','game','recital',
+  'chore','star','routine','reward',
+  'list','lists','shopping','grocer|groceries','costco','item',
+  'due|deadline|overdue|form|slip|signup|sign.?up|permission',
+  'clash|overlap|conflict|miss(ed|ing)?|behind|needs? doing',
+  'today|tomorrow|tonight|this week|next week|this weekend|next weekend|this month|next month',
+  'coming up|on my plate|going on|what.s on',
+].join('|'), 'i');
+
+/** Does the sentence touch anything this app holds? Names count as topics. */
+function mentionsAppTopic(low, names){
+  if(TOPIC.test(low)) return true;
+  for(const n of (names || [])){
+    const t = String(n || '').trim().toLowerCase();
+    // Two characters or fewer would match inside other words.
+    if(t.length > 2 && low.includes(t)) return true;
+  }
+  return false;
+}
+
+function quickRoute(text, opts){
   const q = String(text || '').trim();
   if(!q) return null;
   const low = q.toLowerCase();
@@ -1863,6 +1917,22 @@ function quickRoute(text){
     /^(what|when|where|who|which|how)('?s)?\b/.test(low) ||
     /^(is|are|do|does|did|can|will|any|anything|show|tell)\b/.test(low);
   if(!isQuestion) return null;
+
+  // ...and it must be a question about something this app actually holds.
+  //
+  // v9.16. Being a question was previously enough, so "what's the capital of
+  // France?" was short-circuited to ask_schedule at 0.95 confidence and sent
+  // straight to the calendar-answering prompt. Nothing could be damaged by
+  // that -- it is read-only -- but the designed failure mode never fired: an
+  // out-of-scope question is supposed to reach the model router, come back
+  // `unknown`, and turn into a list of what the assistant CAN do. Instead it
+  // reached a prompt that had no business answering it.
+  //
+  // The fix is to make this optimisation stricter rather than smarter.
+  // Returning null is always safe: it costs one round trip and the model
+  // decides. Note that a bare weekday is deliberately NOT a domain word --
+  // "the weather on Saturday" would otherwise qualify.
+  if(!mentionsAppTopic(low, opts && opts.names)) return null;
 
   const intent =
     /\bchore|\bstar|\brout(ine|ines)\b/.test(low) ? 'ask_chores' :
@@ -2838,8 +2908,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.14';
-const APP_TAGLINE = 'Gordon can act';
+const APP_VERSION = 'v9.16';
+const APP_TAGLINE = 'routing benchmark';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
@@ -4066,7 +4136,15 @@ async function runAsk(explicit){
     // high-frequency, low-complexity work belongs in deterministic code.
     // quickRoute only ever short-circuits to a read-only intent; anything
     // that could change data still goes to the model and through every check.
-    let route = quickRoute(q);
+    // The names are passed in so a question that mentions one of Logan's
+    // people, lists or chores counts as being about this app -- see
+    // mentionsAppTopic. Without them, "how many stars does Olivia have?"
+    // would take a model round-trip it does not need.
+    let route = quickRoute(q, { names: [
+      ...allPeople().map(p => p.name),
+      ...S.lists.filter(l => !l.deleted).map(l => l.name),
+      ...S.chores.filter(c => !c.deleted).map(c => c.title),
+    ] });
     if(!route){
       const routeText = await callAI(
         [{ type:'text', text:`Today is ${todayISO()}.\n\nSentence: ${q}` }],

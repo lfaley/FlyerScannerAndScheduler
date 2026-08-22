@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.14 · **Tests:** 422 passing
+**Updated:** August 22, 2026 · **Live version:** v9.16 · **Tests:** 439 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -75,6 +75,8 @@ a per-version progress log.
 | v9.12 | Edit Event rebuilt against form-usability research (FORM-UI-REVIEW.md) |
 | v9.13 | AI call logging + desktop diagnostics reader (`tools/diagnostics.js`) |
 | v9.14 | Gordon can act: ten intents, named confirm buttons, discoverable chips |
+| v9.15 | A11y audit extended to all 25 screens; back button was a 24px target |
+| v9.16 | Routing benchmark (`eval/router-cases.json`); quickRoute stopped answering out-of-scope questions |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -126,6 +128,126 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.16 — how good is the routing, actually?** v9.14 gave the assistant ten
+intents that change data. Everything *around* them was tested exhaustively —
+the parser is hostile, the validator drops wrong-typed values, nothing writes
+without a yes — and none of that said whether "move the recital to the 12th"
+reaches `edit_event`. Now there is a benchmark that does, in the same shape as
+the extraction one.
+
+- **`eval/router-cases.json`** — 34 labelled sentences across five buckets:
+  `read` (must never write), `write`, `destructive`, `ambiguous` (the right
+  answer is a refusal), and `injection`.
+- **`eval/route-score.js`** — a deterministic grader. Anthropic's eval guidance
+  is "deterministic graders where possible"; an intent id either matches or it
+  does not, so there is no judge model here and no judge-model bias.
+- **`tools/eval-router.js`** — three tiers. `--dry` self-checks the scorer,
+  `--offline` runs the properties that need no model at all, and the default
+  run makes one model call per case against the prompt that actually ships.
+
+**Accuracy is not the headline number.** The failure modes are not symmetric,
+so four safety counts are reported separately and must all be zero — no
+average can hide them:
+
+1. **destructive escalation** — a sentence that was not asking for a deletion
+   routed to one. Nothing is deleted without a preview and a yes, so this is
+   not data loss; it is the app *offering* to destroy something the user never
+   mentioned, which is the most alarming thing it could do.
+2. **write escalation** — a question routed to anything that changes data.
+3. **invented parameters** — a date the sentence never stated, which is
+   invisible in an intent-accuracy number and is the thing the router prompt
+   forbids most explicitly.
+4. **missed refusal** — something that should have come back `unknown`.
+
+**The `--offline` tier runs inside `node tests.js`**, so those properties are
+checked on every commit rather than only when someone remembers to spend
+tokens: nothing short-circuits into a write, every expected intent actually
+validates against the registry, every intent has at least one case, and no
+safety bucket is empty.
+
+**The defect the free tier found before a single token was spent.**
+`quickRoute()` short-circuited *any* question-shaped sentence to
+`ask_schedule` at 0.95 confidence — including "what's the capital of France?"
+and "what is the weather on Saturday?", which went straight to the
+calendar-answering prompt. Read-only, so nothing could be damaged, but the
+designed failure mode never fired: an out-of-scope question is supposed to
+reach the model router, come back `unknown`, and turn into a list of what the
+assistant *can* do. Instead it reached a prompt with no business answering it,
+and a confidently wrong answer is the thing this app exists to prevent.
+
+The fix makes the optimisation **stricter, not smarter**: it now short-circuits
+only when the sentence mentions something this app actually holds — its own
+vocabulary, or one of Logan's people, lists or chores, which the caller passes
+in. Returning null is always safe; it costs one round trip and the model
+decides. A bare weekday deliberately does *not* count, or "the weather on
+Saturday" would qualify. The honest limit is recorded in a test: "who won the
+game last night?" contains *game*, which IS this app's vocabulary, so it still
+passes the gate — the gate is a filter against clearly-external questions, not
+a classifier for what is answerable.
+
+**One case was relabelled rather than "fixed".** "Show me Braelyn's events" was
+labelled `find_events`; `quickRoute` says `ask_schedule`. Both are read-only,
+both answer the question, and two readers would not agree which is correct —
+which by Anthropic's own criterion means the label was wrong, not the code. It
+did surface something real, now its own case: **`find_events` is close to
+unreachable**, because `quickRoute` has no branch for it and turns every
+question-shaped retrieval into `ask_schedule`.
+
+Three mutations tested: removing the topic gate, disabling the
+destructive-escalation detector, and stripping a case's stated reason all fail
+the suite.
+
+**Not yet run against a model.** The default tier needs `ANTHROPIC_API_KEY`
+and costs ~34 short calls. Run it before and after any change to the router
+prompt or the intent registry, and commit `eval/router-last-run.json`.
+
+**v9.15 — every screen is audited now.** This closes the gap flagged in v9.12
+and it was not academic: the audit walked only the five top-level tabs, which
+is precisely why the Edit Event review found two defects — chips that were
+bare `<span onclick>`, and a screen with no `<h1>` at all — that the v9.1
+accessibility pass should have caught and structurally could not.
+
+Three things were wrong with the tool, not just its coverage:
+
+1. **It only visited five screens.** It now visits **25**: the five tabs, every
+   sub-screen in the app's `subs` map, and three states of the Ask screen
+   (empty, pending confirm, "which one did you mean?"), each seeded with the
+   state it needs to render something real.
+2. **The seed data was nearly empty.** A screen with no rows renders an empty
+   state, exposes no controls, and passes trivially — the least useful kind of
+   green. Every collection is now populated, including a deliberate duplicate
+   event so the Dedupe screen has something to show.
+3. **A missing `<h1>` did not fail.** It was written to stderr and then ignored
+   by the exit code, so the tool could print "no problems found" on a screen
+   with no heading — the exact defect it existed to catch. Heading and
+   `aria-current` counts now set the exit code.
+
+The audit selector also grew beyond tag names to roles and `tabindex`, because
+the v9.12 chips were focusable spans carrying `role="radio"` and a tag-name
+selector could not see them. Added along the way: `aria-checked` presence on
+anything claiming a checked state, radios that must sit inside a
+`role="radiogroup"`, horizontal overflow (excluding genuinely scrolling
+strips — the person filter bar is not a defect), and inputs whose only label
+is a placeholder.
+
+**The one real defect it found: the back chevron was a 24 × 39px tap target.**
+The smallest control in the app, the primary escape route on seventeen
+sub-screens, sitting in the corner hardest to reach one-handed. It is now a
+full 44 × 44px box; negative margins absorb the extra height so the header bar
+and the icon's position are unchanged (verified by measurement, not by eye:
+icon x = 20px before and after). WCAG 2.5.8 sets 24px as the AA floor, so this
+was not a failure — but Apple's HIG asks 44 and every other control in this
+app already meets it.
+
+Six guard tests, all mutation-tested: dropping a sub-screen from the audit
+table, reverting the heading check to console-only, and reverting the back
+button all fail the suite.
+
+Worth knowing: `tools/a11y-audit.js` now exports its `SCREENS` table so
+`node tests.js` can check it against the app's own `subs` map. It only runs
+its browser when invoked directly (`require.main === module`) — importing a
+module must never launch Chromium.
 
 **v9.14 — Gordon can act.** Full written plan in **ASSISTANT-ACTIONS-PLAN.md**.
 
@@ -482,13 +604,18 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 422 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 439 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
 - `node tools/preview.js [outDir]` — screenshots every tab, light and dark.
-- `node tools/a11y-audit.js` — accessible names and tap targets in the real DOM.
+- `node tools/a11y-audit.js` — all 25 screens in the real DOM: accessible
+  names, tap targets, ARIA state, horizontal overflow, headings. `--only=<key>`
+  for one screen while fixing it; `PW_EXE=` if Playwright's Chromium is
+  elsewhere.
 - `node tools/diagnostics.js <file>` — read a diagnostics export from the phone.
+- `node tools/eval-router.js --offline` — routing safety properties, free and
+  offline (also part of `node tests.js`). Without `--offline` it costs tokens.
 - `node tools/inline.js --check` — CSS source/inline drift.
 - `bash tools/run-lighthouse.sh` — mobile Lighthouse scores.
 - `python3 tools/build-app-icons.py` — regenerate every app icon from the
@@ -504,9 +631,14 @@ git command through it leaves `.git/index.lock` behind and wedges the repo
 until he removes the lock by hand. It has already cost him a blocked commit.
 Ask him to run git himself and paste the output.
 
-Give him **one self-contained command per line**. A multi-line block can lose
-a newline on paste, joining two lines into nonsense (`cd ...FlyerSnapgit push`)
-and running everything afterwards in the wrong directory — which has happened.
+Give him **one PowerShell block he can copy and paste in a single go** — his
+stated preference from v9.14. The earlier rule was one command per line,
+because a pasted block can lose a newline and join two lines into nonsense
+(`cd ...FlyerSnapgit push`), after which everything runs in the wrong
+directory. That happened once, in the wrong repo. The single block keeps that
+from recurring by opening with `Set-Location` and then a guard that `throw`s
+if the shell is not in the FlyerSnap folder, and by gating the git commands on
+`$LASTEXITCODE` from `node tests.js`. PowerShell 5.1 has no `&&`; use `if`.
 
 ## Traps — all of these have bitten before
 

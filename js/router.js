@@ -213,7 +213,30 @@ export function describeIntent(route, resolved){
  * anything that could change data. If it is not sure, it returns null and the
  * model decides.
  */
-export function quickRoute(text){
+// What this app is actually about. A question that touches none of it is not
+// a question this app can answer, whatever shape it has.
+const TOPIC = new RegExp([
+  'event','calendar','schedule','diary','appointment','practice','rehearsal','game','recital',
+  'chore','star','routine','reward',
+  'list','lists','shopping','grocer|groceries','costco','item',
+  'due|deadline|overdue|form|slip|signup|sign.?up|permission',
+  'clash|overlap|conflict|miss(ed|ing)?|behind|needs? doing',
+  'today|tomorrow|tonight|this week|next week|this weekend|next weekend|this month|next month',
+  'coming up|on my plate|going on|what.s on',
+].join('|'), 'i');
+
+/** Does the sentence touch anything this app holds? Names count as topics. */
+export function mentionsAppTopic(low, names){
+  if(TOPIC.test(low)) return true;
+  for(const n of (names || [])){
+    const t = String(n || '').trim().toLowerCase();
+    // Two characters or fewer would match inside other words.
+    if(t.length > 2 && low.includes(t)) return true;
+  }
+  return false;
+}
+
+export function quickRoute(text, opts){
   const q = String(text || '').trim();
   if(!q) return null;
   const low = q.toLowerCase();
@@ -230,6 +253,22 @@ export function quickRoute(text){
     /^(what|when|where|who|which|how)('?s)?\b/.test(low) ||
     /^(is|are|do|does|did|can|will|any|anything|show|tell)\b/.test(low);
   if(!isQuestion) return null;
+
+  // ...and it must be a question about something this app actually holds.
+  //
+  // v9.16. Being a question was previously enough, so "what's the capital of
+  // France?" was short-circuited to ask_schedule at 0.95 confidence and sent
+  // straight to the calendar-answering prompt. Nothing could be damaged by
+  // that -- it is read-only -- but the designed failure mode never fired: an
+  // out-of-scope question is supposed to reach the model router, come back
+  // `unknown`, and turn into a list of what the assistant CAN do. Instead it
+  // reached a prompt that had no business answering it.
+  //
+  // The fix is to make this optimisation stricter rather than smarter.
+  // Returning null is always safe: it costs one round trip and the model
+  // decides. Note that a bare weekday is deliberately NOT a domain word --
+  // "the weather on Saturday" would otherwise qualify.
+  if(!mentionsAppTopic(low, opts && opts.names)) return null;
 
   const intent =
     /\bchore|\bstar|\brout(ine|ines)\b/.test(low) ? 'ask_chores' :

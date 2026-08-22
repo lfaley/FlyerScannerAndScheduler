@@ -120,10 +120,16 @@ having checked it.
 8. **Act on a warning the moment it appears.** That same command printed
    "unable to unlink index.lock: Operation not permitted" and it was noted in
    passing rather than fixed. A warning in tool output is a finding.
-9. **Hand Logan ONE self-contained command per line.** A pasted multi-line
-   block can lose a newline and silently join two lines
-   (`cd ...FlyerSnapgit push`), after which everything runs in whatever
-   directory the shell was already in — including, once, the wrong repo.
+9. **Hand Logan ONE PowerShell block he can copy and paste in a single go.**
+   His standing preference, stated in v9.14. The block must open with
+   `Set-Location <absolute path>` followed by a location guard that `throw`s if
+   the shell is not where it should be — a pasted block can lose a newline and
+   silently join two lines (`cd ...FlyerSnapgit push`), after which everything
+   runs in whatever directory the shell was already in, which once meant the
+   wrong repo entirely. The guard turns that into an immediate stop instead of
+   a mystery. Gate the git commands on `$LASTEXITCODE` from `node tests.js`, so
+   a failing suite cannot be committed by a paste that ran past it. No `&&` —
+   PowerShell 5.1 does not have it.
 10. PowerShell 5.1: never `2>&1` a native command under `$ErrorActionPreference
    = "Stop"` — deploy.ps1 uses Start-Process file redirection instead.
 11. iOS PWA quirks: no new tabs from installed apps (use downloads), separate
@@ -135,13 +141,17 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 422 tests: data safety, migrations, inline-handler
+- `node tests.js` — 439 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
-- `node tools/a11y-audit.js` — accessible names and tap targets in the
-  RENDERED DOM. The source tests cannot see a name that computes to nothing
-  at runtime; this found exactly that in v9.1.
+- `node tools/a11y-audit.js` — ALL 25 screens in the RENDERED DOM: accessible
+  names, tap targets, ARIA state, horizontal overflow, exactly one `<h1>`.
+  The source tests cannot see a name that computes to nothing at runtime;
+  this found exactly that in v9.1, and a 24px back button in v9.15.
+  `--only=<key>` for one screen. **Adding a sub-screen means adding it to the
+  `SCREENS` table in that file** — a test fails the build otherwise, because
+  a screen nobody audits is how the v9.12 defects survived v9.1.
 - `node tools/preview.js [outDir]` — Playwright-Chromium screenshots of every
   tab, light AND dark, seeded demo data. Review design changes here first;
   it would have caught the v8.6 button bug. NOT a Safari substitute — Logan
@@ -151,6 +161,13 @@ having checked it.
   corpus in `eval/`. Costs API tokens, so it is NOT in `node tests.js`; run it
   before and after any prompt change and commit `eval/last-run.json`.
   `--dry` self-checks the scorer for free.
+- `node tools/eval-router.js` — ROUTING accuracy against `eval/router-cases.json`.
+  Three tiers: `--dry` (scorer self-check), `--offline` (the properties that
+  need no model — this tier also runs inside `node tests.js`), and the default
+  run which costs tokens. Accuracy is NOT the headline: four safety counts are
+  reported separately and must be ZERO — destructive escalation, write
+  escalation, invented parameters, missed refusal. Commit
+  `eval/router-last-run.json`.
 - `node tools/diagnostics.js <file>` — read a diagnostics export off Logan's
   phone (see AI CALL LOGGING below). `--errors`, `--all`, `--json`.
 
@@ -172,6 +189,12 @@ optional:
     identically-named row the user added.
   - `quickRoute()` short-circuits ONLY to read-only intents. Its change-verb
     guard is a safety mechanism: widen it when adding a verb, never narrow it.
+  - `quickRoute()` also requires the sentence to MENTION something this app
+    holds (`mentionsAppTopic`, v9.16). Being question-shaped used to be
+    enough, which sent "what's the capital of France?" to the calendar prompt
+    at 0.95 confidence instead of letting it refuse and disclose. Making this
+    optimisation stricter is always safe; returning null costs one round trip.
+    The caller passes in the user's people/list/chore names.
 
 `destructive: true` on an intent is a flag, not a fifth consequence class.
 The consequence set (answer / navigate / draft / confirm) is closed and

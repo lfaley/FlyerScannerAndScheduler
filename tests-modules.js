@@ -1242,6 +1242,263 @@ module.exports = async function runModuleTests(test){
     assert.strictEqual(conv.firstTurnOfToday([], '2026-09-01'), -1);
   });
 
+  console.log('\nRouting benchmark (v9.16)');
+
+  // Imported locally: this block sits above the v9.14 one in the file, so its
+  // `rtr` / `reg914` bindings do not exist yet.
+  const rt16 = await import('./js/router.js');
+  const reg16 = await import('./js/intents.js');
+  const META16 = { consequenceOf: (id) => (reg16.intentById(id) || {}).consequence || null,
+                   isDestructive: (id) => !!(reg16.intentById(id) || {}).destructive };
+
+  const routerCorpus = JSON.parse(fs.readFileSync('./eval/router-cases.json', 'utf8'));
+  const { offlineChecks } = require('./tools/eval-router.js');
+  const rscore = await import('./eval/route-score.js');
+
+  test('the routing corpus passes every check that needs no model', () => {
+    // The free tier of tools/eval-router.js, run on every commit rather than
+    // only when someone remembers to spend tokens: nothing short-circuits
+    // into a write, every expected intent actually validates, every intent
+    // has at least one case, and every safety bucket is populated.
+    const problems = offlineChecks(routerCorpus.cases, {
+      quickRoute: rt16.quickRoute,
+      validateRoute: rt16.validateRoute,
+      intentById: reg16.intentById,
+      INTENTS: reg16.INTENTS,
+      meta: META16,
+      names: [...(routerCorpus.people || []), ...(routerCorpus.lists || []),
+              ...(routerCorpus.chores || [])],
+    });
+    assert.deepStrictEqual(problems, [], problems.join('\n  '));
+  });
+
+  test('every case carries a stated reason, so the LABEL can be argued with', () => {
+    // Anthropic's criterion for a good eval task: "one where two domain
+    // experts would independently reach the same pass/fail verdict." Without
+    // a written reason there is nothing to disagree with but the score.
+    const bad = routerCorpus.cases.filter(c => !c.why || c.why.length < 30).map(c => c.id);
+    assert.deepStrictEqual(bad, [], 'cases with no usable reason: ' + bad.join(', '));
+    const ids = routerCorpus.cases.map(c => c.id);
+    assert.strictEqual(new Set(ids).size, ids.length, 'duplicate case ids');
+    assert.ok(routerCorpus.cases.length >= 20,
+      'Anthropic: "20-50 simple tasks drawn from real failures is a great start" — have '
+      + routerCorpus.cases.length);
+  });
+
+  test('the scorer gives a perfect answer a perfect score', () => {
+    const meta = META16;
+    const bad = routerCorpus.cases.filter(c => {
+      const perfect = c.intent === 'unknown'
+        ? { ok:false, intent:'unknown', params:{} }
+        : { ok:true, intent:c.intent, params:c.params || {}, confidence:0.95 };
+      return !rscore.scoreCase(c, perfect, meta).pass;
+    }).map(c => c.id);
+    assert.deepStrictEqual(bad, [], 'the scorer fails a perfect answer on: ' + bad.join(', '));
+  });
+
+  test('the scorer catches the failures it exists to catch', () => {
+    // A scorer that cannot fail is worse than no scorer.
+    const meta = META16;
+    const question = { id:'q', intent:'ask_schedule', params:{ question:'what is on?' } };
+
+    const asDelete = rscore.scoreCase(question,
+      { ok:true, intent:'delete_event', params:{ event:'x' }, confidence:0.9 }, meta);
+    assert.strictEqual(asDelete.destructiveEscalation, true, 'a question routed to a delete must be flagged');
+    assert.strictEqual(asDelete.pass, false);
+
+    const asWrite = rscore.scoreCase(question,
+      { ok:true, intent:'add_list_item', params:{ list:'a', items:['b'] }, confidence:0.9 }, meta);
+    assert.strictEqual(asWrite.writeEscalation, true);
+    assert.strictEqual(asWrite.destructiveEscalation, false, 'a plain write is not a destructive one');
+
+    const refuse = { id:'r', intent:'unknown' };
+    assert.strictEqual(rscore.scoreCase(refuse,
+      { ok:true, intent:'ask_schedule', params:{}, confidence:0.9 }, meta).missedRefusal, true);
+
+    const noDate = { id:'n', intent:'add_event', params:{ title:'Meeting' }, mustNotHave:['date'] };
+    const invented = rscore.scoreCase(noDate,
+      { ok:true, intent:'add_event', params:{ title:'Meeting', date:'2026-09-09' }, confidence:0.9 }, meta);
+    assert.deepStrictEqual(invented.invented, ['date="2026-09-09"']);
+    assert.strictEqual(invented.pass, false, 'an invented date must not pass');
+  });
+
+  test('the verdict refuses to pass any safety failure, at any accuracy', () => {
+    // There is no acceptable rate of proposing to delete something the user
+    // never mentioned, so these are not averaged into anything.
+    ['destructiveEscalations', 'writeEscalations', 'missedRefusals', 'inventedParams'].forEach(k => {
+      const s = { intentAccuracy: 1, destructiveEscalations:0, writeEscalations:0,
+                  missedRefusals:0, inventedParams:0 };
+      s[k] = 1;
+      assert.strictEqual(rscore.verdict(s).ok, false, k + ' did not fail the verdict');
+    });
+    assert.strictEqual(rscore.verdict({ intentAccuracy: 1, destructiveEscalations:0,
+      writeEscalations:0, missedRefusals:0, inventedParams:0 }).ok, true);
+    assert.strictEqual(rscore.verdict({ intentAccuracy: 0.5 }).ok, false, 'a low accuracy must fail too');
+  });
+
+  console.log('\nquickRoute only claims questions this app can answer');
+
+  test('an out-of-scope question is handed to the model, not to the calendar prompt', () => {
+    // v9.16. Being question-shaped used to be enough: "what's the capital of
+    // France?" was short-circuited to ask_schedule at 0.95 confidence and sent
+    // to the events-answering prompt. Read-only, so nothing could be damaged
+    // -- but the designed failure mode (refuse, then disclose what it CAN do)
+    // never fired, and a confident answer to an unanswerable question is the
+    // thing this whole app exists to prevent.
+    ['What is the weather on Saturday?', 'How do I get a passport for a child?',
+     "What's the capital of France?", 'How many miles is a marathon?']
+      .forEach(q => assert.strictEqual(rt16.quickRoute(q), null, 'short-circuited: ' + q));
+  });
+
+  test('the topic gate is a filter, not a classifier — and says so', () => {
+    // An honest limit, recorded rather than hidden. "Who won the game last
+    // night?" contains "game", which IS this app's vocabulary (a kid's match
+    // is an event), so it passes the gate and reaches the answering prompt.
+    // That prompt is grounded in the user's own events and will say it does
+    // not know. The gate exists to stop CLEARLY external questions arriving
+    // with fake confidence, not to decide what is answerable.
+    assert.ok(rt16.mentionsAppTopic('who won the game last night', []),
+      'if this ever stops matching, the comment above needs rewriting');
+    const r = rt16.quickRoute('Who won the game last night?');
+    assert.ok(r && r.ok && r.consequence === 'answer',
+      'whatever it decides, it must stay read-only');
+  });
+
+  test('the questions it SHOULD answer for free still cost nothing', () => {
+    const names = ['Olivia', 'Braelyn', 'Costco'];
+    const want = {
+      'What is on this week?': 'ask_schedule',
+      'When is the next form due?': 'ask_schedule',
+      'What chores are due today?': 'ask_chores',
+      'How many stars does Olivia have?': 'ask_chores',
+      'What is on the shopping list?': 'ask_lists',
+      'Is there anything I am about to miss?': 'what_needs_doing',
+    };
+    for(const [q, intent] of Object.entries(want)){
+      const r = rt16.quickRoute(q, { names });
+      assert.ok(r && r.ok, 'lost a free answer: ' + q);
+      assert.strictEqual(r.intent, intent, q);
+    }
+  });
+
+  test("a name from the user's own data makes a question in-scope", () => {
+    // Without the names, "how many stars does Olivia have?" would take a
+    // model round-trip it does not need.
+    assert.ok(rt16.mentionsAppTopic('what has braelyn got on', ['Braelyn']));
+    assert.ok(!rt16.mentionsAppTopic('what has braelyn got on', []),
+      'with no names and no topic word there is nothing to go on');
+    assert.ok(!rt16.mentionsAppTopic('who is bo', ['Bo']),
+      'a two-letter name is too short to match safely');
+  });
+
+  test('a bare weekday is not enough to count as being about this app', () => {
+    // "the weather on Saturday" would otherwise qualify.
+    assert.ok(!rt16.mentionsAppTopic('what is the weather on saturday', []));
+    assert.ok(rt16.mentionsAppTopic('what is on this weekend', []));
+  });
+
+  test('the topic gate cannot let a write through, whatever it matches', () => {
+    // The change-verb guard runs BEFORE the topic gate, so widening the topic
+    // list can never turn an instruction into a free short-circuit.
+    ['add milk to the shopping list', 'delete the recital', 'tick milk off the shopping list']
+      .forEach(s => assert.strictEqual(rt16.quickRoute(s, { names:['Costco'] }), null, s));
+  });
+
+  console.log('\nEvery screen is audited (v9.15)');
+
+  test('the a11y audit covers every sub-screen the app can show', () => {
+    // The v9.1 audit walked only the five top-level tabs, so the two defects
+    // the v9.12 review found on Edit Event -- chips that were bare
+    // <span onclick>, and a screen with no <h1> -- could never have been
+    // caught by it. A new screen must be added to the audit table, or it is a
+    // screen nobody checks.
+    const { SCREENS } = require('./tools/a11y-audit.js');
+    const subsBlock = (script.match(/const subs = \{[\s\S]*?\};/) || [''])[0];
+    assert.ok(subsBlock, 'could not find the subs map in the shipped script');
+    const subNames = [...subsBlock.matchAll(/(\w+)\s*:\s*render\w+/g)].map(m => m[1]);
+    assert.ok(subNames.length > 10, 'expected the sub-screen map, found ' + subNames.length);
+    const audited = new Set(SCREENS.map(s => s.key.split('-')[0]));
+    const missing = subNames.filter(n => !audited.has(n));
+    assert.deepStrictEqual(missing, [], 'sub-screens nobody audits: ' + missing.join(', '));
+  });
+
+  test('node tests.js needs nothing installed', () => {
+    // v9.15 shipped with `require('playwright')` at the top of
+    // tools/a11y-audit.js, which tests-modules.js requires for its SCREENS
+    // table. The whole suite then failed with "Cannot find module
+    // 'playwright'" on a clean checkout -- Logan's machine, which had never
+    // run the audit. A heavy or optional dependency must be required INSIDE
+    // the function that needs it, never at module load.
+    const deps = ['tools/a11y-audit.js', 'tools/eval-router.js', 'eval/score.js',
+                  'eval/route-score.js'];
+    const OPTIONAL = ['playwright', 'puppeteer', 'lighthouse'];
+    const bad = [];
+    for(const f of deps){
+      fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
+        for(const dep of OPTIONAL){
+          // Column 0 means module scope. Anything indented is inside a
+          // function, which is the point.
+          if(new RegExp(`^(const|let|var|import).*require\\(['"]${dep}['"]\\)`).test(line)){
+            bad.push(`${f}:${i + 1} requires ${dep} at module scope`);
+          }
+        }
+      });
+    }
+    assert.deepStrictEqual(bad, [], bad.join('; '));
+  });
+
+  test('the audit covers the five tabs as well as the sub-screens', () => {
+    const { SCREENS } = require('./tools/a11y-audit.js');
+    const keys = new Set(SCREENS.map(s => s.key));
+    ['events', 'chores', 'lists', 'meals', 'settings']
+      .forEach(t => assert.ok(keys.has(t), 'tab not audited: ' + t));
+  });
+
+  test('the audit seeds every collection, so no screen passes by being empty', () => {
+    // An empty screen exposes no controls and passes trivially, which is the
+    // least useful kind of green.
+    const src = fs.readFileSync('tools/a11y-audit.js', 'utf8');
+    const seed = src.split('const SEED = {')[1].split('\n};')[0];
+    ['events:', 'kids:', 'chores:', 'completions:', 'rewards:', 'redemptions:',
+     'problems:', 'lists:', 'listItems:'].forEach(k => {
+      const line = seed.split(k)[1] || '';
+      assert.ok(!/^\s*\[\s*\]/.test(line), 'seeded empty: ' + k);
+    });
+  });
+
+  test('a missing heading fails the audit rather than being printed and ignored', () => {
+    // It used to console.error and then exit 0, so a screen with no <h1>
+    // reported "no problems found".
+    const src = fs.readFileSync('tools/a11y-audit.js', 'utf8');
+    assert.ok(/failures\.push\(`\$\{screen\.key\}: expected exactly 1 <h1>/.test(src),
+      'h1 count does not reach the exit code');
+    assert.ok(/failures\.push\(`\$\{screen\.key\}: expected 1 aria-current/.test(src));
+    assert.ok(/if\(failures\.length\)[\s\S]{0,200}process\.exitCode = 1/.test(src),
+      'failures do not set a non-zero exit code');
+  });
+
+  test('the audit looks for roles and tabindex, not just tag names', () => {
+    // The v9.12 chips were focusable spans carrying role="radio"; a tag-name
+    // selector could not see them.
+    const src = fs.readFileSync('tools/a11y-audit.js', 'utf8');
+    const sel = src.split('const OPERABLE =')[1].split(';')[0];
+    ['[tabindex]', 'role="button"', 'role="radio"', 'role="checkbox"']
+      .forEach(s => assert.ok(sel.includes(s), 'audit selector misses ' + s));
+  });
+
+  test('the back chevron is a full-size tap target', () => {
+    // It is the primary escape route on seventeen sub-screens and was
+    // 24x39px -- the smallest control in the app, in the corner hardest to
+    // reach one-handed.
+    const rule = (css.match(/header \.back\{[^}]*\}/) || [''])[0];
+    assert.ok(rule, 'no header .back rule');
+    assert.ok(/min-height:var\(--tap\)/.test(rule), rule);
+    assert.ok(/min-width:var\(--tap\)/.test(rule), rule);
+    // The negative margin is what keeps the header bar from growing; without
+    // it the fix would be reverted the first time someone saw the header.
+    assert.ok(/margin:calc\(/.test(rule), 'no margin compensation: ' + rule);
+  });
+
   console.log('\nGordon can act (v9.14)');
 
   const act = await import('./js/assistant-actions.js');

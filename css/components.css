@@ -25,7 +25,15 @@
   header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
     font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
     padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
-  header .back{background:none;border:none;color:var(--on-accent);font-size:20px;padding:0 4px;font-weight:700}
+  /* The back chevron is the primary escape route on seventeen sub-screens and
+     was a 24x39px tap target -- the smallest control in the app, in the corner
+     hardest to hit one-handed. The box is now a full 44px square; the negative
+     margins absorb it so the header bar keeps its height and the icon keeps
+     its position. (WCAG 2.5.8 sets 24px as the AA floor; Apple HIG asks 44,
+     which is what the rest of this app already uses.) */
+  header .back{background:none;border:none;color:var(--on-accent);font-size:20px;font-weight:700;
+    min-width:var(--tap);min-height:var(--tap);margin:calc((var(--tap) - 24px) / -2) 0;
+    padding:0 4px;display:inline-flex;align-items:center;justify-content:flex-start}
   /* Real headings now (h1 in the bar, h2 on empty states) so heading
      navigation works. Strip the UA margins/sizes -- the design owns those. */
   .htitle{margin:0;font-size:inherit;font-weight:inherit;letter-spacing:inherit}
