@@ -1,6 +1,6 @@
 // FlyerSnap service worker — network-first so git pushes show up immediately,
 // with cache fallback so the app still opens offline.
-const CACHE = 'flyersnap-v83';
+const CACHE = 'flyersnap-v84';
 // js/ modules MUST be listed. index.html imports them, so a missing entry means
 // the app fails to boot offline -- the import rejects and nothing runs.
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];

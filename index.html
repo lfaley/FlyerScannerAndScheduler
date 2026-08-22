@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<!-- No user-scalable=no / maximum-scale: blocking pinch-zoom fails WCAG
+     2.2 SC 1.4.4, and an installed iOS web app DOES honour it. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#2D5A4A" media="(prefers-color-scheme: light)">
@@ -66,6 +68,9 @@
   /* Nothing in the app showed focus before -- switch-control and keyboard users
      had no idea where they were. :focus-visible keeps it invisible for taps. */
   :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:8px}
+  /* main gets focus on navigation for screen-reader users; that is a cue to
+     assistive tech, not a visual state. */
+  main:focus,main:focus-visible{outline:none}
   @media (prefers-reduced-motion: reduce){
     *{animation-duration:.01ms !important;transition-duration:.01ms !important}
   }
@@ -76,6 +81,10 @@
     font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
     padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
   header .back{background:none;border:none;color:var(--on-accent);font-size:20px;padding:0 4px;font-weight:700}
+  /* Real headings now (h1 in the bar, h2 on empty states) so heading
+     navigation works. Strip the UA margins/sizes -- the design owns those. */
+  .htitle{margin:0;font-size:inherit;font-weight:inherit;letter-spacing:inherit}
+  .empty .et{margin:0 0 var(--s2)}
   main{padding:var(--s4);max-width:640px;margin:0 auto;padding-bottom:var(--s5)}
   /* Larger phones get a touch more air; content stays in a readable measure. */
   @media (min-width:430px){ main{padding:var(--s5)} }
@@ -161,7 +170,9 @@
     padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
   textarea{min-height:90px;resize:vertical}
   .formrow{display:flex;gap:8px;margin-bottom:10px}
-  .label{font-size:var(--t-cap);font-weight:700;color:var(--muted);margin:var(--s4) 0 var(--s2);
+  /* Now a real <label for>, which is inline by default -- keep it block so
+     the layout is identical to the <div> it replaced. */
+  .label{display:block;font-size:var(--t-cap);font-weight:700;color:var(--muted);margin:var(--s4) 0 var(--s2);
     text-transform:uppercase;letter-spacing:.06em}
   .empty{text-align:center;padding:44px 24px 40px;color:var(--muted)}
   /* Empty-state mark: large, quiet, unmistakably the same family as the
@@ -291,16 +302,18 @@
 <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 4.5L7.5 12l7.5 7.5"/></symbol>
 <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 4.5L16.5 12 9 19.5"/></symbol>
 </defs></svg>
-<header id="header">FlyerSnap</header>
-<main id="main"></main>
-<nav id="nav"></nav>
-<div class="toast" id="toast"></div>
-<input type="file" id="fCam" accept="image/*" capture="environment" hidden>
-<input type="file" id="fLib" accept="image/*" multiple hidden>
-<input type="file" id="fPdf" accept="application/pdf" hidden>
-<input type="file" id="fRecipe" accept="image/*" multiple hidden>
-<input type="file" id="fCompare" accept="image/*" hidden>
-<input type="file" id="fImport" accept="application/json" hidden>
+<header id="header" role="banner">FlyerSnap</header>
+<!-- tabindex=-1 so a screen-change can move focus here; see render(). -->
+<main id="main" tabindex="-1"></main>
+<nav id="nav" aria-label="Sections"></nav>
+<!-- polite: an undo offer must be announced, but never interrupt. -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="fCam" aria-label="Take a photo" accept="image/*" capture="environment" hidden>
+<input type="file" id="fLib" aria-label="Choose photos" accept="image/*" multiple hidden>
+<input type="file" id="fPdf" aria-label="Import a PDF" accept="application/pdf" hidden>
+<input type="file" id="fRecipe" aria-label="Scan a recipe" accept="image/*" multiple hidden>
+<input type="file" id="fCompare" aria-label="Choose a flyer to compare" accept="image/*" hidden>
+<input type="file" id="fImport" aria-label="Restore from a backup file" accept="application/json" hidden>
 
 <script>'use strict';
 // ---------------------------------------------------------------------------
@@ -1531,13 +1544,18 @@ function sub(name, data){ closeSheet(); view.sub = name; view.data = data||null;
 function back(){ closeSheet(); view.sub = null; view.data = null; render(); }
 
 function renderNav(){
-  document.getElementById('nav').innerHTML = TABS.map(t=>
-    `<button class="${view.tab===t.id?'on':''}" onclick="nav('${t.id}')">
-      <span class="ic">${t.ic}</span>${t.label}</button>`).join('');
+  document.getElementById('nav').innerHTML = TABS.map(t=>{
+    const on = view.tab === t.id;
+    // aria-current is the only thing telling a screen-reader user which tab
+    // they are on -- colour alone says nothing (WCAG 1.4.1).
+    return `<button class="${on?'on':''}"${on?' aria-current="page"':''} onclick="nav('${t.id}')">
+      <span class="ic">${t.ic}</span>${t.label}</button>`;
+  }).join('');
 }
 function setHeader(title, showBack){
   document.getElementById('header').innerHTML =
-    (showBack?`<button class="back" onclick="back()">${ico('chevron-left', {title:'Back'})}</button>`:'') + esc(title);
+    (showBack?`<button class="back" aria-label="Back" onclick="back()">${ico('chevron-left')}</button>`:'')
+    + `<h1 class="htitle">${esc(title)}</h1>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,6 +1604,11 @@ function render(){
     // re-render would make simple taps feel laggy.
     void m.offsetWidth;
     m.classList.add('enter');
+    // Focus follows the navigation, or a screen-reader/keyboard user stays
+    // parked on the control they just left. preventScroll because iOS will
+    // otherwise jump the page; the guard keeps typing (which re-renders the
+    // same screen) from stealing focus mid-word.
+    try{ m.focus({ preventScroll:true }); }catch(e){ /* older WebKit */ }
   }
   if(key === lastViewKey) window.scrollTo(0, y); else window.scrollTo(0, 0);
   lastViewKey = key;
@@ -1826,7 +1849,7 @@ function renderEvents(m){
   const totalEvents = S.events.filter(e=>!e.deleted).length;
   if(totalEvents > 8 || eventSearch){
     html += `<div class="formrow" style="margin-bottom:10px">
-      <input type="text" id="evSearch" placeholder="Search events, past and upcoming"
+      <input type="text" id="evSearch" aria-label="Search events" placeholder="Search events, past and upcoming"
         value="${esc(eventSearch)}" oninput="onEventSearch(this.value)" autocapitalize="none">
       ${eventSearch ? `<button class="btn alt" style="width:auto" onclick="clearEventSearch()">Clear</button>` : ''}
     </div>`;
@@ -2111,7 +2134,7 @@ function renderSenders(m){
   const list = watchedSenders || [];
   let html = `<div class="help">FlyerSnap scans email from these senders for dates. Add a full address (jane@school.org) or a whole domain (school.org). Tag a sender with a person and events from them arrive pre-tagged — you can still adjust before saving.</div>
     <div class="formrow">
-      <input type="text" id="newSender" placeholder="domain.com or name@domain.com" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <input type="text" id="newSender" aria-label="Sender address or domain to watch" placeholder="domain.com or name@domain.com" autocapitalize="none" autocorrect="off" spellcheck="false">
       <button class="btn sm" onclick="addSender()">Add</button>
     </div>`;
   if(!list.length){
@@ -2772,7 +2795,7 @@ function eventActions(id){
 function emptyState(icon, title, body, cta){
   return `<div class="empty">
     <div class="art">${ico(icon)}</div>
-    ${title ? `<div class="et">${esc(title)}</div>` : ''}
+    ${title ? `<h2 class="et">${esc(title)}</h2>` : ''}
     <div class="eb">${body}</div>
     ${cta ? `<div style="margin-top:16px">${cta}</div>` : ''}
   </div>`;
@@ -2785,7 +2808,7 @@ function renderCapture(m){
   setHeader('Add Paperwork', true);
   m.innerHTML = `
     <div style="font-size:18px;font-weight:700;margin-bottom:14px">Where is the paperwork?</div>
-    <div class="label" style="margin-top:0">What is this about? (optional)</div>
+    <label class="label" style="margin-top:0" for="scanContext">What is this about? (optional)</label>
     <input type="text" id="scanContext" placeholder="e.g. band, Olivia's dance, 3rd grade"
       value="${esc(scanContext)}" oninput="setScanContext(this.value)">
     <div class="help">If the page only shows dates, tell it what they are for. It gets noted on every event found.</div>
@@ -2922,7 +2945,7 @@ function openLinkSheet(){
   const sh = document.createElement('div'); sh.className='sheet';
   sh.innerHTML = `<div style="font-weight:800">Paste a flyer link</div>
     <div class="meta" style="margin-bottom:12px">Direct PDF links work best. Login-protected pages (e.g. some ParentSquare posts) won't work — save the PDF and use Import instead.</div>
-    <input type="text" id="linkUrl" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <input type="text" id="linkUrl" aria-label="Flyer web address" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false">
     <div style="height:10px"></div>
     <button class="sheetbtn" style="background:var(--green);color:var(--on-accent)" onclick="submitLink()">Read this link</button>
     <button class="sheetbtn cancel" onclick="closeLinkSheet()">Cancel</button>`;
@@ -3001,7 +3024,7 @@ function renderReview(m){
           <div class="row"><div class="title grow">${esc(e.title)}</div>
             ${e.dup?`<span class="kindtag" style="background:var(--red-lt);color:var(--red-accent)">TRACKED</span>`:''}
             <span class="kindtag ${e.kind}">${e.kind==='deadline'?'DEADLINE':'EVENT'}</span>
-            <button class="linkbtn" style="padding:2px 4px" onclick="event.stopPropagation();openPendingEdit(${i})">${ico('edit', {title:'Edit'})}</button></div>
+            <button class="linkbtn" style="padding:2px 4px" aria-label="Edit this event" onclick="event.stopPropagation();openPendingEdit(${i})">${ico('edit')}</button></div>
           <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
           ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         </div>
@@ -3101,18 +3124,18 @@ function openPendingEdit(i){
 }
 function renderEventEdit(m){
   document.getElementById('header').innerHTML =
-    `<button class="back" onclick="cancelEventEdit()">${ico('chevron-left', {title:'Back'})}</button>Edit Event`;
+    `<button class="back" aria-label="Back" onclick="cancelEventEdit()">${ico('chevron-left')}</button>Edit Event`;
   const f = eventForm;
   const kids = allPeople();
   m.innerHTML = `
-    <div class="label" style="margin-top:0">Title</div>
+    <label class="label" style="margin-top:0" for="efTitle">Title</label>
     <input type="text" id="efTitle" value="${esc(f.title)}">
     <div class="formrow" style="margin-top:10px;margin-bottom:0">
-      <div style="flex:1"><div class="label" style="margin-top:0">Date</div>
+      <div style="flex:1"><label class="label" style="margin-top:0" for="efDate">Date</label>
         <input type="date" id="efDate" value="${esc(f.date)}"></div>
-      <div style="flex:1"><div class="label" style="margin-top:0">Start (optional)</div>
+      <div style="flex:1"><label class="label" style="margin-top:0" for="efTime">Start (optional)</label>
         <input type="time" id="efTime" value="${esc(f.time)}"></div>
-      <div style="flex:1"><div class="label" style="margin-top:0">End (optional)</div>
+      <div style="flex:1"><label class="label" style="margin-top:0" for="efEnd">End (optional)</label>
         <input type="time" id="efEnd" value="${esc(f.endTime||'')}"></div>
     </div>
     <div class="label">Type</div>
@@ -3122,7 +3145,7 @@ function renderEventEdit(m){
       <span class="chip ${!(f.personIds||[]).length?'on':''}" onclick="syncEventForm();eventForm.personIds=[];render()">No one</span>` +
       allPeople().map(k=>`<span class="chip" style="${(f.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
         onclick="toggleEventPerson('${k.id}')">${esc(k.name)}</span>`).join('') : ''}
-    <div class="label">Location</div>
+    <label class="label" for="efLoc">Location</label>
     <input type="text" id="efLoc" value="${esc(f.location)}">
     ${(function(){
       const ev = eventForm.ref ? (S.events.find(x=>x.id===eventForm.ref)||{}) : {};
@@ -3132,7 +3155,7 @@ function renderEventEdit(m){
         (ev.aiSource ? '<br><span style="opacity:.75">read by ' + esc(ev.aiSource) + '</span>' : '') +
         '</div>';
     })()}
-    <div class="label">Notes</div>
+    <label class="label" for="efNotes">Notes</label>
     <textarea id="efNotes" rows="5" style="width:100%;min-height:110px;font-family:inherit;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;box-sizing:border-box;resize:vertical">${esc(f.notes)}</textarea>
     <div style="height:14px"></div>
     <button class="btn" onclick="saveEventEdit()">Save changes</button>
@@ -3236,7 +3259,7 @@ function renderChores(m){
         <div class="grow"><div class="title ${done?'strike':''}">${esc(c.title)}</div>
           <div class="meta">${kid?esc(kid.name):'Anyone'} · ${when}</div></div>
         ${c.stars>0?`<span style="font-size:12px">${'⭐'.repeat(Math.min(c.stars,5))}</span>`:''}
-        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delChoreById('${c.id}')">${ico('x', {title:'Delete chore'})}</button>
+        <button class="linkbtn red" style="padding:4px" aria-label="Delete chore ${esc(c.title)}" onclick="event.stopPropagation();delChoreById('${c.id}')">${ico('x')}</button>
       </div>`;
     }).join('');
   }
@@ -3253,7 +3276,7 @@ function renderChoreForm(){
   const kids = justKids();
   const f = choreForm;
   return `<div class="card" style="border:2px solid var(--accent)">
-    <input type="text" id="choreTitle" placeholder="Chore (emoji ok, e.g. 🦷 Brush teeth)" value="${esc(f.title)}"
+    <input type="text" id="choreTitle" aria-label="Chore name" placeholder="Chore (emoji ok, e.g. 🦷 Brush teeth)" value="${esc(f.title)}"
       oninput="choreForm.title=this.value">
     <div class="label">Who</div>
     <span class="chip ${f.kidId===null?'on':''}" onclick="choreForm.kidId=null;syncChoreTitle();render()">Anyone</span>` +
@@ -3335,12 +3358,12 @@ function renderRewards(m){
       <div class="grow"><div class="title">${esc(r.title)}</div>
         <div class="meta" style="font-size:11px">Tap to redeem</div></div>
       <span style="font-weight:700;color:var(--amber)">⭐ ${r.cost}</span>
-      <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delReward('${r.id}')">${ico('x', {title:'Delete reward'})}</button>
+      <button class="linkbtn red" style="padding:4px" aria-label="Delete reward ${esc(r.title)}" onclick="event.stopPropagation();delReward('${r.id}')">${ico('x')}</button>
     </div>`).join('');
   }
   html += `<div class="card"><div class="formrow" style="margin:0">
-    <input type="text" id="rwTitle" placeholder="New reward (e.g. Movie night)">
-    <input type="number" id="rwCost" placeholder="⭐" value="10" style="width:70px;text-align:center">
+    <input type="text" id="rwTitle" aria-label="Reward name" placeholder="New reward (e.g. Movie night)">
+    <input type="number" id="rwCost" aria-label="Cost in stars" placeholder="⭐" value="10" style="width:70px;text-align:center">
     <button class="btn sm" onclick="addReward()">Add</button></div></div>`;
   m.innerHTML = html;
 }
@@ -3425,12 +3448,12 @@ function renderLists(m){
         ${emoji}
         <div class="title grow">${esc(l.name)}</div>
         <span class="meta">${open===0?'done':open+' open'}</span>
-        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delList('${l.id}')">${ico('x', {title:'Delete list'})}</button>
+        <button class="linkbtn red" style="padding:4px" aria-label="Delete list ${esc(l.name)}" onclick="event.stopPropagation();delList('${l.id}')">${ico('x')}</button>
       </div>`;
     }).join('');
   }
   html += `<div class="card"><div class="formrow" style="margin:0">
-    <input type="text" id="newList" placeholder="New list (e.g. Groceries)" onkeydown="if(event.key==='Enter')addList()">
+    <input type="text" id="newList" aria-label="New list name" placeholder="New list (e.g. Groceries)" onkeydown="if(event.key==='Enter')addList()">
     <button class="btn sm" onclick="addList()">Add</button></div></div>`;
   m.innerHTML = html;
 }
@@ -3458,7 +3481,7 @@ function renderListDetail(m){
     : `<div class="empty"><div class="eb">Nothing here yet — add the first item below.</div></div>`;
   if(anyChecked) html += `<div style="text-align:center"><button class="linkbtn red" onclick="clearChecked('${list.id}')">Clear checked items</button></div>`;
   html += `<div class="card"><div class="formrow" style="margin:0">
-    <input type="text" id="newItem" placeholder="Add item" onkeydown="if(event.key==='Enter')addItem('${list.id}')">
+    <input type="text" id="newItem" aria-label="New item" placeholder="Add item" onkeydown="if(event.key==='Enter')addItem('${list.id}')">
     <button class="btn sm" onclick="addItem('${list.id}')">Add</button></div></div>`;
   m.innerHTML = html;
 }
@@ -3744,12 +3767,12 @@ function renderRecipeForm(m){
   const f = recipeForm;
   m.innerHTML = `
     <div class="help">This goes to the Recipe app's library for you to confirm there.</div>
-    <input type="text" id="rTitle" placeholder="Recipe name" value="${esc(f.title)}" style="margin-bottom:10px">
+    <input type="text" id="rTitle" aria-label="Recipe name" placeholder="Recipe name" value="${esc(f.title)}" style="margin-bottom:10px">
     <div>` + ['Breakfast','Lunch','Dinner','Snack','Other'].map(c =>
       `<span class="chip ${f.category===c?'on':''}" onclick="syncRecipeForm();recipeForm.category='${c}';render()">${c}</span>`).join('') + `</div>
-    <div class="label">Ingredients (one per line)</div>
+    <label class="label" for="rIng">Ingredients (one per line)</label>
     <textarea id="rIng">${esc(f.ingredients)}</textarea>
-    <div class="label">Instructions</div>
+    <label class="label" for="rIns">Instructions</label>
     <textarea id="rIns">${esc(f.instructions)}</textarea>
     <div style="height:12px"></div>
     <button class="btn" onclick="sendRecipe()">Send to Recipe app</button>
@@ -3858,7 +3881,7 @@ function renderSettings(m){
     <div class="sect">People</div>
     <div class="help">Add the people you tag events to. Kids also appear in chores and star rewards; adults are for events only.</div>
     <div class="formrow">
-      <input type="text" id="kidName" placeholder="Name" onkeydown="if(event.key==='Enter')addKid()">
+      <input type="text" id="kidName" aria-label="Person name" placeholder="Name" onkeydown="if(event.key==='Enter')addKid()">
       <button class="btn sm" onclick="addKid()">Add</button>
     </div>
     <div style="margin:2px 0 10px">
@@ -3877,7 +3900,7 @@ function renderSettings(m){
           ? 'Not needed while the local model is selected, but keep it here so the Anthropic fallback works when the desktop is asleep.'
           : 'FlyerSnap sends your photos to the Claude API to read them. Create a key at console.anthropic.com and paste it here. It is stored only in this phone\u2019s browser.')}</div>
     <div class="formrow">
-      <input type="password" id="apiKey" placeholder="sk-ant-...">
+      <input type="password" id="apiKey" aria-label="Anthropic API key" placeholder="sk-ant-...">
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
 
@@ -3892,14 +3915,14 @@ function renderSettings(m){
       <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">${ico('home')}Local model</span>
     </div>
     ${aiProvider()==='local' ? `
-      <div class="label">Base URL</div>
+      <label class="label" for="localBase">Base URL</label>
       <input type="text" id="localBase" placeholder="https://machine.tailnet.ts.net/v1"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||'')}">
-      <div class="label">Model</div>
+      <label class="label" for="localModel">Model</label>
       <input type="text" id="localModel" placeholder="qwen2.5:14b-instruct"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localModel||'')}">
       <label class="row" style="margin-top:10px">
-        <input type="checkbox" id="aiFallback" ${S.settings.aiFallback?'checked':''}
+        <input type="checkbox" id="aiFallback" aria-label="Fall back to Anthropic when the local model fails" ${S.settings.aiFallback?'checked':''}
           onchange="S.settings.aiFallback=this.checked;save()">
         <span class="grow" style="font-size:var(--t-sm)">Fall back to Anthropic if the desktop is offline</span>
       </label>
@@ -3916,10 +3939,10 @@ function renderSettings(m){
     <div class="help">${watcherConfigured()
       ? 'Connected. Your Apps Script checks email every 15 minutes and FlyerSnap picks up anything new when you open it.'
       : 'Optional. A Google Apps Script running in your own account watches chosen senders and pulls out dates automatically. See gmail-watcher.gs in the repo for setup.'}</div>
-    <div class="label">Web app URL</div>
+    <label class="label" for="watcherUrl">Web app URL</label>
     <input type="text" id="watcherUrl" placeholder="https://script.google.com/macros/s/…/exec"
       value="${esc(S.settings.watcherUrl||'')}" autocapitalize="none" autocorrect="off" spellcheck="false">
-    <div class="label">Secret token</div>
+    <label class="label" for="watcherToken">Secret token</label>
     <input type="password" id="watcherToken" placeholder="the SECRET from your script"
       value="${esc(S.settings.watcherToken||'')}" autocapitalize="none" autocorrect="off">
     <div class="formrow" style="margin-top:10px">
@@ -3972,7 +3995,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v9.0 · empty states, undo instead of confirm</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v9.1 · accessibility pass, zoom unblocked</div>`;
 }
 function manualPrune(){
   const n = pruneData();

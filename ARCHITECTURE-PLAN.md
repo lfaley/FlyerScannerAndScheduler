@@ -1,5 +1,26 @@
 # Architecture review: should FlyerSnap be rewritten?
 
+> ## ⚠ PARTLY SUPERSEDED — read this box before acting on anything below
+>
+> Written **before** the v8.1–v8.5 production incident. Sections 5 and 6 below
+> propose shipping `<script type="module" src="js/app.js">` with real ES
+> imports. **That was tried and it broke the installed iOS PWA**: a failed
+> module import kills the whole script silently, leaving a blank screen with
+> no error. It reached production and was emergency-reverted in v8.6.
+>
+> **What actually holds today (see CLAUDE.md):** source is modular in `js/`
+> and `css/`; the shipped `index.html` is a single self-contained file with
+> those sources *inlined*, and tests fail the build if the copies drift. Do
+> not reintroduce module loading into the shipped file without real
+> installed-PWA verification — the Node test sandbox faked imports and gave
+> false confidence.
+>
+> Still valid and worth reading: the analysis in sections 1–4 (why to
+> modularise, why NOT to rewrite object-oriented, the inline-handler hazard),
+> and the `state.js` constraint — `S` is reassigned and ES import bindings are
+> read-only, which is why `state.js` is still not extracted.
+
+
 Short answer: **modularise, yes. Rewrite object-oriented, no.** And do it in
 stages, never as a big bang.
 

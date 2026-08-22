@@ -1,5 +1,12 @@
 # FlyerSnap PWA — Deploy to GitHub Pages (Zero Experience Required)
 
+> **Historical: this is the ORIGINAL one-time setup guide, already done.**
+> For the routine deploy (the one you want), see **HANDOFF.md** — run
+> `node tests.js`, then commit and push from
+> `C:\Users\Logan\Desktop\Repos\FlyerSnap`. The repo also holds more
+> than the five files listed below now (js/, css/, tools/, tests).
+> Keep this doc for reference if Pages ever has to be set up again.
+
 This gets FlyerSnap onto your iPhone home screen as a real app icon — no Apple fee, no Expo Go, no computer needed after setup. Every step ends with a **✅ Checkpoint**.
 
 You already have GitHub Pages set up, so this is short.

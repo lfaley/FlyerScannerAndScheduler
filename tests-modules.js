@@ -268,6 +268,82 @@ module.exports = async function runModuleTests(test){
   // in BOTH themes. A palette tweak that silently drops below AA fails the
   // build with the exact pair named.
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Accessibility guards. Each one maps to a WCAG 2.2 success criterion and
+  // to a failure that is invisible to a sighted developer -- which is exactly
+  // why it belongs in the build rather than in a checklist someone re-walks.
+  // -------------------------------------------------------------------------
+  console.log('\nAccessibility');
+
+  test('pinch-zoom is not blocked (SC 1.4.4 Resize Text)', () => {
+    const vp = (html.match(/<meta name="viewport"[^>]*>/) || [''])[0];
+    assert.ok(!/user-scalable\s*=\s*(no|0)/i.test(vp), 'user-scalable=no blocks zoom');
+    const max = vp.match(/maximum-scale\s*=\s*([\d.]+)/i);
+    assert.ok(!max || Number(max[1]) >= 2, 'maximum-scale below 2 blocks zoom');
+  });
+
+  test('every text input has an accessible name (SC 4.1.2, 3.3.2)', () => {
+    // A placeholder is NOT a name: it vanishes on first keystroke and is not
+    // reliably announced. Each input needs aria-label or a <label for>.
+    const labelled = new Set(
+      [...html.matchAll(/<label[^>]*\bfor="([\w-]+)"/g)].map(m => m[1]));
+    const nameless = [];
+    for(const m of html.matchAll(/<(input|textarea)\b([^>]*)>/g)){
+      const attrs = m[2];
+      const id = (attrs.match(/\bid="([\w-]+)"/) || [])[1];
+      if(/\btype="(hidden|submit|button)"/.test(attrs)) continue;
+      if(/aria-label(?:ledby)?=/.test(attrs)) continue;
+      if(id && labelled.has(id)) continue;
+      nameless.push(id || attrs.trim().slice(0, 40));
+    }
+    assert.deepStrictEqual(nameless, [],
+      'inputs a screen reader cannot name: ' + nameless.join(', '));
+  });
+
+  test('the active tab is marked aria-current (SC 1.4.1, not colour alone)', () => {
+    assert.ok(/aria-current="page"/.test(script),
+      'nav renders the active tab without aria-current -- colour is the only cue');
+  });
+
+  test('landmarks and a page heading exist', () => {
+    assert.ok(/<main id="main"[^>]*>/.test(html), 'no main landmark');
+    assert.ok(/<nav id="nav"[^>]*aria-label=/.test(html), 'nav landmark has no name');
+    assert.ok(/<h1 class="htitle">/.test(script), 'the screen title is not an h1');
+  });
+
+  test('the toast is announced (SC 4.1.3 Status Messages)', () => {
+    const t = (html.match(/<div class="toast"[^>]*>/) || [''])[0];
+    assert.ok(/aria-live="polite"/.test(t) && /role="status"/.test(t),
+      'toast is not a live region -- undo offers would be silent: ' + t);
+  });
+
+  test('no button contains only an icon without naming itself', () => {
+    // The name belongs on the control. ico({title}) also produces a legal
+    // name via the image inside, but only aria-label on the button itself is
+    // announced identically across VoiceOver, TalkBack and NVDA -- and a DOM
+    // audit reading innerText sees nothing otherwise.
+    const bad = [];
+    for(const m of script.matchAll(/<button\b([^>]*)>\s*\$\{ico\([^)]*\)\}\s*<\/button>/g)){
+      if(!/aria-label=/.test(m[1])) bad.push(m[0].slice(0, 70));
+    }
+    assert.deepStrictEqual(bad, [],
+      'icon-only buttons with no aria-label: ' + bad.join(' | '));
+  });
+
+  test('decorative icons are hidden from assistive tech', () => {
+    assert.ok(/aria-hidden="true"/.test(script),
+      'icons beside a text label must be aria-hidden or they are announced twice');
+  });
+
+  test('motion respects prefers-reduced-motion (SC 2.3.3)', () => {
+    assert.ok(/@media \(prefers-reduced-motion: reduce\)/.test(css), 'no reduced-motion block');
+  });
+
+  test('tap targets meet the 44px AAA target (SC 2.5.5)', () => {
+    const tap = css.match(/--tap:\s*(\d+)px/);
+    assert.ok(tap && Number(tap[1]) >= 44, 'tap token is below 44px');
+  });
+
   console.log('\nDesign token contrast (WCAG AA)');
 
   const lum = (hex) => {

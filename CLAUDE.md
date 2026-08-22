@@ -1,5 +1,8 @@
 # CLAUDE.md — read this before touching anything
 
+> Companion doc: **HANDOFF.md** — current state of play, recent work and
+> open items. This file is the architecture and the rules.
+
 FlyerSnap: family-organization PWA for Logan. Scans flyers/PDFs/emails → AI
 extracts events → calendar reminders. Plus chores/stars, lists, read-only meal
 plan (fed by a separate recipe app), Gmail watcher, Anthropic or local-Ollama
@@ -8,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.0 · **Tests:** 251 passing (`node tests.js`)
+**Current version:** v9.1 · **Tests:** 260 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -59,9 +62,12 @@ tests-refactor.js's six oracles) into js/ is welcome — inline the result.
 
 ## Verification tooling
 
-- `node tests.js` — 246 tests: data safety, migrations, inline-handler
+- `node tests.js` — 260 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
-  fixed-position safety, WCAG contrast in both themes.
+  fixed-position safety, accessibility, WCAG contrast in both themes.
+- `node tools/a11y-audit.js` — accessible names and tap targets in the
+  RENDERED DOM. The source tests cannot see a name that computes to nothing
+  at runtime; this found exactly that in v9.1.
 - `node tools/preview.js [outDir]` — Playwright-Chromium screenshots of every
   tab, light AND dark, seeded demo data. Review design changes here first;
   it would have caught the v8.6 button bug. NOT a Safari substitute — Logan
@@ -85,11 +91,15 @@ inside any zip (it self-updates).
 ## Current work: UI modernization (see UI-MODERNIZATION-PLAN.md)
 
 Six phases toward a design that holds up in front of design professionals.
-Status: Phase 1 (tokens/dark mode/contrast guard/preview harness) DONE in
-v8.8. Phase 2 (SVG icon sprite) DONE in v8.9. Phase 3 (component polish)
-DONE in v9.0. Next: Phase 4 — accessibility audit (VoiceOver pass,
-aria-current on the active tab, heading structure, labelled inputs). Then
-PWA hygiene (maskable icons, manifest, Lighthouse) and EXPERT-QA.md.
+Status: Phases 1-4 DONE (v8.8 tokens/dark mode, v8.9 icons, v9.0 components,
+v9.1 accessibility). Next: Phase 5 — PWA hygiene (maskable icons, manifest
+id/screenshots, Lighthouse run). Then Phase 6 — EXPERT-QA.md.
+
+Accessibility rules now enforced by tests: never reintroduce
+`user-scalable=no` or `maximum-scale<2` (SC 1.4.4); every input needs a
+`<label for>` or `aria-label` (a placeholder is NOT a name); an icon-only
+button carries its own `aria-label` (not just a titled `ico()` inside);
+the active tab needs `aria-current="page"`.
 
 Destructive actions use `softDelete(coll, id, label)` -> undo toast, NOT
 confirm(). It returns the undo function. This is only safe because deletes

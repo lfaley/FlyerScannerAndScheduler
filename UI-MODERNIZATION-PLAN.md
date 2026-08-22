@@ -1,9 +1,19 @@
 # FlyerSnap — UI Modernization Plan
 
 **Written:** August 22, 2026 · **Baseline:** v8.7 (239 tests passing)
-**Status:** Phases 1–3 SHIPPED (v8.8, v8.9, v9.0 — 251 tests). Phases 4–6 pending.
+**Status:** Phases 1–4 SHIPPED (v8.8–v9.1 — 260 tests). Phases 5–6 pending.
 
 > Progress log
+> - **v9.1 / Phase 4 done:** `user-scalable=no` removed (SC 1.4.4 — an
+>   installed iOS web app honours it where a Safari tab does not); 13 visible
+>   `.label` divs became real `<label for>`, every remaining input got an
+>   `aria-label`; `aria-current="page"` on the active tab; screen title is an
+>   `<h1>`, empty-state titles `<h2>`; landmarks named; toast is a polite live
+>   region; focus moves to `<main>` on navigation. 8 source-level a11y tests +
+>   `tools/a11y-audit.js`, which audits the RENDERED DOM and caught a gap the
+>   source tests could not — delete buttons whose only accessible name lived
+>   on the `<svg>` inside; names now sit on the buttons. All five screens
+>   audit clean.
 > - **v9.0 / Phase 3 done:** `emptyState()` helper — empty screens now carry a
 >   tinted icon tile, title, one line of copy and at most one action (Events,
 >   Chores, Lists, Meals, Rewards); Meals' orphaned right-aligned link became
