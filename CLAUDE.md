@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.1 · **Tests:** 263 passing (`node tests.js`)
+**Current version:** v9.4 · **Tests:** 276 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -94,7 +94,7 @@ the full text is in git history if it is ever wanted.)
 
 ## Verification tooling
 
-- `node tests.js` — 263 tests: data safety, migrations, inline-handler
+- `node tests.js` — 276 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -124,9 +124,21 @@ inside any zip (it self-updates).
 ## Current work: UI modernization (see UI-MODERNIZATION-PLAN.md)
 
 Six phases toward a design that holds up in front of design professionals.
-Status: Phases 1-4 DONE (v8.8 tokens/dark mode, v8.9 icons, v9.0 components,
-v9.1 accessibility). Next: Phase 5 — PWA hygiene (maskable icons, manifest
-id/screenshots, Lighthouse run). Then Phase 6 — EXPERT-QA.md.
+Status: Phases 1-5 DONE (v8.8 tokens/dark mode, v8.9 icons, v9.0 components,
+v9.1 accessibility, v9.3 PWA hygiene). Next: Phase 6 — EXPERT-QA.md.
+
+Icons are GENERATED: `python3 tools/build-app-icons.py` draws every app icon
+from the palette. Never hand-edit the PNGs. Maskable icons must stay
+full-bleed with artwork inside the 80% safe circle; apple-touch-icon.png must
+stay opaque (iOS fills alpha with black). Tests check all of this.
+Lighthouse baseline (mobile): 99 / 100 / 100 / 100 —
+`bash tools/run-lighthouse.sh`.
+
+Swipe navigation (`js/gestures.js`): the edge zones belong to iOS's own
+back/forward gesture, which a web app CANNOT disable — never handle a swipe
+starting within SWIPE.EDGE of a screen side, and never preventDefault on
+these listeners. Decisions go in the pure `swipeIntent()` so they stay
+testable.
 
 Accessibility rules now enforced by tests: never reintroduce
 `user-scalable=no` or `maximum-scale<2` (SC 1.4.4); every input needs a

@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.2 · **Tests:** 263 passing
+**Updated:** August 22, 2026 · **Live version:** v9.4 · **Tests:** 276 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -61,6 +61,8 @@ a per-version progress log.
 | v9.0 | Empty states, undo toast replacing `confirm()`, Meals action row |
 | v9.1 | Accessibility pass (WCAG 2.2), DOM audit tool |
 | v9.2 | Self-contained-boot guard; deleted the doc that recommended the v8.1 mistake |
+| v9.3 | Maskable icons, manifest, Lighthouse 99/100/100/100 |
+| v9.4 | Swipe left/right between the five tabs |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -73,12 +75,50 @@ reintroduced the outage in good faith. Its surviving conclusions (the
 `state.js` constraint, why not to rewrite object-oriented) moved into
 CLAUDE.md; the full text remains in git history.
 
-**Next up: Phase 5** — PWA and platform hygiene: maskable icons with safe-zone
-padding, `apple-touch-icon` at 180px, manifest `id`/screenshots, a recorded
-Lighthouse run. Then **Phase 6**, `EXPERT-QA.md`: the anticipated questions and
-honest answers for the presentation.
+**v9.3 — installability.** All app icons are now generated from the brand
+tokens by `tools/build-app-icons.py`, so they cannot drift from the palette:
+rounded-square `any` icons, full-bleed `maskable` icons with the artwork
+inside the 80% safe circle (Android masks to a circle — transparent corners
+showed as notches, and the old icons had them), and an opaque 180px
+`apple-touch-icon` (iOS composites transparency onto black). The manifest
+gained `id`, `orientation`, `categories`, `lang`, real screenshots and an
+"Add paperwork" shortcut — which the app now honours via `?go=capture`, since
+a shortcut landing on the default screen is worse than no shortcut. The
+service worker caches entries individually: `addAll` is all-or-nothing, so one
+404 previously meant NOTHING was cached and the app had no offline copy.
 
-## Recent work in detail (v8.7 – v9.2)
+**Lighthouse (mobile): Performance 99 · Accessibility 100 · Best Practices 100
+· SEO 100.** Reproduce with `bash tools/run-lighthouse.sh`. Three real defects
+surfaced and were fixed: a silent `/favicon.ico` 404 logging a console error,
+a missing meta description, and `void m.offsetWidth` in `render()` forcing a
+synchronous layout measured at 39 ms per navigation — replaced by the Web
+Animations API, verified in the browser to still restart the animation.
+The audits still below 100 are "minify JS/CSS" and "reduce unused JS/CSS",
+i.e. *add a build step* — a deliberate architectural rejection (see CLAUDE.md);
+plus `document-latency`, which is an artifact of the local test server sending
+no compression. GitHub Pages gzips.
+
+**v9.4 — swipe navigation.** Swiping left/right on the content area moves
+between the five tabs. The decision lives in `js/gestures.js` as a pure
+`swipeIntent()` function, so all eight rules are unit-tested without a
+browser, then verified end-to-end with synthetic touch events in Chromium.
+
+The load-bearing constraint: **an installed iOS web app keeps Safari's native
+edge-swipe back/forward gesture and it cannot be disabled from web code**
+(researched, not assumed — see the Ionic issue thread). So a gesture starting
+within 28px of either screen edge is ignored and left to the OS; handling it
+too would move two screens on one flick. Nothing calls `preventDefault` —
+we cannot outrank the OS gesture and trying would break scrolling; listeners
+are passive. Swipes are also ignored on sub-screens (an accidental flick must
+not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
+and when the gesture starts on an input or on the horizontally-scrolling chip
+bar. No wrap-around at the ends. The tab bar still does everything swiping
+does, which WCAG 2.5.1 requires.
+
+**Next up: Phase 6**, `EXPERT-QA.md`: the anticipated questions and honest
+answers for the presentation.
+
+## Recent work in detail (v8.7 – v9.3)
 
 **v8.7 — the missing scan button.** Logan reported the manual scan button was
 gone. It was not gone: `<main>`'s screen-entry animation included a
@@ -135,13 +175,16 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 263 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 276 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
 - `node tools/preview.js [outDir]` — screenshots every tab, light and dark.
 - `node tools/a11y-audit.js` — accessible names and tap targets in the real DOM.
 - `node tools/inline.js --check` — CSS source/inline drift.
+- `bash tools/run-lighthouse.sh` — mobile Lighthouse scores.
+- `python3 tools/build-app-icons.py` — regenerate every app icon from the
+  brand tokens (re-run after a palette change).
 - **Logan on the installed iPhone PWA.** Non-negotiable: the Node sandbox
   cannot see rendering, and Chromium is not WebKit. Every phase above was
   verified on-device before the next one started.

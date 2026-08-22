@@ -2301,3 +2301,48 @@ test('deleting an id that is not there does nothing at all', () => {
   delList('nope');
   assert.strictEqual(JSON.stringify(S.lists), before);
 });
+
+console.log('\nSwipe navigation');
+
+// The decision is a pure function so it can be pinned down without a browser.
+// Every case here is a real way swipe-to-switch goes wrong in the wild.
+test('a clean sideways flick switches tabs', () => {
+  assert.strictEqual(swipeIntent({dx:-110, dy:8, ms:220, startX:200, width:393}), 'next');
+  assert.strictEqual(swipeIntent({dx: 110, dy:8, ms:220, startX:200, width:393}), 'prev');
+});
+
+test('gestures starting at the screen edge are left to iOS', () => {
+  // An installed iOS web app keeps Safari's edge back/forward swipe and it
+  // cannot be disabled from web code. If we also handled it, one flick would
+  // move two screens.
+  assert.strictEqual(swipeIntent({dx:-110, dy:5, ms:200, startX:10,  width:393}), null);
+  assert.strictEqual(swipeIntent({dx: 110, dy:5, ms:200, startX:388, width:393}), null);
+});
+
+test('a mostly-vertical drag is a scroll, not a swipe', () => {
+  assert.strictEqual(swipeIntent({dx:-70, dy:120, ms:300, startX:200, width:393}), null);
+});
+
+test('a small wobble during a scroll does nothing', () => {
+  assert.strictEqual(swipeIntent({dx:-25, dy:4, ms:150, startX:200, width:393}), null);
+});
+
+test('a slow drag is not a swipe', () => {
+  assert.strictEqual(swipeIntent({dx:-140, dy:6, ms:1400, startX:200, width:393}), null);
+});
+
+test('a long sideways travel that also wanders down is rejected', () => {
+  assert.strictEqual(swipeIntent({dx:-160, dy:100, ms:400, startX:200, width:393}), null);
+});
+
+test('a swipe just past the threshold still counts', () => {
+  const d = SWIPE.MIN_DIST + 1;
+  assert.strictEqual(swipeIntent({dx:-d, dy:0, ms:200, startX:200, width:393}), 'next');
+  assert.strictEqual(swipeIntent({dx:-(SWIPE.MIN_DIST - 1), dy:0, ms:200, startX:200, width:393}), null);
+});
+
+test('the tab bar still reaches every tab, so swipe is never the only way', () => {
+  // WCAG 2.5.1: a path-based gesture needs a single-pointer alternative.
+  assert.ok(TABS.length >= 5, 'expected the five tabs');
+  TABS.forEach(t => assert.ok(t.id && t.label, 'every tab is reachable by tapping'));
+});

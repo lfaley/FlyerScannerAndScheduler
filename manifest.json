@@ -1,14 +1,35 @@
 {
-  "name": "FlyerSnap",
+  "id": "/FlyerScannerAndScheduler/",
+  "name": "FlyerSnap — family paperwork, handled",
   "short_name": "FlyerSnap",
-  "description": "Snap flyers, track deadlines, run the family.",
+  "description": "Snap a school flyer, forward an email or import a PDF, and FlyerSnap pulls out the dates, deadlines and details, then hands you calendar reminders. Plus chores with stars, shared lists and the week's meal plan.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#F7F5F0",
   "theme_color": "#2D5A4A",
+  "categories": ["productivity", "lifestyle", "utilities"],
+  "lang": "en-US",
+  "dir": "ltr",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    { "src": "screenshot-events.png", "sizes": "393x852", "type": "image/png", "form_factor": "narrow", "label": "Upcoming events pulled from flyers and school emails" },
+    { "src": "screenshot-capture.png", "sizes": "393x852", "type": "image/png", "form_factor": "narrow", "label": "Add paperwork by photo, PDF, link or email" },
+    { "src": "screenshot-chores.png", "sizes": "393x852", "type": "image/png", "form_factor": "narrow", "label": "Chores and star rewards for each kid" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add paperwork",
+      "short_name": "Add",
+      "description": "Jump straight to scanning a flyer",
+      "url": "./index.html?go=capture",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
   ]
 }

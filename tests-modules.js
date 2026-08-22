@@ -306,6 +306,64 @@ module.exports = async function runModuleTests(test){
       'import/export in the shipped script turns it into a module: ' + bad.join(' | '));
   });
 
+  // -------------------------------------------------------------------------
+  // Installability. These are the details that decide whether the app installs
+  // cleanly and looks right on a home screen -- all invisible in a browser tab,
+  // which is why they get a test rather than a memory.
+  // -------------------------------------------------------------------------
+  console.log('\nPWA manifest and icons');
+
+  const mf = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+
+  test('the manifest declares what an install needs', () => {
+    ['id', 'name', 'short_name', 'description', 'start_url', 'scope',
+     'display', 'background_color', 'theme_color'].forEach(k =>
+      assert.ok(mf[k], 'manifest is missing ' + k));
+    assert.strictEqual(mf.display, 'standalone');
+  });
+
+  test('there is a maskable icon at 192 and 512, and a plain one too', () => {
+    const purpose = (p) => mf.icons.filter(i => (i.purpose || 'any').split(' ').includes(p));
+    for(const size of ['192x192', '512x512']){
+      assert.ok(purpose('maskable').some(i => i.sizes === size),
+        'no maskable icon at ' + size + ' -- Android masks icons to a circle, and '
+        + 'a non-maskable one gets its corners cut off');
+      assert.ok(purpose('any').some(i => i.sizes === size), 'no "any" icon at ' + size);
+    }
+  });
+
+  test('every file the manifest names actually exists', () => {
+    const missing = [];
+    (mf.icons || []).forEach(i => { if(!fs.existsSync(i.src)) missing.push(i.src); });
+    (mf.screenshots || []).forEach(s => { if(!fs.existsSync(s.src)) missing.push(s.src); });
+    (mf.shortcuts || []).forEach(s => (s.icons || []).forEach(i => {
+      if(!fs.existsSync(i.src)) missing.push(i.src); }));
+    assert.deepStrictEqual(missing, [], 'manifest points at files that are not here: ' + missing.join(', '));
+  });
+
+  test('a maskable icon is full-bleed and an iOS icon is opaque', () => {
+    // A maskable icon with transparent corners shows notches once the OS
+    // applies its mask; iOS composites any transparency onto BLACK.
+    const alphaAt = (file, x, y) => {
+      const b = fs.readFileSync(file);
+      // Minimal PNG read: we only need the colour type from IHDR (byte 25).
+      // 6 = RGBA, 2 = RGB. Anything without alpha is opaque by definition.
+      return b[25];
+    };
+    assert.strictEqual(alphaAt('apple-touch-icon.png'), 2,
+      'apple-touch-icon.png must have NO alpha channel (iOS fills it with black)');
+    assert.ok(fs.existsSync('icon-maskable-512.png'), 'maskable icon missing');
+  });
+
+  test('every manifest shortcut points at a target the app honours', () => {
+    (mf.shortcuts || []).forEach(s => {
+      const go = (s.url.match(/[?&]go=([\w-]+)/) || [])[1];
+      if(go) assert.ok(script.includes(`go === '${go}'`),
+        `shortcut "${s.name}" opens ?go=${go}, which boot code does not handle -- `
+        + 'it would silently land on the default screen');
+    });
+  });
+
   test('the service worker can cache everything the app needs to boot', () => {
     // Belt and braces on the same failure: if boot ever needs a file the SW
     // does not cache, the app breaks offline instead of on a bad network.

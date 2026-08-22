@@ -1,9 +1,18 @@
 # FlyerSnap — UI Modernization Plan
 
 **Written:** August 22, 2026 · **Baseline:** v8.7 (239 tests passing)
-**Status:** Phases 1–4 SHIPPED (v8.8–v9.2 — 263 tests). Phases 5–6 pending.
+**Status:** Phases 1–5 SHIPPED (v8.8–v9.3 — 268 tests). Phase 6 pending.
 
 > Progress log
+> - **v9.3 / Phase 5 done:** all app icons generated from brand tokens by
+>   `tools/build-app-icons.py` — `any`, `maskable` (full-bleed, artwork inside
+>   the 80% safe circle) and an opaque 180px `apple-touch-icon`; manifest
+>   gained id/orientation/categories/lang/screenshots and an "Add paperwork"
+>   shortcut the app honours via `?go=capture`; service worker now caches
+>   entries individually (`addAll` is all-or-nothing — one 404 meant no
+>   offline copy at all). **Lighthouse 99/100/100/100**, reproducible via
+>   `tools/run-lighthouse.sh`; fixed a favicon 404, a missing meta
+>   description, and a 39 ms forced reflow in `render()`.
 > - **v9.1 / Phase 4 done:** `user-scalable=no` removed (SC 1.4.4 — an
 >   installed iOS web app honours it where a Safari tab does not); 13 visible
 >   `.label` divs became real `<label for>`, every remaining input got an

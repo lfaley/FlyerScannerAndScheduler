@@ -54,15 +54,10 @@ SPRITE = ('<svg width="0" height="0" style="position:absolute" aria-hidden="true
  + '\n'.join(f'<symbol id="i-{k}" viewBox="0 0 24 24">{v}</symbol>' for k, v in SYMBOLS.items())
  + '\n</defs></svg>')
 
-ICO_CSS = """  /* Inline SVG icons (v8.9, replacing emoji chrome). currentColor means an
-     icon inherits its label's color, so active/dark/disabled states need no
-     icon-specific rules. Sized in em so an icon tracks its text. */
-  .ico{width:1.15em;height:1.15em;flex-shrink:0;vertical-align:-.18em;
-    fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-  .btn .ico,.linkbtn .ico,.sheetbtn .ico{margin-right:.42em}
-  nav button .ic{display:flex;align-items:center;justify-content:center;height:22px}
-  nav button .ic .ico{width:23px;height:23px;stroke-width:1.6}
-  .card.row>.ico{width:26px;height:26px;stroke-width:1.5;color:var(--accent)}"""
+# The .ico styles now live in css/components.css, which is the source of
+# truth (synced by tools/inline.js). They were seeded from here in v8.9;
+# do not re-add a copy, or the two will drift.
+ICO_CSS = None
 
 p = 'index.html'
 src = open(p).read()
@@ -78,9 +73,7 @@ def rep(old, new, n=1):
 rep('<body>\n<header id="header">', '<body>\n' + SPRITE + '\n<header id="header">')
 
 # 2. .ico styles at the end of components.css (source), then inline separately
-css = open('css/components.css').read()
-if ICO_CSS.strip() not in css:
-    open('css/components.css', 'w').write(css.rstrip() + '\n' + ICO_CSS + '\n')
+# (CSS step retired -- css/components.css owns the .ico rules now.)
 
 # 3. inline js/icons.js into the script, next to the other modules
 anchor = "// ---------- State & storage ----------"

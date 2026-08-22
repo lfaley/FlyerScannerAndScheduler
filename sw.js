@@ -1,12 +1,27 @@
 // FlyerSnap service worker — network-first so git pushes show up immediately,
 // with cache fallback so the app still opens offline.
-const CACHE = 'flyersnap-v85';
-// js/ modules MUST be listed. index.html imports them, so a missing entry means
-// the app fails to boot offline -- the import rejects and nothing runs.
-const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
+// BUMP THIS EVERY RELEASE or installed phones keep serving the old app.
+const CACHE = 'flyersnap-v87';
+
+// index.html is fully self-contained -- it fetches nothing to boot (guarded by
+// tests; see the v8.1-v8.5 blank-screen incident). So the shell is only the
+// page itself plus the install-time assets the OS asks for.
+const SHELL = [
+  './', './index.html', './manifest.json',
+  './icon-192.png', './icon-512.png',
+  './icon-maskable-192.png', './icon-maskable-512.png',
+  './apple-touch-icon.png',
+];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  // addAll is all-or-nothing: one 404 and NOTHING is cached, leaving the app
+  // with no offline copy at all. Cache each entry on its own so a missing
+  // optional asset cannot take the whole install down.
+  e.waitUntil(caches.open(CACHE).then((c) =>
+    Promise.all(SHELL.map((url) =>
+      c.add(url).catch((err) => console.warn('[sw] could not cache', url, err))
+    ))
+  ));
   self.skipWaiting();
 });
 
