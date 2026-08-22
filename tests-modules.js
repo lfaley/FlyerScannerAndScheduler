@@ -134,6 +134,12 @@ module.exports = async function runModuleTests(test){
     // in the installed PWA kills the whole script and renders a blank screen.
     // That means two copies exist, and the tests exercise the js/ files. If the
     // copies drift, the tests are validating code that does not ship.
+    //
+    // THE RULE THIS ENFORCES: everything in js/ SHIPS. Code that only tooling
+    // needs (the extraction scorer, for instance) belongs in eval/ or tools/,
+    // never here -- otherwise it gets inlined into every user's download for
+    // no reason. This test failing on a new file usually means the file is in
+    // the wrong folder, not that it needs inlining.
     const drifted = [];
     fs.readdirSync('js').filter(f => f.endsWith('.js')).forEach(f => {
       const body = fs.readFileSync('js/' + f, 'utf8')
@@ -268,6 +274,145 @@ module.exports = async function runModuleTests(test){
   // in BOTH themes. A palette tweak that silently drops below AA fails the
   // build with the exact pair named.
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Extraction scoring. A benchmark you cannot trust is worse than none --
+  // it produces confident numbers that hide regressions. These cases pin down
+  // the scorer's own behaviour, especially the ways it could flatter a model.
+  // -------------------------------------------------------------------------
+  console.log('\nExtraction scoring');
+
+  const sc = await import('./eval/score.js');
+
+  const EV = (o) => Object.assign({ title:'', date:'', time:null, endTime:null,
+    kind:'event', location:null, notes:null }, o);
+
+  test('a perfect answer scores a perfect 1', () => {
+    const want = [EV({title:'Picture Day', date:'2026-09-09'})];
+    const r = sc.scoreCase(want, want.map(e => ({...e})));
+    assert.strictEqual(r.f1, 1);
+    assert.strictEqual(r.invented.length, 0);
+    assert.strictEqual(r.missed.length, 0);
+  });
+
+  test('the right title on the WRONG DAY is not a match', () => {
+    // The single most important property. This app exists to get dates right;
+    // a scorer that gave partial credit here would hide its worst failure.
+    const r = sc.scoreCase(
+      [EV({title:'Picture Day', date:'2026-09-09'})],
+      [EV({title:'Picture Day', date:'2026-09-10'})]);
+    assert.strictEqual(r.matched, 0);
+    assert.strictEqual(r.missed.length, 1);
+    assert.strictEqual(r.invented.length, 1, 'the wrong-day event counts as invented');
+  });
+
+  test('an invented event is counted as invented, not merely as poor precision', () => {
+    const r = sc.scoreCase([], [EV({title:'Book Fair', date:'2026-10-01'})]);
+    assert.strictEqual(r.invented.length, 1);
+    assert.strictEqual(r.precision, 0);
+  });
+
+  test('returning nothing when nothing is there scores perfectly', () => {
+    const r = sc.scoreCase([], []);
+    assert.strictEqual(r.f1, 1);
+    assert.strictEqual(r.precision, 1);
+    assert.strictEqual(r.recall, 1);
+  });
+
+  test('re-worded titles on the right day still match', () => {
+    const r = sc.scoreCase(
+      [EV({title:'Fall Picture Day', date:'2026-09-09'})],
+      [EV({title:'Picture Day', date:'2026-09-09'})]);
+    assert.strictEqual(r.matched, 1);
+  });
+
+  test('two same-day items are not collapsed into one', () => {
+    const want = [EV({title:'Yearbook orders close', date:'2026-08-28', kind:'deadline'}),
+                  EV({title:'Spirit-wear payment due', date:'2026-08-28', kind:'deadline'})];
+    const r = sc.scoreCase(want, want.map(e => ({...e})));
+    assert.strictEqual(r.matched, 2);
+    assert.strictEqual(r.invented.length, 0);
+  });
+
+  test('a wrong time inside a matched event is caught per field', () => {
+    const r = sc.scoreCase(
+      [EV({title:'Open House', date:'2026-09-08', time:'18:00'})],
+      [EV({title:'Open House', date:'2026-09-08', time:'18:30'})]);
+    assert.strictEqual(r.matched, 1, 'still the same event');
+    assert.strictEqual(r.fields.time.rate, 0, 'but its time is wrong');
+    assert.strictEqual(r.fields.title.rate, 1);
+  });
+
+  test('an invented detail scores as wrong, and so does a dropped one', () => {
+    const base = { title:'Practice', date:'2026-09-02' };
+    const invented = sc.scoreCase([EV({...base, location:null})],
+                                  [EV({...base, location:'band room'})]);
+    assert.strictEqual(invented.fields.location.rate, 0, 'inventing a location is wrong');
+    const dropped = sc.scoreCase([EV({...base, location:'band room'})],
+                                 [EV({...base, location:null})]);
+    assert.strictEqual(dropped.fields.location.rate, 0, 'dropping a stated location is wrong');
+  });
+
+  test('kind is exact: a deadline reported as an event is wrong', () => {
+    const r = sc.scoreCase(
+      [EV({title:'Forms due', date:'2026-08-21', kind:'deadline'})],
+      [EV({title:'Forms due', date:'2026-08-21', kind:'event'})]);
+    assert.strictEqual(r.fields.kind.rate, 0);
+  });
+
+  test('notes are judged on substance, not wording', () => {
+    const yes = sc.scoreCase(
+      [EV({title:'Trip', date:'2026-09-03', notes:'Bring a sack lunch and wear closed-toe shoes'})],
+      [EV({title:'Trip', date:'2026-09-03', notes:'Wear closed-toe shoes; bring a sack lunch.'})]);
+    assert.strictEqual(yes.fields.notes.rate, 1, 'same facts, different order, should pass');
+    const no = sc.scoreCase(
+      [EV({title:'Trip', date:'2026-09-03', notes:'Bring a sack lunch and wear closed-toe shoes'})],
+      [EV({title:'Trip', date:'2026-09-03', notes:'It will be a fun day out.'})]);
+    assert.strictEqual(no.fields.notes.rate, 0, 'different substance should fail');
+  });
+
+  test('a title made only of stop-words still matches itself', () => {
+    // normTitle strips words like "the" and "a"; "The Note" normalises to
+    // nothing, and without a fallback it would never match even itself.
+    const r = sc.scoreCase([EV({title:'The Note', date:'2026-09-01'})],
+                           [EV({title:'The Note', date:'2026-09-01'})]);
+    assert.strictEqual(r.matched, 1);
+  });
+
+  test('aggregate sums cases without losing the invented count', () => {
+    const a = sc.scoreCase([EV({title:'Picture Day', date:'2026-09-01'})],
+                           [EV({title:'Picture Day', date:'2026-09-01'})]);
+    const b = sc.scoreCase([], [EV({title:'Ghost Event', date:'2026-09-02'})]);
+    const agg = sc.aggregate([a, b]);
+    assert.strictEqual(agg.cases, 2);
+    assert.strictEqual(agg.matched, 1);
+    assert.strictEqual(agg.inventedTotal, 1);
+    assert.strictEqual(agg.precision, 0.5);
+  });
+
+  test('every corpus case is well-formed and scores itself perfectly', () => {
+    // Guards the labels, not the model: a typo'd expected event would make the
+    // benchmark quietly unachievable.
+    const corpus = JSON.parse(fs.readFileSync('eval/cases.json', 'utf8'));
+    assert.ok(corpus.cases.length >= 5, 'corpus is too small to mean anything');
+    const ids = new Set();
+    corpus.cases.forEach(c => {
+      assert.ok(c.id && !ids.has(c.id), 'every case needs a unique id: ' + c.id);
+      ids.add(c.id);
+      assert.ok(c.source && c.today, c.id + ' needs source and today');
+      assert.ok(Array.isArray(c.expected), c.id + ' needs an expected array');
+      c.expected.forEach(e => {
+        assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(e.date), c.id + ': bad date ' + e.date);
+        assert.ok(['event','deadline'].includes(e.kind), c.id + ': bad kind ' + e.kind);
+        if(e.time) assert.ok(/^\d{2}:\d{2}$/.test(e.time), c.id + ': bad time ' + e.time);
+      });
+      const self = sc.scoreCase(c.expected, c.expected.map(x => ({...x})));
+      assert.strictEqual(self.f1, 1, c.id + ': its own labels do not score perfectly');
+    });
+    assert.ok(corpus.cases.some(c => c.expected.length === 0),
+      'the corpus needs a negative case -- a source with no events at all');
+  });
+
   // -------------------------------------------------------------------------
   // THE PRODUCTION GUARD. This is the one that exists because the app went
   // dark for real users.

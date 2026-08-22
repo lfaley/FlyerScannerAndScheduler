@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.4 · **Tests:** 276 passing (`node tests.js`)
+**Current version:** v9.6 · **Tests:** 289 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -94,7 +94,7 @@ the full text is in git history if it is ever wanted.)
 
 ## Verification tooling
 
-- `node tests.js` — 276 tests: data safety, migrations, inline-handler
+- `node tests.js` — 289 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -106,6 +106,14 @@ the full text is in git history if it is ever wanted.)
   it would have caught the v8.6 button bug. NOT a Safari substitute — Logan
   verifies on the installed PWA before each release is called done.
 - `node tools/inline.js --check` — CSS source/inline drift check (also a test).
+- `node tools/eval-extraction.js` — extraction accuracy against the labelled
+  corpus in `eval/`. Costs API tokens, so it is NOT in `node tests.js`; run it
+  before and after any prompt change and commit `eval/last-run.json`.
+  `--dry` self-checks the scorer for free.
+
+FOLDER RULE: everything in `js/` SHIPS (it gets inlined into index.html).
+Tooling-only code belongs in `eval/` or `tools/`. The drift test enforces
+this — if it fails on a new file, the file is probably in the wrong folder.
 
 ## Deploying
 

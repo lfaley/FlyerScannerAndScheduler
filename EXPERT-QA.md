@@ -1,6 +1,6 @@
 # FlyerSnap — questions an expert panel will ask, and honest answers
 
-**For:** Logan, presenting to industry professionals · **Version:** v9.4 · **Tests:** 276
+**For:** Logan, presenting to industry professionals · **Version:** v9.6 · **Tests:** 289
 **Rule for using this doc:** every answer here is true. Where something is a
 weakness, it is written as a weakness with the reasoning and the mitigation —
 that lands better than a defence, and it cannot be knocked over.
@@ -14,7 +14,7 @@ that lands better than a defence, and it cannot be knocked over.
 | `index.html` (the shipped artifact) | 4,667 lines · ~4,343 of them script |
 | Functions | 277 |
 | Source modules | `js/` 6 files · `css/` 2 files (~595 lines) |
-| Tests | **276**, in ~3,300 lines across 4 files |
+| Tests | **289**, in ~3,400 lines across 4 files |
 | Lighthouse (mobile) | Performance 99 · **Accessibility 100** · Best Practices 100 · SEO 100 |
 | Dependencies at runtime | **zero** |
 | Build step | **none** |
@@ -176,8 +176,36 @@ read it — so a bad batch can be traced to a provider rather than guessed at.
 
 ### "How do you know the extraction is any good? Is there an eval set?"
 
-There is not a labelled accuracy benchmark, and that is the most legitimate
-gap in the project. What exists instead:
+Yes — `eval/cases.json` plus `tools/eval-extraction.js`. It runs each case
+through a provider and scores the result against hand-labelled expected
+events, reporting precision, recall and **per-field** accuracy.
+
+Three design choices worth defending:
+
+- **Wrong date is never a partial match.** An extracted event pairs with an
+  expected one only if the dates are identical. A right-looking title on the
+  wrong day is not a near-miss, it is the exact failure this app exists to
+  prevent, so the scorer refuses to give it credit.
+- **Hallucinations are reported separately**, not folded into precision. A
+  missed flyer gets noticed; an invented event quietly gets trusted. It is the
+  worse failure and gets its own number.
+- **The benchmark reads the shipping prompt** out of `js/prompts.js`, so it
+  can never measure something the app does not actually send.
+
+The corpus covers the failure modes the prompt was written against: deadline
+vs event, schedule grids, notes scattered away from the item, a time range,
+a weekday that disagrees with its date, two items on one day, a vague date
+that must NOT be resolved, and a source containing no events at all. The
+scorer has 12 of its own tests, including a self-check that a perfect answer
+scores perfectly — a benchmark you cannot trust is worse than none.
+
+**The honest weakness, stated plainly:** the seed cases are synthetic —
+written to cover known failure modes, not collected from real paperwork.
+Ten real labelled flyers would be worth more than fifty invented ones, and
+adding them is the obvious next step. The harness is built; the corpus needs
+feeding.
+
+Alongside it:
 
 - A **provider comparison** that runs the same flyer through Anthropic and the
   local model side by side, forcing fallback off during the run so one
@@ -187,10 +215,10 @@ gap in the project. What exists instead:
   actually suppressed* (verified, not assumed), vision works, and extraction
   returns real JSON from a realistic dated sample.
 
-**What I'd build next:** a fixed corpus of real flyers with hand-labelled
-expected events, scored on precision and recall per field, run against both
-providers on every prompt change. Right now prompt changes are evaluated by
-judgement, which does not scale.
+Run it before and after any prompt change: `node tools/eval-extraction.js`
+(or `--local <url> <model>` for the local provider, `--dry` to check the
+scorer without spending anything). Scores land in `eval/last-run.json`, which
+is committed so the history is visible.
 
 ### "Why support a local model at all?"
 
@@ -300,8 +328,9 @@ already earned."
 Have these ready; volunteering a weakness before it's found is stronger than
 defending one afterwards.
 
-1. **No accuracy benchmark for extraction.** The biggest real gap. A labelled
-   corpus scored per field is the fix.
+1. **The benchmark corpus is synthetic.** The harness, scorer and per-field
+   reporting are real and tested; the eight seed cases were written rather
+   than collected. Real labelled flyers are the missing ingredient.
 2. **No sync, no multi-device.** One phone, one copy, manual backups.
 3. **Single-user threat model.** The browser-held API key is fine for a family
    app and wrong for a product.

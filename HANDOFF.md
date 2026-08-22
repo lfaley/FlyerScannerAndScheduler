@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.5 · **Tests:** 276 passing
+**Updated:** August 22, 2026 · **Live version:** v9.6 · **Tests:** 289 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -66,6 +66,7 @@ a per-version progress log.
 | v9.3 | Maskable icons, manifest, Lighthouse 99/100/100/100 |
 | v9.4 | Swipe left/right between the five tabs |
 | v9.5 | EXPERT-QA.md — presentation prep; UI plan complete |
+| v9.6 | Extraction accuracy benchmark (corpus + scorer + runner) |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -117,6 +118,21 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.6 — extraction benchmark.** `eval/cases.json` (labelled corpus),
+`eval/score.js` (pure scorer, 12 tests) and `tools/eval-extraction.js` (runner
+for either provider). Scoring refuses to credit a right title on the wrong
+date, and reports hallucinations separately from precision — a missed flyer
+gets noticed, an invented one gets trusted. The runner reads the SHIPPING
+prompt from `js/prompts.js` so it cannot measure a stale copy. Not part of
+`node tests.js`: it costs API tokens, so run it deliberately before and after
+a prompt change. `--dry` self-checks the scorer for free.
+
+Two things the work surfaced: a title made only of stop-words ("The Note")
+normalised to nothing and could never match itself — fixed with a raw-string
+fallback; and the drift test correctly rejected `js/score.js`, because
+**everything in `js/` ships** and tooling belongs in `eval/` or `tools/`.
+That rule is now written into the test.
 
 **v9.5 — presentation prep.** `EXPERT-QA.md` written: anticipated panel
 questions with fact-checked answers, every figure taken from the repo rather
@@ -184,7 +200,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 276 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 289 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
@@ -221,7 +237,9 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
   CLAUDE.md. No urgency; the dangerous logic (`migrate`) is already isolated.
 - **Logan's iOS version** — unconfirmed. If it is 26.0, updating may remove
   the bottom-gap symptom the `nav::after` cover works around.
-- **An extraction accuracy benchmark** — a labelled corpus of real flyers
-  scored per field, run against both providers on every prompt change. The
-  biggest genuine gap; prompt changes are currently judged by eye.
+- **Feed the benchmark corpus with REAL flyers.** `eval/cases.json` ships
+  eight synthetic seed cases covering known failure modes. The harness is
+  done; what it needs is real paperwork, labelled by hand. Ten real cases
+  beat fifty invented ones. Strip surnames, addresses and phone numbers —
+  the file is in a public repo.
 - **Multi-device sync** — today it is one phone, one copy, manual backups.
