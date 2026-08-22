@@ -151,6 +151,61 @@ module.exports = async function runModuleTests(test){
       'expected many inline handlers, found ' + handlerNames.size);
   });
 
+  // -------------------------------------------------------------------------
+  // Icon integrity. ico('name') renders <use href="#i-name">. A name with no
+  // matching <symbol> renders NOTHING -- no error, no fallback, just a blank
+  // gap where a control's icon should be. Same silent-failure shape as the
+  // inline-handler hazard above, so it gets the same treatment.
+  // -------------------------------------------------------------------------
+  console.log('\nIcon sprite integrity');
+
+  // viewBox in the match keeps this to real sprite entries -- the helper's own
+  // doc comment names a placeholder symbol id by way of explanation.
+  const spriteIds = new Set(
+    [...html.matchAll(/<symbol id="i-([\w-]+)" viewBox=/g)].map(m => m[1]));
+  // Strict: the literal first argument, plus the icon: field that sheet
+  // buttons carry as data. Every one of these MUST resolve to a symbol.
+  const referenced = new Set([
+    ...[...script.matchAll(/\bico\(\s*'([\w-]+)'/g)].map(m => m[1]),
+    ...[...script.matchAll(/\bicon\s*:\s*'([\w-]+)'/g)].map(m => m[1]),
+  ]);
+  // Loose: any quoted name near an ico( call. This also catches a name chosen
+  // by an expression -- the lists screen picks cart-or-note at render time.
+  const mentioned = new Set(referenced);
+  for(const m of script.matchAll(/\bico\(/g)){
+    for(const q of script.slice(m.index, m.index + 140).matchAll(/'([\w-]+)'/g))
+      mentioned.add(q[1]);
+  }
+
+  test('every icon referenced exists in the sprite', () => {
+    const missing = [...referenced].filter(n => !spriteIds.has(n));
+    assert.deepStrictEqual(missing, [],
+      'ico() names with no <symbol> (these render as blank gaps): ' + missing.join(', '));
+  });
+
+  test('the sprite carries no unused symbols', () => {
+    const dead = [...spriteIds].filter(n => !mentioned.has(n));
+    assert.deepStrictEqual(dead, [], 'symbols nothing references: ' + dead.join(', '));
+  });
+
+  test('no emoji left in UI chrome (content emoji are allowed)', () => {
+    // Controls must not wear emoji. Reward stars, the celebration banner and
+    // the chore-title placeholder example are CONTENT and stay -- they are
+    // listed here explicitly so the exception is a decision, not a leak.
+    const ALLOWED = new Set(['⭐', '🎉', '🦷']);
+    const chrome = [];
+    const re = /(?:class="(?:btn|linkbtn|sheetbtn|chip)[^"]*"[^>]*>|label:\s*'|ic:\s*')([^`'<]{0,40})/g;
+    let m;
+    while((m = re.exec(script)) !== null){
+      for(const ch of [...m[1]]){
+        if(ch.codePointAt(0) > 0x2100 && !ALLOWED.has(ch) && !'‑–—…→·✓✗›‹'.includes(ch))
+          chrome.push(ch + ' in: ' + m[1].trim().slice(0, 30));
+      }
+    }
+    assert.deepStrictEqual(chrome, [],
+      'emoji still used as UI chrome -- use ico() instead: ' + chrome.join(' | '));
+  });
+
   test('the inlined <style> matches css/ exactly', () => {
     // Same contract as the js/ modules: css/tokens.css + css/components.css
     // are the source of truth; index.html carries an inlined copy for

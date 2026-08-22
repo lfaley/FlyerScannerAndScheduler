@@ -216,9 +216,64 @@
   .sheetbtn.danger{background:var(--red-lt);color:var(--red-accent)}
   .sheetbtn.cancel{background:none;color:var(--muted);font-weight:600}
   h3{margin:6px 0 10px;font-size:16px}
+  /* Inline SVG icons (v8.9, replacing emoji chrome). currentColor means an
+     icon inherits its label's color, so active/dark/disabled states need no
+     icon-specific rules. Sized in em so an icon tracks its text. */
+  .ico{width:1.15em;height:1.15em;flex-shrink:0;vertical-align:-.18em;margin-right:.4em;
+    fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  /* An icon standing alone IS the control (delete, back) -- no label to space from. */
+  .ico:only-child{margin-right:0}
+  nav button .ic{display:flex;align-items:center;justify-content:center;height:22px}
+  nav button .ic .ico{width:23px;height:23px;stroke-width:1.6}
+  .card.row>.ico{width:26px;height:26px;stroke-width:1.5;color:var(--accent)}
+  /* Leading icon on a card row -- the old 28px emoji slot. Accent-colored so
+     the row reads as an action, not decoration. */
+  .rowicon{width:26px;height:26px;stroke-width:1.5;color:var(--accent);margin-right:0}
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M8 3v4M16 3v4M3 10h18"/></symbol>
+<symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.4l2.9 2.9L16.2 9"/></symbol>
+<symbol id="i-cart" viewBox="0 0 24 24"><circle cx="9.5" cy="19.5" r="1.7"/><circle cx="17.5" cy="19.5" r="1.7"/><path d="M2.5 4h2.4l2.7 11.5h10.6l2.3-8.2H6.2"/></symbol>
+<symbol id="i-utensils" viewBox="0 0 24 24"><path d="M6.5 3v5.5a2.6 2.6 0 0 0 5.2 0V3M9.1 9v12M18.5 3c-1.6 2-2.4 4.2-2.4 6.6 0 1.7.8 2.8 2.4 3.2V21"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.3"/><path d="M21.1 10.1L21.1 13.9L18.5 14.4L18.3 14.9L19.8 17.1L17.1 19.8L14.9 18.3L14.4 18.5L13.9 21.1L10.1 21.1L9.6 18.5L9.1 18.3L6.9 19.8L4.2 17.1L5.7 14.9L5.5 14.4L2.9 13.9L2.9 10.1L5.5 9.6L5.7 9.1L4.2 6.9L6.9 4.2L9.1 5.7L9.6 5.5L10.1 2.9L13.9 2.9L14.4 5.5L14.9 5.7L17.1 4.2L19.8 6.9L18.3 9.1L18.5 9.6Z"/></symbol>
+<symbol id="i-camera" viewBox="0 0 24 24"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2.8l1.4-2.2h6.6L16.7 7h2.8A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.6"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.2"/><circle cx="8.6" cy="10" r="1.7"/><path d="M3.4 17.2l5-4.6 4 3.4 3.2-2.6 5 4.2"/></symbol>
+<symbol id="i-clipboard" viewBox="0 0 24 24"><path d="M9 4.2H7.4A1.9 1.9 0 0 0 5.5 6.1v13A1.9 1.9 0 0 0 7.4 21h9.2a1.9 1.9 0 0 0 1.9-1.9v-13A1.9 1.9 0 0 0 16.6 4.2H15"/><rect x="9" y="2.6" width="6" height="3.4" rx="1.1"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7.6A1.9 1.9 0 0 0 5.7 4.9v14.2A1.9 1.9 0 0 0 7.6 21h8.8a1.9 1.9 0 0 0 1.9-1.9V7.2z"/><path d="M14 3v4.2h4.3M9 12.5h6M9 16h4.5"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="M10.2 13.8a3.6 3.6 0 0 0 5.2 0l3-3a3.7 3.7 0 0 0-5.2-5.2l-1.4 1.4"/><path d="M13.8 10.2a3.6 3.6 0 0 0-5.2 0l-3 3a3.7 3.7 0 0 0 5.2 5.2l1.4-1.4"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect x="2.8" y="5" width="18.4" height="14" rx="2.2"/><path d="M3.4 6.6L12 13l8.6-6.4"/></symbol>
+<symbol id="i-calendar-plus" viewBox="0 0 24 24"><path d="M21 11.5V7.5A2.5 2.5 0 0 0 18.5 5h-13A2.5 2.5 0 0 0 3 7.5v11A2.5 2.5 0 0 0 5.5 21h6"/><path d="M8 3v4M16 3v4M3 10h18M17.5 14.5v6M14.5 17.5h6"/></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15.5V3.8M8.2 7.4L12 3.6l3.8 3.8"/><path d="M5.5 13v6.2A1.8 1.8 0 0 0 7.3 21h9.4a1.8 1.8 0 0 0 1.8-1.8V13"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24"><path d="M16.5 3.9a2.1 2.1 0 0 1 3 3L9.2 17.2l-4 1 1-4z"/><path d="M14.8 5.6l3 3"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6.5h16M9.5 6.5V4.4A1.4 1.4 0 0 1 10.9 3h2.2a1.4 1.4 0 0 1 1.4 1.4v2.1"/><path d="M6.2 6.5l.9 13.1A1.5 1.5 0 0 0 8.6 21h6.8a1.5 1.5 0 0 0 1.5-1.4l.9-13.1M10.2 10.5v6M13.8 10.5v6"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="M15.7 15.7L21 21"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 9.2a6 6 0 1 0-12 0c0 5-2.2 6.5-2.2 6.5h16.4S18 14.2 18 9.2"/><path d="M13.7 19.4a2 2 0 0 1-3.4 0"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v11.4M7.8 10.9L12 15.1l4.2-4.2"/><path d="M4.5 16.5v2.8A1.7 1.7 0 0 0 6.2 21h11.6a1.7 1.7 0 0 0 1.7-1.7v-2.8"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.1V3.7M7.8 7.9L12 3.7l4.2 4.2"/><path d="M4.5 16.5v2.8A1.7 1.7 0 0 0 6.2 21h11.6a1.7 1.7 0 0 0 1.7-1.7v-2.8"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.3 12a8.3 8.3 0 1 1-2.6-6"/><path d="M20.6 4.2v5.2h-5.2"/></symbol>
+<symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3.2l1.9 4.9 4.9 1.9-4.9 1.9L12 16.8l-1.9-4.9-4.9-1.9 4.9-1.9z"/><path d="M18.4 15.2l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></symbol>
+<symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.5 3v6.2L4.6 17.9A2 2 0 0 0 6.3 21h11.4a2 2 0 0 0 1.7-3.1L14.5 9.2V3"/><path d="M8.2 3h7.6M7.5 14.5h9"/></symbol>
+<symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 4v17M6.5 21h11M4.5 6.8l15-1.6"/><path d="M7.2 6.5L4 13.2a3.4 3.4 0 0 0 6.5 0zM16.8 5.5L13.6 12.2a3.4 3.4 0 0 0 6.5 0z"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.6 4.1L2.9 17.4A1.6 1.6 0 0 0 4.3 20h15.4a1.6 1.6 0 0 0 1.4-2.6L13.4 4.1a1.6 1.6 0 0 0-2.8 0z"/><path d="M12 9.5v4.2M12 17.2h.01"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.6 19H7a4.6 4.6 0 0 1-.5-9.2 6.3 6.3 0 0 1 12.1 1.6A4.1 4.1 0 0 1 17.6 19z"/></symbol>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 10.4L12 3.4l8.5 7v9A1.6 1.6 0 0 1 18.9 21H5.1a1.6 1.6 0 0 1-1.6-1.6z"/><path d="M9.4 21v-7.2h5.2V21"/></symbol>
+<symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.4 12.7l-7.7 7.7a1.8 1.8 0 0 1-2.5 0l-6.6-6.6a1.8 1.8 0 0 1-.5-1.3V4.9A1.6 1.6 0 0 1 4.7 3.3h7.6a1.8 1.8 0 0 1 1.3.5l6.8 6.8a1.7 1.7 0 0 1 0 2.1z"/><circle cx="8.2" cy="8.2" r="1.5"/></symbol>
+<symbol id="i-check-square" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M8 12.2l2.9 2.9L16.4 9.4"/></symbol>
+<symbol id="i-message" viewBox="0 0 24 24"><path d="M20.5 13.4a2.6 2.6 0 0 1-2.6 2.6H8.4L4 20V6.2a2.6 2.6 0 0 1 2.6-2.6h11.3a2.6 2.6 0 0 1 2.6 2.6z"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3.6 9.4A8.7 8.7 0 1 1 3.4 13"/><path d="M3.3 4.3v5.2h5.2M12 7.6V12l3.2 1.9"/></symbol>
+<symbol id="i-note" viewBox="0 0 24 24"><rect x="4" y="3.4" width="16" height="17.2" rx="2.4"/><path d="M8.2 8.6h7.6M8.2 12.4h7.6M8.2 16.2h4.6"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.6A1.6 1.6 0 0 1 5.6 3H17a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H5.6A1.6 1.6 0 0 1 4 15.4z"/><path d="M19 19v2H6.2A2.2 2.2 0 0 1 4 18.8"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20.2l1.2-4.2L16.6 4.6a2.3 2.3 0 0 1 3.2 3.2L8.2 19z"/><path d="M4 20.2l4.2-1.2M14.6 6.6l3.2 3.2"/></symbol>
+<symbol id="i-pan" viewBox="0 0 24 24"><path d="M3.2 11.6h12.4v2.2a6.2 6.2 0 0 1-12.4 0z"/><path d="M15.6 12.6h2.6a2.6 2.6 0 0 0 0-5.2h-.9"/><path d="M6.4 8.6c0-1.4 1.6-1.4 1.6-2.8M10 8.6c0-1.4 1.6-1.4 1.6-2.8"/></symbol>
+<symbol id="i-gift" viewBox="0 0 24 24"><path d="M3.6 11.4h16.8v8.2a1.4 1.4 0 0 1-1.4 1.4H5a1.4 1.4 0 0 1-1.4-1.4z"/><rect x="2.6" y="7.6" width="18.8" height="3.8" rx="1.3"/><path d="M12 7.6V21"/><path d="M12 7.6H7.9a2.3 2.3 0 1 1 0-4.6C10.6 3 12 7.6 12 7.6zM12 7.6h4.1a2.3 2.3 0 1 0 0-4.6C13.4 3 12 7.6 12 7.6z"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2.9l8.6 4.4L12 11.7 3.4 7.3z"/><path d="M3.4 12.2L12 16.6l8.6-4.4M3.4 16.6L12 21l8.6-4.4"/></symbol>
+<symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 4.5L7.5 12l7.5 7.5"/></symbol>
+<symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 4.5L16.5 12 9 19.5"/></symbol>
+</defs></svg>
 <header id="header">FlyerSnap</header>
 <main id="main"></main>
 <nav id="nav"></nav>
@@ -507,6 +562,40 @@ function blank(){ return { events:[], kids:[], chores:[], completions:[], reward
 // Data: localStorage JSON. Reminders: .ics calendar files w/ alarms.
 // Extraction: Claude API directly from the browser.
 // ============================================================
+
+/**
+ * Icon helper.
+ *
+ * Emoji were used as UI chrome until v8.9. They render differently on every
+ * platform, cannot inherit color or state, and read as unfinished to anyone
+ * who evaluates interfaces for a living. The replacement is a stroke-based
+ * inline SVG sprite (<symbol> defs in index.html's body, referenced by <use>),
+ * which costs no network request -- important, since the app ships as one
+ * self-contained file and must work offline.
+ *
+ * Emoji that carry MEANING rather than chrome stay: the reward stars, the
+ * celebration, and the example inside the chore-title placeholder. Those are
+ * content, not controls.
+ *
+ * Accessibility: icons are decorative here -- every one sits beside a real
+ * text label -- so they are aria-hidden and the label does the announcing.
+ * The one exception is an icon-only control, which must pass a `title`.
+ */
+
+// Names must match a <symbol id="i-NAME"> in index.html's sprite. A test
+// ("every icon referenced exists in the sprite") fails the build otherwise,
+// because a typo would otherwise render a silent blank box.
+function ico(name, opts){
+  const o = opts || {};
+  const cls = 'ico' + (o.cls ? ' ' + o.cls : '');
+  const style = o.size ? ` style="width:${o.size}px;height:${o.size}px"` : '';
+  // An icon-only button needs an accessible name; a labelled one must stay
+  // silent so screen readers do not announce the same thing twice.
+  const a11y = o.title
+    ? ` role="img" aria-label="${String(o.title).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}"`
+    : ' aria-hidden="true"';
+  return `<svg class="${cls}"${style}${a11y}><use href="#i-${name}"/></svg>`;
+}
 
 // ---------- State & storage ----------
 const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA'];
@@ -1348,7 +1437,7 @@ function renderExportQueue(m){
     </div>
   </div>
   <div style="text-align:center;margin-top:10px">
-    <button class="linkbtn" onclick="goToEvents()">← Back to events (keeps your place)</button>
+    <button class="linkbtn" onclick="goToEvents()">${ico('chevron-left')}Back to events (keeps your place)</button>
   </div>`;
 }
 
@@ -1379,11 +1468,11 @@ function exportQueueBanner(){
 
 // ---------- Navigation ----------
 const TABS = [
-  {id:'events', label:'Events', ic:'📅', title:'FlyerSnap'},
-  {id:'chores', label:'Chores', ic:'✅', title:'Chores & Routines'},
-  {id:'lists',  label:'Lists',  ic:'🛒', title:'Lists'},
-  {id:'meals',  label:'Meals',  ic:'🍽️', title:'Meal Plan'},
-  {id:'settings', label:'Settings', ic:'⚙️', title:'Settings'},
+  {id:'events', label:'Events', ic:ico('calendar'), title:'FlyerSnap'},
+  {id:'chores', label:'Chores', ic:ico('check-circle'), title:'Chores & Routines'},
+  {id:'lists',  label:'Lists',  ic:ico('cart'), title:'Lists'},
+  {id:'meals',  label:'Meals',  ic:ico('utensils'), title:'Meal Plan'},
+  {id:'settings', label:'Settings', ic:ico('gear'), title:'Settings'},
 ];
 let view = {tab:'events', sub:null, data:null};
 let lastViewKey = '';
@@ -1399,7 +1488,7 @@ function renderNav(){
 }
 function setHeader(title, showBack){
   document.getElementById('header').innerHTML =
-    (showBack?`<button class="back" onclick="back()">‹</button>`:'') + esc(title);
+    (showBack?`<button class="back" onclick="back()">${ico('chevron-left', {title:'Back'})}</button>`:'') + esc(title);
 }
 
 // ---------------------------------------------------------------------------
@@ -1474,7 +1563,7 @@ function renderRecovery(m){
 
     <div class="sect">Rescue the raw data</div>
     <div class="help">Download exactly what's stored, unreadable as it is, so it can be repaired by hand.</div>
-    <button class="btn alt" onclick="downloadQuarantine()">⬇️ Download rescue file</button>
+    <button class="btn alt" onclick="downloadQuarantine()">${ico('download')}Download rescue file</button>
 
     <div class="sect">Last resort</div>
     <div class="help">Only after you've downloaded the rescue file.</div>
@@ -1501,7 +1590,15 @@ function showSheet(title, subtitle, buttons){
   for(const b of buttons){
     const btn = document.createElement('button');
     btn.className = 'sheetbtn' + (b.style ? ' ' + b.style : '');
-    btn.textContent = b.label;
+    // Label goes in as TEXT, never markup -- it can carry a person's name or
+    // an event title. The optional icon is the only markup allowed here, and
+    // it comes from our own sprite rather than from data.
+    if(b.icon){
+      btn.innerHTML = ico(b.icon);
+      btn.appendChild(document.createTextNode(b.label));
+    } else {
+      btn.textContent = b.label;
+    }
     btn.onclick = () => { closeSheet(); if(b.fn) b.fn(); };
     sh.appendChild(btn);
   }
@@ -1570,7 +1667,7 @@ function backupNudge(){
   const snoozed = snooze && daysUntil(snooze) > -7;
   if(!stale || snoozed) return '';
   return `<div class="card" style="background:var(--green-lt)">
-    <div class="title" style="font-size:14px">💾 Time for a backup</div>
+    <div class="title" style="font-size:14px">${ico('download')}Time for a backup</div>
     <div class="meta">Your data lives only on this phone, and iOS can clear it without warning. ${last?'Last backup: '+friendly(last)+'.':'No backup yet.'}</div>
     <div class="formrow" style="margin:10px 0 0">
       <button class="btn sm" onclick="exportBackup()">Export now</button>
@@ -1583,11 +1680,11 @@ function fromLine(e){
   const bits = [];
   if(e.from) bits.push(esc(e.from));
   if(e.source) bits.push(esc(e.source));
-  return `<div class="meta" style="font-size:11px;opacity:.75;margin-top:2px">✉️ ${bits.join(' · ')}</div>`;
+  return `<div class="meta" style="font-size:11px;opacity:.75;margin-top:2px">${ico('mail')}${bits.join(' · ')}</div>`;
 }
 function calFlag(e){
   return e.exported
-    ? `<span class="calflag">📆 In calendar</span>`
+    ? `<span class="calflag">${ico('calendar-plus')}In calendar</span>`
     : '';
 }
 
@@ -1672,7 +1769,7 @@ function renderEvents(m){
     html += `<div class="filterbar">
       <span class="chip ${eventFilter===null?'on':''}" onclick="setEventFilter(null)">All</span>` +
       (unreadCount() ? `<span class="chip ${eventFilter===UNREAD_FILTER?'on':''}" style="${eventFilter===UNREAD_FILTER?'':'border-color:var(--amber-accent);color:var(--amber-accent)'}"
-        onclick="setEventFilter(UNREAD_FILTER)">🔔 New ${unreadCount()}</span>` : '') +
+        onclick="setEventFilter(UNREAD_FILTER)">${ico('bell')}${unreadCount()} unseen</span>` : '') +
       people.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
         onclick="setEventFilter('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
   }
@@ -1718,8 +1815,8 @@ function renderEvents(m){
     // Always available. These used to be hidden while an export queue was
     // running, which made the button vanish if a queue was left unfinished.
     html += `<div style="display:flex;justify-content:flex-end">
-      <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">↗ Share</button>
-      <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">📆 Add to Calendar</button></div>`;
+      <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">${ico('share')}Share</button>
+      <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">${ico('calendar-plus')}Add to Calendar</button></div>`;
     html += groupedUpcoming(evts).map(g => `
       <div class="bucket">${g.label}<span class="bucket-n">${g.items.length}</span></div>
       ${g.items.map(e=>evtCard(e, false)).join('')}`).join('');
@@ -1727,7 +1824,7 @@ function renderEvents(m){
   if(selectMode){
     html += `<div class="card" style="position:sticky;bottom:76px;z-index:20">
       <button class="btn ${selectedEvents.size?'':'alt'}" onclick="bulkTagSheet()">
-        ${selectedEvents.size ? `⚙️ ${selectedEvents.size} selected — choose action` : 'Tap events to select them'}
+        ${selectedEvents.size ? `${ico('gear')}${selectedEvents.size} selected — choose action` : 'Tap events to select them'}
       </button></div><div style="height:70px"></div>`;
   }
 
@@ -1744,7 +1841,7 @@ function renderEvents(m){
       }
     }
   }
-  html += `<button class="btn fab" onclick="captureAppend=false;sub('capture')">＋ Add paperwork</button>
+  html += `<button class="btn fab" onclick="captureAppend=false;sub('capture')">${ico('plus')}Add paperwork</button>
     <div style="height:70px"></div>`;
   m.innerHTML = html;
 }
@@ -2321,8 +2418,8 @@ function renderShareEvents(m){
       </div></div>`;
   }).join('');
   html += `<div class="card" style="position:sticky;bottom:76px">
-    <button class="btn" style="margin-bottom:8px" onclick="shareAsCalendar()">📆 Send ${n} as calendar file</button>
-    <button class="btn alt" onclick="shareAsText()">💬 Send ${n} as a text list</button>
+    <button class="btn" style="margin-bottom:8px" onclick="shareAsCalendar()">${ico('calendar-plus')}Send ${n} as calendar file</button>
+    <button class="btn alt" onclick="shareAsText()">${ico('message')}Send ${n} as a text list</button>
     <div class="help" style="margin:8px 0 0;text-align:center">Calendar file adds them to their calendar. Text list works for anyone.</div>
   </div><div style="height:70px"></div>`;
   m.innerHTML = html;
@@ -2335,7 +2432,7 @@ function emailBanner(){
   return `<div class="card" style="background:var(--green);color:var(--on-accent)">
     <div class="row">
       <div class="grow">
-        <div style="font-weight:800">📧 ${n} new ${n===1?'event':'events'} from your email</div>
+        <div style="font-weight:800">${ico('mail')}${n} new ${n===1?'event':'events'} from your email</div>
         <div style="font-size:12px;opacity:.85;margin-top:2px">Pulled in automatically — tap to review.</div>
       </div>
       <button class="btn sm" style="background:var(--card);color:var(--accent)" onclick="openEmailReviewNow()">Review</button>
@@ -2405,12 +2502,12 @@ function calendarOptions(){
   const fresh = S.events.filter(e=>!e.deleted && e.date>=todayISO() && !e.exported).length;
   const queued = (S.settings.exportQueue || []).length;
   const opts = [];
-  if(queued) opts.push({label:'▶️ Resume adding (' + queued + ' left)', fn:()=>openExportQueue()});
-  if(fresh) opts.push({label:'✨ Only new (' + fresh + ' not yet added)', fn:()=>addAllAtOnce(true)});
+  if(queued) opts.push({label:'Resume adding (' + queued + ' left)', icon:'calendar-plus', fn:()=>openExportQueue()});
+  if(fresh) opts.push({label:'Only new (' + fresh + ' not yet added)', icon:'sparkles', fn:()=>addAllAtOnce(true)});
   opts.push({label: openLabel, fn:()=>addAllAtOnce()});
-  opts.push({label:'☑️ Choose which to add', fn:()=>openPickExport()});
-  opts.push({label:'1️⃣ One at a time (all)', fn:()=>startExportQueue(true)});
-  opts.push({label:'✉️ Email them to myself', fn:()=>emailAllToSelf()});
+  opts.push({label:'Choose which to add', icon:'check-square', fn:()=>openPickExport()});
+  opts.push({label:'One at a time (all)', icon:'layers', fn:()=>startExportQueue(true)});
+  opts.push({label:'Email them to myself', icon:'mail', fn:()=>emailAllToSelf()});
   showSheet('Add to Calendar',
     n + ' upcoming' + (fresh ? ' · ' + fresh + ' not yet added' : ' · all added'), opts);
 }
@@ -2570,9 +2667,9 @@ function bulkTagSheet(){
   const n = selectedEvents.size;
   if(!n){ toast('Select some events first'); return; }
   const people = allPeople();
-  const buttons = people.map(p => ({ label: '🏷️ Tag as ' + p.name, fn: () => bulkTag(p.id) }));
+  const buttons = people.map(p => ({ label: 'Tag as ' + p.name, icon:'tag', fn: () => bulkTag(p.id) }));
   if(people.length) buttons.push({ label: 'Clear everyone from these', fn: () => bulkTag(null) });
-  buttons.push({ label: '🗑️ Delete ' + n + ' event' + (n===1?'':'s'), fn: () => bulkDelete() });
+  buttons.push({ label: 'Delete ' + n + ' event' + (n===1?'':'s'), icon:'trash', fn: () => bulkDelete() });
   showSheet(n + ' event' + (n===1?'':'s') + ' selected',
     'Tagging replaces existing tags. Deleting can be undone from Settings.', buttons);
 }
@@ -2613,8 +2710,8 @@ function eventActions(id){
   if(!e) return;
   showSheet(e.title, friendly(e.date) + (e.time?' · '+fmt12(e.time):''), [
     {label: e.exported ? '📆 Calendar file again' : '📆 Add to calendar (with alerts)', fn:()=>downloadICS(e)},
-    {label:'✏️ Edit event', fn:()=>openEventEdit(e.id)},
-    {label:'🗑 Remove event', style:'danger', fn:()=>{
+    {label:'Edit event', icon:'edit', fn:()=>openEventEdit(e.id)},
+    {label:'Remove event', icon:'trash', style:'danger', fn:()=>{
       if(confirm(`Remove "${e.title}"?`)){ e.deleted=true; save(); render(); }
     }},
   ]);
@@ -2632,22 +2729,22 @@ function renderCapture(m){
       value="${esc(scanContext)}" oninput="setScanContext(this.value)">
     <div class="help">If the page only shows dates, tell it what they are for. It gets noted on every event found.</div>
     <div class="card row" onclick="document.getElementById('fCam').click()">
-      <span style="font-size:28px">📷</span>
+      ${ico('camera', {cls:'rowicon'})}
       <div class="grow"><div class="title">Take a photo</div><div class="meta">Flyer in hand — snap it now</div></div></div>
     <div class="card row" onclick="document.getElementById('fLib').click()">
-      <span style="font-size:28px">🖼️</span>
+      ${ico('image', {cls:'rowicon'})}
       <div class="grow"><div class="title">Choose from Photos</div><div class="meta">Pick one or several pages at once</div></div></div>
     <div class="card row" onclick="pasteFromClipboard()">
-      <span style="font-size:28px">📋</span>
+      ${ico('clipboard', {cls:'rowicon'})}
       <div class="grow"><div class="title">Paste an image</div><div class="meta">Uses whatever image is on your clipboard</div></div></div>
     <div class="card row" onclick="document.getElementById('fPdf').click()">
-      <span style="font-size:28px">📄</span>
+      ${ico('file', {cls:'rowicon'})}
       <div class="grow"><div class="title">Import a PDF</div><div class="meta">Saved from an email attachment</div></div></div>
     <div class="card row" onclick="openLinkSheet()">
-      <span style="font-size:28px">🔗</span>
+      ${ico('link', {cls:'rowicon'})}
       <div class="grow"><div class="title">Paste a link</div><div class="meta">Flyer URL from ParentSquare, an email, or a school site</div></div></div>
     ${watcherConfigured() ? `<div class="card row" onclick="checkEmail(false)">
-      <span style="font-size:28px">📧</span>
+      ${ico('mail', {cls:'rowicon'})}
       <div class="grow"><div class="title">Check my email now</div><div class="meta">Looks for flyers from your watched senders</div></div></div>` : ''}
     <div class="help">Tip: on ParentSquare links, long-press the link in your email and pick "Open in Safari" — otherwise iOS opens the app instead of the flyer.</div>`;
 }
@@ -2843,18 +2940,18 @@ function renderReview(m){
           <div class="row"><div class="title grow">${esc(e.title)}</div>
             ${e.dup?`<span class="kindtag" style="background:var(--red-lt);color:var(--red-accent)">TRACKED</span>`:''}
             <span class="kindtag ${e.kind}">${e.kind==='deadline'?'DEADLINE':'EVENT'}</span>
-            <button class="linkbtn" style="padding:2px 4px" onclick="event.stopPropagation();openPendingEdit(${i})">✏️</button></div>
+            <button class="linkbtn" style="padding:2px 4px" onclick="event.stopPropagation();openPendingEdit(${i})">${ico('edit', {title:'Edit'})}</button></div>
           <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
           ${e.notes?`<div class="notes">${esc(e.notes)}</div>`:''}
         </div>
       </div>
-      ${e.from ? `<div class="meta" style="font-size:11px;opacity:.75">✉️ ${esc(e.from)}</div>` : ''}
+      ${e.from ? `<div class="meta" style="font-size:11px;opacity:.75">${ico('mail')}${esc(e.from)}</div>` : ''}
       ${e.selected && allPeople().length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--divider)">
         <span class="label" style="margin-right:6px">Who:</span>` +
         allPeople().map(k=>`<span class="chip" style="${(e.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
           onclick="setReviewKid(${i},'${k.id}')">${esc(k.name)}</span>`).join('') + `</div>` : ''}
     </div>`).join('');
-  html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">＋ Scan another page</button></div>
+  html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">${ico('plus')}Scan another page</button></div>
     <button class="btn fab" onclick="saveReview()">Track ${n} item${n===1?'':'s'}</button>
     ${pendingMsgIds.length ? `<div style="text-align:center;margin-top:8px">
       <button class="linkbtn" onclick="dismissPendingEmail()">Skip all from this email</button></div>` : ''}
@@ -2943,7 +3040,7 @@ function openPendingEdit(i){
 }
 function renderEventEdit(m){
   document.getElementById('header').innerHTML =
-    `<button class="back" onclick="cancelEventEdit()">‹</button>Edit Event`;
+    `<button class="back" onclick="cancelEventEdit()">${ico('chevron-left', {title:'Back'})}</button>Edit Event`;
   const f = eventForm;
   const kids = allPeople();
   m.innerHTML = `
@@ -3059,7 +3156,7 @@ function renderChores(m){
     html += `<div class="filterbar">` + kids.map(k=>
       `<span class="balance" style="border-color:${k.color}">
         <span style="color:${k.color}">${esc(k.name)}</span> ⭐ ${bal[k.id]||0}</span>`).join('') +
-      `<button class="btn sm" style="border-radius:16px" onclick="sub('rewards')">🎁 Rewards</button></div>`;
+      `<button class="btn sm" style="border-radius:16px" onclick="sub('rewards')">${ico('gift')}Rewards</button></div>`;
   }
   const allDone = chores.length>0 && chores.every(c=>completionFor(c.id,t));
   if(allDone) html += `<div class="celebrate">🎉 All chores done today!</div>`;
@@ -3078,14 +3175,14 @@ function renderChores(m){
         <div class="grow"><div class="title ${done?'strike':''}">${esc(c.title)}</div>
           <div class="meta">${kid?esc(kid.name):'Anyone'} · ${when}</div></div>
         ${c.stars>0?`<span style="font-size:12px">${'⭐'.repeat(Math.min(c.stars,5))}</span>`:''}
-        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delChoreById('${c.id}')">✕</button>
+        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delChoreById('${c.id}')">${ico('x', {title:'Delete chore'})}</button>
       </div>`;
     }).join('');
   }
   if(choreForm){
     html += renderChoreForm();
   } else {
-    html += `<button class="btn fab" onclick="newChoreForm()">＋ Add chore</button>`;
+    html += `<button class="btn fab" onclick="newChoreForm()">${ico('plus')}Add chore</button>`;
   }
   html += `<div style="height:70px"></div>`;
   m.innerHTML = html;
@@ -3138,7 +3235,7 @@ function toggleChore(id){
   // "Anyone" chores with star value: ask who did it so the stars land somewhere
   if(!c.kidId && c.stars>0 && kids.length){
     showSheet(c.title, 'Who did it?',
-      kids.map(k=>({label:'⭐ '+k.name, fn:()=>completeChore(c, k.id)}))
+      kids.map(k=>({label:k.name, icon:'check-circle', fn:()=>completeChore(c, k.id)}))
         .concat([{label:'Just check it off (no stars)', fn:()=>completeChore(c, null)}]));
     return;
   }
@@ -3167,17 +3264,17 @@ function renderRewards(m){
   let html = `<div class="filterbar">` + kids.map(k=>
     `<span class="balance" style="border-color:${k.color}">
       <span style="color:${k.color}">${esc(k.name)}</span> ⭐ ${bal[k.id]||0}</span>`).join('') +
-    `<button class="btn sm alt" style="border-radius:16px;white-space:nowrap" onclick="sub('ledger')">📜 History</button></div>`;
+    `<button class="btn sm alt" style="border-radius:16px;white-space:nowrap" onclick="sub('ledger')">${ico('history')}History</button></div>`;
   if(!rewards.length){
     html += `<div class="empty"><div class="et">No rewards yet</div>
       <div class="eb">Add things worth working toward — movie night, ice cream run, extra screen time — and set the star cost.</div></div>`;
   } else {
     html += rewards.map(r=>`<div class="card row" onclick="redeem('${r.id}')">
-      <span style="font-size:24px">🎁</span>
+      ${ico('gift', {cls:'rowicon'})}
       <div class="grow"><div class="title">${esc(r.title)}</div>
         <div class="meta" style="font-size:11px">Tap to redeem</div></div>
       <span style="font-weight:700;color:var(--amber)">⭐ ${r.cost}</span>
-      <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delReward('${r.id}')">✕</button>
+      <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delReward('${r.id}')">${ico('x', {title:'Delete reward'})}</button>
     </div>`).join('');
   }
   html += `<div class="card"><div class="formrow" style="margin:0">
@@ -3262,12 +3359,12 @@ function renderLists(m){
   } else {
     html += lists.map(l=>{
       const open = S.listItems.filter(i=>i.listId===l.id && !i.deleted && !i.checked).length;
-      const emoji = /grocer|shop|store/i.test(l.name)?'🛒':'📝';
+      const emoji = ico(/grocer|shop|store/i.test(l.name) ? 'cart' : 'note', {cls:'rowicon'});
       return `<div class="card row" onclick="sub('listDetail',{id:'${l.id}'})">
-        <span style="font-size:20px">${emoji}</span>
+        ${emoji}
         <div class="title grow">${esc(l.name)}</div>
         <span class="meta">${open===0?'done':open+' open'}</span>
-        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delList('${l.id}')">✕</button>
+        <button class="linkbtn red" style="padding:4px" onclick="event.stopPropagation();delList('${l.id}')">${ico('x', {title:'Delete list'})}</button>
       </div>`;
     }).join('');
   }
@@ -3448,25 +3545,25 @@ function renderMeals(m){
       <div class="et">No meal plan yet</div>
       <div class="eb">Meals are planned in the Recipe app. Once you plan a week there, it shows up here on your calendar with links back to each recipe.</div>
     </div>
-    <button class="btn" onclick="openUrl(RECIPE_APP_URL)">🍳 Open Recipe app</button>
+    <button class="btn" onclick="openUrl(RECIPE_APP_URL)">${ico('pan')}Open Recipe app</button>
     <div style="text-align:center;margin-top:10px">
-      <button class="linkbtn" onclick="sub('recipeBox')">📷 Scan a recipe</button>
-      <button class="linkbtn" onclick="mealPlanDiagnostic()">🔍 Why don't I see my meals?</button>
+      <button class="linkbtn" onclick="sub('recipeBox')">${ico('camera')}Scan a recipe</button>
+      <button class="linkbtn" onclick="mealPlanDiagnostic()">${ico('search')}Why don't I see my meals?</button>
     </div>`;
     m.innerHTML = html;
     return;
   }
 
   html += `<div class="formrow">
-    <button class="btn alt" onclick="openUrl(RECIPE_APP_URL)">🍳 Recipe app</button>
-    <button class="btn alt" onclick="openUrl(shoppingUrl())">🛒 Shopping list</button>
+    <button class="btn alt" onclick="openUrl(RECIPE_APP_URL)">${ico('pan')}Recipe app</button>
+    <button class="btn alt" onclick="openUrl(shoppingUrl())">${ico('cart')}Shopping list</button>
   </div>
   <div style="text-align:right;margin-bottom:6px">
-    <button class="linkbtn" style="padding:2px 8px" onclick="sub('recipeBox')">📷 Scan a recipe</button></div>`;
+    <button class="linkbtn" style="padding:2px 8px" onclick="sub('recipeBox')">${ico('camera')}Scan a recipe</button></div>`;
 
   if(!dates.length){
     html += `<div class="empty"><div class="eb">Nothing planned for the days ahead. Plan a week in the Recipe app and it'll appear here.</div>
-      <div style="text-align:center;margin-top:10px"><button class="linkbtn" onclick="mealPlanDiagnostic()">🔍 Why don't I see my meals?</button></div></div>`;
+      <div style="text-align:center;margin-top:10px"><button class="linkbtn" onclick="mealPlanDiagnostic()">${ico('search')}Why don't I see my meals?</button></div></div>`;
     m.innerHTML = html;
     return;
   }
@@ -3480,7 +3577,7 @@ function renderMeals(m){
       byDate[d].map((meal, i) => `<div class="slot" onclick="mealActions('${d}','${meal.slot}')">
         <span class="slotb">${SLOT_LABEL[meal.slot]}</span>
         <span class="slottext grow">${esc(meal.title || 'Planned')}</span>
-        <span class="meta" style="font-size:11px">›</span>
+        <span class="meta">${ico('chevron-right')}</span>
       </div>`).join('') + `</div>`;
   }).join('');
 
@@ -3551,8 +3648,8 @@ function mealActions(date, slot){
   if(!meal) return;
   const rUrl = recipeUrl(meal);
   const buttons = [];
-  if(rUrl) buttons.push({ label:'📖 Open recipe', fn:()=>openUrl(rUrl) });
-  buttons.push({ label:'🛒 Open shopping list', fn:()=>openUrl(shoppingUrl()) });
+  if(rUrl) buttons.push({ label:'Open recipe', icon:'book', fn:()=>openUrl(rUrl) });
+  buttons.push({ label:'Open shopping list', icon:'cart', fn:()=>openUrl(shoppingUrl()) });
   showSheet(meal.title || 'Planned meal',
     friendly(date) + ' · ' + slot.charAt(0).toUpperCase() + slot.slice(1), buttons);
 }
@@ -3567,8 +3664,8 @@ function renderRecipeBox(m){
   m.innerHTML = `
     <div class="help">Photograph a recipe from a book, card, or flyer. Pick several photos at once — FlyerSnap asks whether they are separate recipes or pages of one. ${esc(aiName())} types them up, you check each, and they go to the Recipe app's library.</div>
     <div class="formrow">
-      <button class="btn" onclick="document.getElementById('fRecipe').click()">📷 Scan a recipe</button>
-      <button class="btn alt" onclick="newRecipeForm()">✍️ Type one in</button>
+      <button class="btn" onclick="document.getElementById('fRecipe').click()">${ico('camera')}Scan a recipe</button>
+      <button class="btn alt" onclick="newRecipeForm()">${ico('pen')}Type one in</button>
     </div>
     ${legacyRecipes().length ? `<div class="card" style="border-left:5px solid var(--amber)">
         <div class="title" style="font-size:14px">${legacyRecipes().length} recipe${legacyRecipes().length===1?'':'s'} from FlyerSnap's old Recipe Box</div>
@@ -3578,7 +3675,7 @@ function renderRecipeBox(m){
     ${n ? `<div class="card" style="background:var(--green-lt)">
         <div class="title" style="font-size:14px">${n} recipe${n===1?'':'s'} waiting in the Recipe app</div>
         <div class="meta">Open the Recipe app and confirm them from the review banner to add them to your library.</div>
-        <button class="btn" style="margin-top:10px" onclick="openUrl(RECIPE_APP_URL)">🍳 Open Recipe app</button>
+        <button class="btn" style="margin-top:10px" onclick="openUrl(RECIPE_APP_URL)">${ico('pan')}Open Recipe app</button>
       </div>`
       : `<div class="help" style="font-style:italic">Nothing waiting. Scanned recipes appear in the Recipe app for you to confirm.</div>`}`;
 }
@@ -3637,8 +3734,8 @@ async function handleRecipeScan(files){
   if(list.length === 1) return runRecipeScan(list, 'one');
 
   showSheet(list.length + ' photos', 'Are these separate recipes, or pages of one?', [
-    {label:'🍹 ' + list.length + ' separate recipes', fn:()=>runRecipeScan(list, 'separate')},
-    {label:'📄 Pages of one recipe', fn:()=>runRecipeScan(list, 'one')},
+    {label:list.length + ' separate recipes', icon:'layers', fn:()=>runRecipeScan(list, 'separate')},
+    {label:'Pages of one recipe', icon:'file', fn:()=>runRecipeScan(list, 'one')},
   ]);
 }
 
@@ -3727,14 +3824,14 @@ function renderSettings(m){
     </div>
 
     ${activeProblems().length ? `<button class="btn alt" style="border-color:var(--amber-accent);color:var(--amber-accent)" onclick="openProblems()">
-      ⚠️ ${activeProblems().length} problem${activeProblems().length===1?'':'s'} to look at</button>` :
+      ${ico('alert')}${activeProblems().length} problem${activeProblems().length===1?'':'s'} to look at</button>` :
       `<button class="btn alt" onclick="openProblems()">Problem log</button>`}
 
     <div class="sect">Gordon</div>
     <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
     <div style="margin-bottom:10px">
-      <span class="chip ${aiProvider()==='anthropic'?'on':''}" onclick="setAiProvider('anthropic')">☁️ Anthropic</span>
-      <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">🏠 Local model</span>
+      <span class="chip ${aiProvider()==='anthropic'?'on':''}" onclick="setAiProvider('anthropic')">${ico('cloud')}Anthropic</span>
+      <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">${ico('home')}Local model</span>
     </div>
     ${aiProvider()==='local' ? `
       <div class="label">Base URL</div>
@@ -3752,8 +3849,8 @@ function renderSettings(m){
         <button class="btn" onclick="saveLocalModel()">Save</button>
         <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
       </div>
-      <button class="btn alt" style="margin-top:8px" onclick="runLocalSelfTest()">🔬 Run full self-test</button>
-      <button class="btn alt" style="margin-top:8px" onclick="startCompare()">⚖️ Compare against Anthropic</button>
+      <button class="btn alt" style="margin-top:8px" onclick="runLocalSelfTest()">${ico('flask')}Run full self-test</button>
+      <button class="btn alt" style="margin-top:8px" onclick="startCompare()">${ico('scale')}Compare against Anthropic</button>
       <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model. A text-only model such as qwen2.5:14b-instruct cannot read photos — pull something like <b>qwen2.5vl</b> or <b>llama3.2-vision</b> for that.</div>
     ` : ''}
 
@@ -3771,8 +3868,8 @@ function renderSettings(m){
       <button class="btn" onclick="saveWatcher()">Save</button>
       ${watcherConfigured() ? `<button class="btn alt" style="width:auto" onclick="testWatcher()">Test</button>` : ''}
     </div>
-    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">✉️ Manage watched senders</button>
-    <button class="btn alt" style="margin-top:8px" onclick="forgetImportedEmails()">🔄 Re-import past emails (${(S.settings.seenMsgs||[]).length})</button>
+    ${watcherConfigured() ? `<button class="btn alt" style="margin-top:8px" onclick="openSenderManager()">${ico('mail')}Manage watched senders</button>
+    <button class="btn alt" style="margin-top:8px" onclick="forgetImportedEmails()">${ico('refresh')}Re-import past emails (${(S.settings.seenMsgs||[]).length})</button>
     <div class="help" style="margin-top:4px">Use this if an email was read badly the first time. Clears FlyerSnap's memory of which emails it has already imported, so their events can be offered again.</div>` : ''}
 
     <div class="sect">Backup</div>
@@ -3780,8 +3877,8 @@ function renderSettings(m){
       iOS can clear that storage on its own, so an exported file is the only real safety net.
       ${S.settings.lastBackup ? 'Last export: '+friendly(S.settings.lastBackup)+'.' : '<b>You have never exported one.</b>'}</div>
     <div class="formrow">
-      <button class="btn alt" onclick="exportBackup()">⬇️ Export backup</button>
-      <button class="btn alt" onclick="document.getElementById('fImport').click()">⬆️ Restore</button>
+      <button class="btn alt" onclick="exportBackup()">${ico('download')}Export backup</button>
+      <button class="btn alt" onclick="document.getElementById('fImport').click()">${ico('upload')}Restore</button>
     </div>
     <div class="help" style="margin-top:10px">Automatic snapshots (kept on this phone, once a day, last ${SNAP_KEEP}):</div>
     ${snapshotKeys().reverse().map(k=>`<div class="card row" style="padding:10px">
@@ -3790,7 +3887,7 @@ function renderSettings(m){
       || `<div class="help" style="font-style:italic">None yet — the first appears after a day of use.</div>`}
     <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.
       ${S.settings.lastPrune ? 'Last cleanup: '+friendly(S.settings.lastPrune)+'.' : ''}</div>
-    <button class="btn alt" onclick="manualPrune()">🧹 Clean up old data</button>
+    <button class="btn alt" onclick="manualPrune()">${ico('sparkles')}Clean up old data</button>
     <div class="help" style="font-size:12px;margin-top:6px">Removes chore history over a year old (star totals are kept),
       deleted items over 90 days old, and events over two years old.</div>
 
@@ -3817,7 +3914,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.8 · design tokens, dark mode, contrast-guarded</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.9 · SVG icon system, no emoji chrome</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -4005,15 +4102,15 @@ function renderCompare(m){
   setHeader('Provider Comparison', true);
   if(!compareResult){
     m.innerHTML = `<div class="help">Pick a flyer photo. It is read by both providers with identical prompts, and the results are shown side by side so you can judge which is doing better on your actual material.</div>
-      <button class="btn" onclick="document.getElementById('fCompare').click()">📷 Choose a flyer</button>`;
+      <button class="btn" onclick="document.getElementById('fCompare').click()">${ico('camera')}Choose a flyer</button>`;
     return;
   }
   const a = compareResult.anthropic || [], l = compareResult.local || [];
   const onlyA = a.filter(x => !l.some(y => looksDuplicate(x,y)));
   const onlyL = l.filter(x => !a.some(y => looksDuplicate(x,y)));
   m.innerHTML = `<div class="help">Same image, same prompt, both providers. Judge it yourself: which list matches what is actually printed on the page?</div>
-    ${compareColumn('☁️ Anthropic (' + MODEL + ')', compareResult.anthropic, compareResult.anthropicErr)}
-    ${compareColumn('🏠 ' + (S.settings.localModel||'local'), compareResult.local, compareResult.localErr)}
+    ${compareColumn(ico('cloud') + 'Anthropic (' + MODEL + ')', compareResult.anthropic, compareResult.anthropicErr)}
+    ${compareColumn(ico('home') + (S.settings.localModel||'local'), compareResult.local, compareResult.localErr)}
     <div class="card" style="border-left:5px solid var(--amber)">
       <div style="font-weight:800;font-size:var(--t-sm)">Differences</div>
       <div class="meta" style="font-size:var(--t-cap)">

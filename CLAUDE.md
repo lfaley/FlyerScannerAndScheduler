@@ -8,7 +8,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v8.8 · **Tests:** 243 passing (`node tests.js`)
+**Current version:** v8.9 · **Tests:** 246 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -22,9 +22,9 @@ verification (the Node sandbox faked imports and gave false confidence).
 Source of truth lives in small files; the inlined copies in index.html are
 synced copies, and **tests fail the build if they drift**:
 
-- `js/format.js`, `js/matching.js`, `js/prompts.js`, `js/migrate.js` — pure
-  logic modules, individually tested. Inlined by hand into index.html's script
-  (guard: "the inlined copies match js/ exactly").
+- `js/format.js`, `js/matching.js`, `js/prompts.js`, `js/migrate.js`,
+  `js/icons.js` — pure logic modules, individually tested. Inlined by hand
+  into index.html's script (guard: "the inlined copies match js/ exactly").
 - `css/tokens.css` (all design tokens, light + dark), `css/components.css` —
   synced into index.html's `<style>` by `node tools/inline.js`
   (guard: "the inlined <style> matches css/ exactly"). Edit the css/ files,
@@ -59,8 +59,9 @@ tests-refactor.js's six oracles) into js/ is welcome — inline the result.
 
 ## Verification tooling
 
-- `node tests.js` — 243 tests: data safety, migrations, inline-handler
-  resolution, module drift, CSS drift, fixed-position safety, WCAG contrast.
+- `node tests.js` — 246 tests: data safety, migrations, inline-handler
+  resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
+  fixed-position safety, WCAG contrast in both themes.
 - `node tools/preview.js [outDir]` — Playwright-Chromium screenshots of every
   tab, light AND dark, seeded demo data. Review design changes here first;
   it would have caught the v8.6 button bug. NOT a Safari substitute — Logan
@@ -85,9 +86,16 @@ inside any zip (it self-updates).
 
 Six phases toward a design that holds up in front of design professionals.
 Status: Phase 1 (tokens + dark mode + contrast guard + preview harness) DONE
-in v8.8. Next: Phase 2 — replace emoji UI icons with an inline SVG sprite
-(content emoji like reward stars stay). Then component polish, a11y audit,
-PWA hygiene, expert Q&A prep (EXPERT-QA.md).
+in v8.8. Phase 2 (SVG icon sprite replacing emoji chrome) DONE in v8.9.
+Next: Phase 3 — component polish (cards, header, empty-state illustrations,
+Meals action row, undo-toast instead of confirm() on list delete). Then a11y
+audit, PWA hygiene, expert Q&A prep (EXPERT-QA.md).
+
+Icons: `ico('name')` renders `<use href="#i-name">` against the sprite in
+index.html's body. Add a symbol to `tools/build-icons.py`'s SYMBOLS map AND
+the sprite in index.html (tests catch a mismatch either way). Emoji must
+never come back as chrome — a test enforces it; the allowed content emoji
+are listed in that test.
 
 ## Gmail watcher (RAW_MODE)
 

@@ -154,3 +154,16 @@
   .sheetbtn.danger{background:var(--red-lt);color:var(--red-accent)}
   .sheetbtn.cancel{background:none;color:var(--muted);font-weight:600}
   h3{margin:6px 0 10px;font-size:16px}
+  /* Inline SVG icons (v8.9, replacing emoji chrome). currentColor means an
+     icon inherits its label's color, so active/dark/disabled states need no
+     icon-specific rules. Sized in em so an icon tracks its text. */
+  .ico{width:1.15em;height:1.15em;flex-shrink:0;vertical-align:-.18em;margin-right:.4em;
+    fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  /* An icon standing alone IS the control (delete, back) -- no label to space from. */
+  .ico:only-child{margin-right:0}
+  nav button .ic{display:flex;align-items:center;justify-content:center;height:22px}
+  nav button .ic .ico{width:23px;height:23px;stroke-width:1.6}
+  .card.row>.ico{width:26px;height:26px;stroke-width:1.5;color:var(--accent)}
+  /* Leading icon on a card row -- the old 28px emoji slot. Accent-colored so
+     the row reads as an action, not decoration. */
+  .rowicon{width:26px;height:26px;stroke-width:1.5;color:var(--accent);margin-right:0}

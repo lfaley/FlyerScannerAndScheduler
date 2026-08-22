@@ -1,9 +1,21 @@
 # FlyerSnap — UI Modernization Plan
 
 **Written:** August 22, 2026 · **Baseline:** v8.7 (239 tests passing)
-**Status:** Phase 1 SHIPPED as v8.8 (243 tests). Phases 2–6 pending.
+**Status:** Phases 1–2 SHIPPED (v8.8, v8.9 — 246 tests). Phases 3–6 pending.
 
 > Progress log
+> - **v8.9 / Phase 2 done:** 40-symbol inline SVG sprite (`<symbol>` defs in
+>   index.html's body) + `ico()` helper in `js/icons.js`; ~65 call sites
+>   converted across nav, capture, sheets, chores, lists, meals and settings;
+>   `showSheet` gained an `icon:` field so sheet labels stay `textContent`
+>   (data never becomes markup); icon-only controls carry `aria-label`, all
+>   others are `aria-hidden` beside their real text label. Content emoji kept
+>   deliberately: reward ⭐, celebration 🎉, and the 🦷 example in the
+>   chore-title placeholder. Three guards added: every referenced icon exists
+>   in the sprite, no unused symbols, and no emoji in UI chrome — the last one
+>   caught four sites the manual sweep missed. Also renamed the confusing
+>   "🔔 New 27" chip to "27 unseen" (Phase 3 item, done early since the chip
+>   was already being edited).
 > - **v8.8 / Phase 1 done:** every color tokenized (css/tokens.css is the only
 >   place colors live — enforced by test); dark palette via
 >   prefers-color-scheme; dual theme-color metas; WCAG-AA contrast test over
