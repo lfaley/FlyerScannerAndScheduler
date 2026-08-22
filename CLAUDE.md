@@ -134,7 +134,11 @@ having checked it.
    = "Stop"` — deploy.ps1 uses Start-Process file redirection instead.
 11. iOS PWA quirks: no new tabs from installed apps (use downloads), separate
    storage from Safari, service worker cache list needs manual bumping
-   (`sw.js` `CACHE` const — bump every release), and the iOS 26 short-viewport
+   (`sw.js` `CACHE` const — bump every release; since v9.20 the worker is
+   CACHE-FIRST, so in `sw.js` the network request and `e.waitUntil()` must both
+   start SYNCHRONOUSLY in the fetch handler — `waitUntil` after an `await` is
+   outside the dispatch and silently does nothing, leaving the app permanently
+   stale with no error anywhere. The handler must never be `async`.), and the iOS 26 short-viewport
    bug (nav::after paints white below the nav on purpose).
 12. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.

@@ -3506,8 +3506,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.19';
-const APP_TAGLINE = 'reading benchmark';
+const APP_VERSION = 'v9.20';
+const APP_TAGLINE = 'instant launch';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
@@ -7864,7 +7864,19 @@ document.getElementById('fCompare').addEventListener('change', e=>{ compareProvi
 document.getElementById('fImport').addEventListener('change', e=>{ importBackup(e.target.files[0]); e.target.value=''; });
 
 // ---------- Boot ----------
-if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+// v9.20: the service worker serves from cache first, so a launch paints
+// immediately instead of waiting on 395KB. The cost is that a push arrives one
+// launch late -- so when the background check finds a genuinely different
+// build, say so and offer the reload rather than leaving it silent.
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+  let updateOffered = false;
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if(!e.data || e.data.type !== 'update-ready' || updateOffered) return;
+    updateOffered = true;   // once per launch; a nag is worse than a wait
+    toast('A new version is ready', { label:'Reload', fn:() => location.reload() });
+  });
+}
 // Ask iOS to protect this app's storage from eviction
 if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
 // A manifest shortcut (long-press the home-screen icon) opens

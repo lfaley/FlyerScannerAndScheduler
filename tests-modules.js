@@ -1574,6 +1574,80 @@ module.exports = async function runModuleTests(test){
       + claims.length + ' such statements');
   });
 
+  console.log('\nService worker: cache first, then revalidate (v9.20)');
+
+  const sw = fs.readFileSync('./sw.js', 'utf8');
+  // Comments stripped before any of this is analysed. The first version of
+  // these tests split on 'e.waitUntil(' and landed inside a COMMENT that
+  // mentions it, which made a passing implementation look broken. A guard that
+  // reads prose is not reading code.
+  const swCode = sw.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const swFetch = swCode.split("addEventListener('fetch'")[1] || '';
+
+  test('a launch is served from cache, not from a 395KB download', () => {
+    // Until v9.20 this was network-first, so the whole file transferred on
+    // EVERY launch while online and the cache was only an offline fallback.
+    assert.ok(/caches\.match\(e\.request\)\.then\(\(hit\) => hit \|\|/.test(swFetch),
+      'the response does not prefer the cached copy');
+    assert.ok(!/^\s*e\.respondWith\(\s*fetch\(/m.test(swFetch),
+      'still answering from the network first');
+  });
+
+  test('the background revalidation starts synchronously, or it silently does nothing', () => {
+    // THE BUG THIS EXISTS FOR: e.waitUntil() called after an await is outside
+    // the event dispatch. The browser stops listening, the worker is free to
+    // die once respondWith settles, the cache write never lands -- and the app
+    // serves a stale copy forever with nothing reporting a problem. It was
+    // written that way first and only a browser test caught it.
+    assert.ok(swFetch.includes('e.waitUntil('), 'nothing keeps the worker alive');
+    // The handler must NOT be async. That is the exact, checkable guarantee:
+    // with no async there can be no top-level await, so the fetch and the
+    // waitUntil cannot drift out of the dispatch. Checking for the absence of
+    // `await` textually cannot work -- the awaits inside the .then() callback
+    // are legitimate and sit earlier in the file than waitUntil does.
+    assert.ok(!/addEventListener\('fetch',\s*async/.test(swCode),
+      'the fetch handler is async -- a top-level await would silently break waitUntil');
+    const beforeWait = swFetch.split('e.waitUntil(')[0];
+    assert.ok(beforeWait.indexOf('fetch(e.request)') >= 0,
+      'the network request must also start during dispatch');
+    assert.ok(swFetch.indexOf('e.waitUntil(') < swFetch.indexOf('e.respondWith('),
+      'waitUntil must be registered before respondWith settles');
+  });
+
+  test('only our own files are cached — never the API, model or watcher', () => {
+    // The Gmail watcher is JSONP: executable JavaScript fetched with a <script>
+    // tag, so it IS a GET. Under cache-first the app would replay a stale email
+    // queue forever. Network-first hid that; an origin check fixes it.
+    assert.ok(/url\.origin !== self\.location\.origin/.test(swFetch),
+      'cross-origin requests are still being intercepted');
+    const originGuard = swFetch.indexOf('url.origin !== self.location.origin');
+    assert.ok(originGuard >= 0 && originGuard < swFetch.indexOf('e.respondWith('),
+      'the origin check must come before anything is served or cached');
+  });
+
+  test('an update is announced only when the build genuinely changed', () => {
+    // "Re-downloaded successfully" is not news. Comparing bodies is what makes
+    // the toast mean something.
+    assert.ok(/before !== after/.test(swFetch), 'nothing compares the old and new bodies');
+    assert.ok(/update-ready/.test(sw), 'no update message is ever sent');
+    assert.ok(/clients\.matchAll/.test(sw), 'the message never reaches a page');
+  });
+
+  test('the page offers the reload rather than leaving the wait silent', () => {
+    // Cache-first costs one launch of staleness. That was the reason
+    // network-first was chosen, so it is not given away silently.
+    assert.ok(/type !== 'update-ready'/.test(script), 'the page ignores the update message');
+    assert.ok(/location\.reload\(\)/.test(script), 'no way to take the update now');
+    const reg = script.split("'serviceWorker' in navigator")[1].split('\n}')[0];
+    assert.ok(/updateOffered/.test(reg), 'the toast could fire repeatedly in one launch');
+  });
+
+  test('the cache name is bumped, or installed phones keep the old app', () => {
+    const m = sw.match(/const CACHE = 'flyersnap-v(\d+)'/);
+    assert.ok(m, 'no CACHE constant');
+    assert.ok(Number(m[1]) >= 103, 'CACHE was not bumped for this release: v' + m[1]);
+  });
+
   console.log('\nEvery screen is audited (v9.15)');
 
   test('the a11y audit covers every sub-screen the app can show', () => {

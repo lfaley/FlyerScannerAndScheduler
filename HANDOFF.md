@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.19 · **Tests:** 457 passing
+**Updated:** August 22, 2026 · **Live version:** v9.20 · **Tests:** 463 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -80,6 +80,7 @@ a per-version progress log.
 | v9.17 | The benchmark runs inside the app, against the provider actually configured |
 | v9.18 | One matching implementation; duplicate detection missed identical stop-word titles |
 | v9.19 | The reading benchmark runs in the app too — the app's primary job finally has a number |
+| v9.20 | Service worker serves cache-first: launches paint instantly instead of waiting on 124KB |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -131,6 +132,68 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.20 — launches paint instantly, and a stale-JSONP bug went with it.**
+
+Logan asked whether splitting the code across files, MVC-style, would shrink
+`index.html`. It would not — same bytes, more requests, and it is the exact
+change that blanked production in v8.1–v8.5. The source already IS split into
+`js/` and `css/`; the single file is the delivery format.
+
+Measured instead of guessed:
+
+| | raw | gzipped |
+|---|---|---|
+| as shipped | 395,502 | **123,731** |
+| comments stripped | 309,946 | 90,557 |
+| full minify (terser) | 256,786 | 79,217 |
+| split into files | 395,502 | 123,731 — **no saving at all** |
+
+Confirmed against the live site: `Content-Encoding: gzip`, `Content-Length:
+124848`. So the transfer really is ~124KB, and minifying would buy 45KB at the
+cost of a build step and a readable shipped file.
+
+**The real finding was in `sw.js`, not in the file size: it was NETWORK-FIRST.**
+The whole 124KB transferred on every launch while online; the cache existed
+only as an offline fallback. It now serves from cache and revalidates in the
+background, which makes launch time independent of size — a bigger win than any
+byte-shaving, and no build step.
+
+Cache-first costs one launch of staleness, and that was the stated reason for
+network-first, so it is not given away silently: the worker compares the new
+body against the stored one and, only on a genuine change, messages the page,
+which offers a one-tap **Reload** toast. Once per launch — a nag is worse than
+a wait.
+
+**A second bug fell out of reading it.** The old handler cached EVERY
+same-method GET, including cross-origin ones. The Gmail watcher is **JSONP** —
+executable JavaScript fetched with a `<script>` tag, so it is a GET. Under
+cache-first the app would have replayed a stale email queue forever.
+Network-first hid it. There is now an origin check, and the API and the local
+model stop being cached too.
+
+**Two mistakes worth recording, both found by testing behaviour rather than
+reading code:**
+
+1. `e.waitUntil()` was placed after an `await`, which puts it outside the event
+   dispatch. The browser stops listening, the worker may die once
+   `respondWith` settles, and the cache write never lands — so the app serves
+   the same stale copy forever **and nothing reports a problem**. The browser
+   test caught it; a code review would not have.
+2. The first version of the guard test split on `'e.waitUntil('` and landed
+   inside a *comment* mentioning it, making a correct implementation look
+   broken. Comments are now stripped before the file is analysed. A guard that
+   reads prose is not reading code.
+
+The regression guard is that the fetch handler must not be `async` — with no
+`async` there can be no top-level await, so the two cannot drift apart again.
+Checking for the absence of `await` textually cannot work: the awaits inside
+the `.then()` callback are legitimate and sit earlier in the file.
+
+Verified in Chromium against a live server: SW activates; an unchanged file
+reloads with no toast; a changed file paints the OLD build immediately, updates
+the cache in the background and raises the toast; the offered reload delivers
+the new build; and offline still boots.
 
 **v9.19 — the app's primary job finally has a number.**
 
@@ -746,7 +809,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 457 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 463 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
