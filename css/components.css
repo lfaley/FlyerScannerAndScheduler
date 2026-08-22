@@ -10,8 +10,17 @@
   @media (prefers-reduced-motion: reduce){
     *{animation-duration:.01ms !important;transition-duration:.01ms !important}
   }
+  /* iOS 26 leaves a strip below the layout viewport in an installed web app
+     (WebKit 158055568). Nothing inside the page can paint there -- only the
+     CANVAS background does, and the canvas takes its colour from <html>.
+     So html is painted the NAV colour, and body keeps the page colour and is
+     forced to fill the viewport so it always covers everything above the
+     strip. Result: the exposed strip reads as part of the tab bar instead of
+     a gap under it, on any device, in either theme. */
+  html{background:var(--card)}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
     background:var(--bg);color:var(--ink);font-size:var(--t-body);line-height:1.5;
+    min-height:100vh;
     padding-top:env(safe-area-inset-top);padding-bottom:calc(88px + env(safe-area-inset-bottom))}
   header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
     font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
@@ -38,7 +47,9 @@
      bottom-fixed bar. Extend the nav's white downward to cover any such gap;
      when the viewport is sized correctly this paints off-screen and is
      invisible. */
-  nav::after{content:'';position:absolute;top:100%;left:0;right:0;height:120px;background:var(--card)}
+  /* (The old nav::after cover lived here. It could not work: the strip iOS 26
+     leaves exposed is OUTSIDE the layout viewport, and only the canvas
+     background paints there. Replaced by the html/body split above.) */
   .card{background:var(--card);border:1px solid var(--card-edge);border-radius:14px;padding:var(--s4);margin-bottom:var(--s3);
     box-shadow:var(--shadow-card);
     transition:transform .1s ease, box-shadow .1s ease}
@@ -106,10 +117,35 @@
     padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
   textarea{min-height:90px;resize:vertical}
   .formrow{display:flex;gap:8px;margin-bottom:10px}
+  /* Two-up only. Three flex:1 columns on a 393px screen leave ~116px each,
+     which is too narrow for these labels (they wrap and break alignment) and
+     too narrow for a native time input (it clips). Baymard's tested failure:
+     a field that cannot show its own value cannot be checked by the user. */
+  .fieldpair{display:flex;gap:var(--s3);margin-bottom:var(--s3)}
+  .fieldpair > *{flex:1;min-width:0}
+  /* Inline validation, next to the field it is about (NN/g). */
+  /* Sits directly under its field. No negative margin: the inputs carry no
+     bottom margin of their own, so pulling up collides with the border. */
+  .fielderr{display:block;font-size:var(--t-sm);font-weight:600;color:var(--red-accent);
+    margin:var(--s2) 0 0;line-height:1.4}
+  input.bad,textarea.bad{border-color:var(--red-accent);border-width:2px}
+  /* Form screens need the last control to clear the tab bar with room to
+     spare -- the Save button was being clipped by it. */
+  main.isform{padding-bottom:120px}
+  textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:12px;font-size:var(--t-body);font-family:inherit;color:var(--ink)}
   /* Now a real <label for>, which is inline by default -- keep it block so
      the layout is identical to the <div> it replaced. */
-  .label{display:block;font-size:var(--t-cap);font-weight:700;color:var(--muted);margin:var(--s4) 0 var(--s2);
-    text-transform:uppercase;letter-spacing:.06em}
+  .label{display:block;font-size:var(--t-sm);font-weight:700;color:var(--ink);
+    margin:var(--s4) 0 var(--s2)}
+  /* "(optional)" is a modifier, not part of the name -- GOV.UK marks optional
+     fields rather than required ones, so this appears often and must not
+     shout. */
+  .label .opt{font-weight:600;color:var(--faint)}
+  /* Read-only metadata shown inside a form. Deliberately NOT .label, which
+     would make it read as an editable field. */
+  .metalabel{display:block;font-size:var(--t-cap);font-weight:700;color:var(--faint);
+    margin:var(--s4) 0 var(--s1);text-transform:uppercase;letter-spacing:.06em}
   .empty{text-align:center;padding:44px 24px 40px;color:var(--muted)}
   /* Empty-state mark: large, quiet, unmistakably the same family as the
      controls. Tinted surface rather than a heavy outline so it recedes. */
@@ -123,6 +159,11 @@
   .empty .eb{font-size:var(--t-body);line-height:1.6;max-width:34ch;margin:0 auto}
   .sect{font-size:var(--t-lg);font-weight:800;margin:var(--s6) 0 var(--s2);letter-spacing:-.02em}
   .help{font-size:var(--t-sm);color:var(--muted);line-height:1.55;margin-bottom:var(--s3)}
+  /* A command the user is meant to type. break-all rather than overflow:
+     a wrapped command can still be read; a clipped one cannot. */
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em;
+    background:var(--bg);border:1px solid var(--line);border-radius:6px;
+    padding:1px 5px;word-break:break-all}
   .filterbar{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch}
   .balance{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid;
     border-radius:16px;padding:6px 12px;font-size:13px;font-weight:700;white-space:nowrap}
@@ -199,3 +240,19 @@
     justify-content:center;border-radius:10px;padding:0}
   .headerbtn .ico{width:22px;height:22px;margin:0}
   .headerbtn:active{background:var(--on-accent-press)}
+  /* Ask composer. Pinned directly above the tab bar, the way every messaging
+     UI does it: the input must stay reachable no matter how long the
+     conversation gets, and it must not drift into the middle of an empty
+     screen. 54px is the measured nav height. */
+  .composer{position:fixed;left:0;right:0;bottom:calc(54px + env(safe-area-inset-bottom));
+    background:var(--bg);border-top:1px solid var(--line);z-index:20;
+    padding:var(--s2) var(--s4);display:flex;gap:var(--s2);
+    max-width:640px;margin:0 auto}
+  .composer input{flex:1}
+  .composer .btn{width:auto;flex-shrink:0}
+  /* Room so the last message is never hidden behind the composer. */
+  main.hascomposer{padding-bottom:96px}
+  /* Suggestions as chips rather than six full-width buttons -- lighter, and
+     they wrap instead of pushing the input off the screen. */
+  .suggest{display:flex;flex-wrap:wrap;gap:var(--s2);margin-bottom:var(--s3)}
+  .suggest .chip{margin:0}

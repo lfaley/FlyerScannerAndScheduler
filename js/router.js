@@ -178,3 +178,46 @@ export function describeIntent(route, resolved){
       return intentById(route.intent) ? intentById(route.intent).title : '';
   }
 }
+
+/**
+ * Classify WITHOUT a model call when the wording makes it obvious.
+ *
+ * The router added a full round-trip in front of every answer -- ask a
+ * question and you waited for a classification call, then an answer call.
+ * That is the cost Anthropic warns about ("compounding error rates per extra
+ * LLM call"), and their own advice is that high-frequency, low-complexity
+ * work belongs in deterministic code.
+ *
+ * So the obvious cases are decided here, instantly and for free, and the
+ * model router is only consulted when this cannot tell. Deliberately
+ * CONSERVATIVE: it only ever short-circuits to an `answer` intent, never to
+ * anything that could change data. If it is not sure, it returns null and the
+ * model decides.
+ */
+export function quickRoute(text){
+  const q = String(text || '').trim();
+  if(!q) return null;
+  const low = q.toLowerCase();
+
+  // Anything that smells like an instruction to change something goes to the
+  // model, so the safety checks in validateRoute still apply to it.
+  if(/\b(add|put|create|make|remove|delete|clear|set|schedule|book|open|go to|take me)\b/.test(low)) return null;
+
+  // "whats on the list" has no apostrophe and no question mark, and is still
+  // obviously a question. The optional 's covers what's/whats/wheres.
+  const isQuestion = /\?\s*$/.test(q) ||
+    /^(what|when|where|who|which|how)('?s)?\b/.test(low) ||
+    /^(is|are|do|does|did|can|will|any|anything|show|tell)\b/.test(low);
+  if(!isQuestion) return null;
+
+  const intent =
+    /\bchore|\bstar|\brout(ine|ines)\b/.test(low) ? 'ask_chores' :
+    /\blist\b|\blists\b|\bshopping|\bgrocer|\bcostco\b/.test(low) ? 'ask_lists' :
+    /\bneed(s)? doing\b|\bmiss(ing|ed)?\b|\bclash|\boverlap|\bbehind\b/.test(low) ? 'what_needs_doing' :
+    'ask_schedule';
+
+  const params = intent === 'what_needs_doing' ? {} : { question: q };
+  // Routed through the same validator as a model answer, so a short-circuit
+  // can never bypass a check the slow path applies.
+  return validateRoute({ intent, params, confidence: 0.95 });
+}

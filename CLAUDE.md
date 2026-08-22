@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.8 · **Tests:** 343 passing (`node tests.js`)
+**Current version:** v9.10 · **Tests:** 368 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -26,7 +26,9 @@ Source of truth lives in small files; the inlined copies in index.html are
 synced copies, and **tests fail the build if they drift**:
 
 - `js/format.js`, `js/matching.js`, `js/prompts.js`, `js/migrate.js`,
-  `js/icons.js` — pure logic modules, individually tested. Inlined by hand
+  `js/icons.js`, `js/conflicts.js`, `js/intents.js`, `js/router.js`,
+  `js/conversation.js`, `js/theme.js`, `js/ailog.js` — pure logic modules,
+  individually tested. Inlined by hand
   into index.html's script (guard: "the inlined copies match js/ exactly").
 - `css/tokens.css` (all design tokens, light + dark), `css/components.css` —
   synced into index.html's `<style>` by `node tools/inline.js`
@@ -132,7 +134,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 343 tests: data safety, migrations, inline-handler
+- `node tests.js` — 394 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -148,6 +150,57 @@ having checked it.
   corpus in `eval/`. Costs API tokens, so it is NOT in `node tests.js`; run it
   before and after any prompt change and commit `eval/last-run.json`.
   `--dry` self-checks the scorer for free.
+- `node tools/diagnostics.js <file>` — read a diagnostics export off Logan's
+  phone (see AI CALL LOGGING below). `--errors`, `--all`, `--json`.
+
+AI CALL LOGGING (v9.13, `js/ailog.js`): every AI call is recorded in
+`S.aiLog`, rolling 200 entries, both providers, success and failure. Field
+names follow the **OpenTelemetry GenAI semantic conventions** (`op`,
+`provider`, `reqModel`/`resModel`, `inTokens`/`outTokens`, `finish`, `ms`,
+`errorType`) so the log means what an engineer expects.
+
+**Prompt text, answer text and the API key are NEVER logged, and that is not
+negotiable.** Those conventions exclude prompt/completion bodies because they
+"routinely contain names, emails, account numbers" — and in THIS app the
+prompts are children's names, schools, addresses and schedules. `redact()`
+scrubs error strings, which are the one place a provider can hand back
+something sensitive unasked. If a future change would put request or response
+content into a log entry or the diagnostics file, it is wrong.
+
+`callAI(blocks, maxTokens, system, op)` — the 4th argument names the
+operation. Every call site must pass one; a test fails the build otherwise,
+because an unnamed call logs as `unknown` and answers no question. Logging is
+wrapped in try/catch: it must never break the call it is logging about, and
+turning the Anthropic fallback OFF must not silently turn logging off with it.
+
+Settings → *When something goes wrong* exports a diagnostics file that is
+deliberately NOT the backup: AI log + manual problem log + version context,
+and **no events, chores, lists, notes or API key**, because that file gets
+emailed around. Read it with `node tools/diagnostics.js <file>`.
+
+CONVERSATION MEMORY (v9.10, `js/conversation.js`): the assistant's chat
+persists in `S.ask.turns` across launches, until "New chat" clears it. Two
+things are deliberately SEPARATE and must stay that way:
+  - what is SHOWN: the whole saved conversation.
+  - what is SENT: `contextTurns()` — today's turns only, at most 2.
+Every answer is date-relative ("this week", "in 2 days"). Replaying
+yesterday's answer as context invites the model to repeat a claim that has
+since become false. A conversation spanning midnight stays visible under an
+"Earlier" divider but starts a fresh context, and says so.
+
+THEME (v9.9): DARK SHIPS BY DEFAULT. The bare `:root` in css/tokens.css IS
+the dark palette; light is an opt-in override on `:root[data-theme="light"]`,
+applied by `applyTheme()` in JS (CSS alone cannot express "follow the phone
+only when the user has not chosen"). Setting lives at `S.settings.theme` =
+dark | light | system. An inline script paints the attribute BEFORE first
+render so there is no flash.
+
+iOS 26 leaves a strip below the layout viewport that NOTHING inside the page
+can paint — the old `nav::after` cover could never have worked, and on-device
+measurement showed 186 device px of page background still showing. Only the
+CANVAS paints there, and it takes its colour from `<html>`. So
+`html{background:var(--card)}` (nav colour) + `body{min-height:100vh}`.
+Do not "simplify" either of those away.
 
 THE ASSISTANT (v9.8): the model does ONE job — turn a sentence into
 `{intent, params, confidence}` and stop. It never acts, never loops, never
@@ -167,6 +220,10 @@ in code.
   capability disclosure, not a dead end.
 - Entity resolution (`resolveEntity`) is code, never the model. Two possible
   matches ASK; they never get picked. Exact match beats fuzzy.
+- `quickRoute()` classifies obvious QUESTIONS with no model call at all — the
+  router otherwise adds a whole round-trip in front of every answer. It only
+  ever short-circuits to a read-only intent; anything that could change data
+  still goes to the model and through every check. Tested both ways.
 - Suggestion chips come from the registry — NN/g: a chat box "places the
   burden of discovering an app's capabilities upon the user".
 See ASSISTANT-PLAN.md for the sources.

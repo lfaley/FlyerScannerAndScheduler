@@ -2346,3 +2346,46 @@ test('the tab bar still reaches every tab, so swipe is never the only way', () =
   assert.ok(TABS.length >= 5, 'expected the five tabs');
   TABS.forEach(t => assert.ok(t.id && t.label, 'every tab is reachable by tapping'));
 });
+
+console.log('\nMarking a missed deadline as handled');
+
+// Before v9.9 the clash detector checked e.done -- a field NOTHING in the app
+// ever set. The only way to clear a missed-deadline warning was to export it
+// to the calendar or delete it, neither of which matches "I already did this".
+test('a passed deadline warns until it is handled', () => {
+  boot(null);
+  const e = { id:'d1', title:'Sign-up', date:'2026-08-01', kind:'deadline', deleted:false };
+  S.events.push(e);
+  assert.strictEqual(findConflicts(S.events, '2026-09-01').length, 1, 'it should warn');
+  markHandled('d1');
+  assert.strictEqual(e.handled, true);
+  assert.strictEqual(findConflicts(S.events, '2026-09-01').length, 0, 'and stop warning once handled');
+});
+
+test('marking handled keeps the event, it does not delete it', () => {
+  boot(null);
+  S.events.push({ id:'d1', title:'Sign-up', date:'2026-08-01', kind:'deadline', deleted:false });
+  markHandled('d1');
+  assert.strictEqual(S.events.length, 1, 'the event is kept');
+  assert.strictEqual(S.events[0].deleted, false, 'and is not deleted');
+});
+
+test('handling one deadline does not silence another', () => {
+  boot(null);
+  S.events.push({ id:'d1', title:'A', date:'2026-08-01', kind:'deadline', deleted:false });
+  S.events.push({ id:'d2', title:'B', date:'2026-08-02', kind:'deadline', deleted:false });
+  markHandled('d1');
+  assert.strictEqual(findConflicts(S.events, '2026-09-01').length, 1);
+});
+
+test('exporting to the calendar still counts as dealt with', () => {
+  boot(null);
+  S.events.push({ id:'d1', title:'A', date:'2026-08-01', kind:'deadline', exported:true, deleted:false });
+  assert.strictEqual(findConflicts(S.events, '2026-09-01').length, 0);
+});
+
+test('marking a non-existent event does nothing and does not throw', () => {
+  boot(null);
+  markHandled('nope');
+  assert.strictEqual(S.events.length, 0);
+});

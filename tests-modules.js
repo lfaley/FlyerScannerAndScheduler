@@ -656,6 +656,47 @@ module.exports = async function runModuleTests(test){
     assert.ok(/data, never instruction/i.test(p), 'prompt must treat user text as data');
   });
 
+
+  console.log('\nFast-path routing (no model call)');
+
+  test('an obvious question is classified for free', () => {
+    // The router used to add a whole round-trip in front of every answer.
+    // These cases must never reach the model.
+    [['What does Olivia have this week?', 'ask_schedule'],
+     ['whats on the shopping list',       'ask_lists'],
+     ['what chores are due today',        'ask_chores'],
+     ['anything I am about to miss?',     'what_needs_doing']].forEach(([q, want]) => {
+      const r = rt.quickRoute(q);
+      assert.ok(r, q + ' should have been decided locally');
+      assert.strictEqual(r.intent, want, q);
+    });
+  });
+
+  test('the fast path NEVER short-circuits something that changes data', () => {
+    // The safety property. Anything that could write must go to the model and
+    // through every validation check, so it still lands on confirm/draft.
+    ['add milk to the costco list', 'Dentist for Braelyn next Tuesday at 3',
+     'take me to settings', 'delete the recital', 'create a chore for Olivia',
+     'put eggs on the list', 'remove that event'].forEach(q => {
+      assert.strictEqual(rt.quickRoute(q), null, q + ' must not be fast-pathed');
+    });
+  });
+
+  test('anything the fast path returns is read-only and pre-validated', () => {
+    ['what is on today?', 'when is the next form due?'].forEach(q => {
+      const r = rt.quickRoute(q);
+      assert.strictEqual(r.ok, true, q);
+      assert.strictEqual(r.consequence, 'answer', q + ' must be read-only');
+      assert.strictEqual(r.autoRun, true, q);
+    });
+  });
+
+  test('a statement it cannot classify falls through to the model', () => {
+    assert.strictEqual(rt.quickRoute('milk eggs bread'), null);
+    assert.strictEqual(rt.quickRoute(''), null);
+    assert.strictEqual(rt.quickRoute('   '), null);
+  });
+
   console.log('\nEntity resolution — asks rather than guesses');
 
   const LISTS = [{id:'l1', name:'Costco'}, {id:'l2', name:'Storage unit'},
@@ -1031,6 +1072,415 @@ module.exports = async function runModuleTests(test){
     assert.ok(tap && Number(tap[1]) >= 44, 'tap token is below 44px');
   });
 
+
+
+
+  // -------------------------------------------------------------------------
+  // Form design guards (v9.12). Each maps to a finding in FORM-UI-REVIEW.md
+  // and to published guidance, so a future edit cannot quietly undo one.
+  // -------------------------------------------------------------------------
+  console.log('\nForm design');
+
+  test('labels are not all-caps', () => {
+    // GOV.UK/Parliament: all-caps "makes text difficult to read and is not
+    // accessible". It also inflates label length, which is what broke the
+    // three-up date row.
+    const rule = (css.match(/\.label\{[^}]*\}/) || [''])[0];
+    assert.ok(!/text-transform:\s*uppercase/.test(rule), '.label is uppercase again: ' + rule);
+  });
+
+  test('no form row crams three fields onto a phone screen', () => {
+    // NN/g allows side-by-side only for "logically related SHORT fields".
+    // Three flex:1 columns at 393px leave ~116px each -- too narrow for these
+    // labels and for a native time input.
+    const rows = [...script.matchAll(/class="formrow"[\s\S]{0,600}?<\/div>\s*<\/div>/g)];
+    rows.forEach(r => {
+      const cols = (r[0].match(/style="flex:1"/g) || []).length;
+      assert.ok(cols < 3, 'a formrow still has ' + cols + ' equal columns');
+    });
+  });
+
+  test('the edit form marks optional fields rather than required ones', () => {
+    // GOV.UK convention: only ask for what you need, so mark the exceptions.
+    const form = script.split('function renderEventEdit')[1].split('function setEventKind')[0];
+    assert.ok(/class="opt">\(optional\)/.test(form), 'no optional markers found');
+    // GOV.UK: avoid asterisks, which "can be distracting or confusing".
+    const labels = (form.match(/<label[^>]*>[\s\S]*?<\/label>/g) || []).join(' ');
+    assert.ok(labels.length, 'no labels found to check');
+    assert.ok(!labels.includes('*'), 'a label uses an asterisk as a required marker');
+  });
+
+  test('validation is inline and next to its field, not a modal alert', () => {
+    // NN/g: an error shown away from its field has to be memorised.
+    const save = script.split('function saveEventEdit')[1].split('\nfunction ')[0];
+    assert.ok(!/alert\(/.test(save), 'saveEventEdit still uses alert()');
+    assert.ok(/errors\.title/.test(save) && /errors\.date/.test(save),
+      'per-field errors are not being set');
+    assert.ok(/class="fielderr"/.test(script), 'no inline error element');
+    assert.ok(/aria-invalid="true"/.test(script), 'invalid fields are not announced');
+  });
+
+  test('chip groups are real controls, not spans with onclick', () => {
+    // Type is a radio group, Who is a checkbox group. Rendered as bare spans
+    // they were invisible to keyboard and screen-reader users.
+    const form = script.split('function renderEventEdit')[1].split('function setEventKind')[0];
+    assert.ok(/role="radiogroup"/.test(form), 'Type is not a radiogroup');
+    assert.ok(/role="radio"/.test(form) && /aria-checked=/.test(form), 'Type chips are not radios');
+    assert.ok(/role="checkbox"/.test(form), 'Who chips are not checkboxes');
+    assert.ok(/tabindex="0"/.test(form), 'chips are not focusable');
+    assert.ok(/onkeydown=/.test(form), 'chips cannot be operated by keyboard');
+  });
+
+  test('every screen with a form has a heading', () => {
+    // renderEventEdit wrote its title as a bare text node, so the screen had
+    // no h1 at all -- missed by the a11y audit, which only walks the tabs.
+    const form = script.split('function renderEventEdit')[1].split('function setEventKind')[0];
+    assert.ok(/<h1 class="htitle">/.test(form), 'Edit Event has no h1');
+  });
+
+  test('form screens reserve room for the save button to clear the tab bar', () => {
+    assert.ok(/main\.isform\{[^}]*padding-bottom/.test(css), 'no .isform clearance rule');
+    assert.ok(/classList\.add\('isform'\)/.test(script), 'the edit form does not opt in');
+    assert.ok(/classList\.remove\('isform'\)/.test(script), 'other screens never opt out');
+  });
+
+  test('the notes field is styled by the shared rule, not a duplicated block', () => {
+    assert.ok(/^\s*textarea\{/m.test(css), 'no shared textarea rule');
+    const form = script.split('function renderEventEdit')[1].split('function setEventKind')[0];
+    const ta = (form.match(/<textarea[^>]*>/) || [''])[0];
+    assert.ok(!/border:1px solid/.test(ta), 'textarea still carries duplicated inline styling: ' + ta);
+  });
+
+  console.log('\nConversation memory');
+
+  const conv = await import('./js/conversation.js');
+  const T = (q, a, day) => ({ q, a, day, domain:'events', cited:[], sourceNote:'' });
+
+  test('a saved conversation is kept, capped and cleaned', () => {
+    const many = Array.from({length: 50}, (_, i) => T('q'+i, 'a'+i, '2026-09-01'));
+    const kept = conv.trimConversation(many);
+    assert.strictEqual(kept.length, conv.MAX_KEPT_TURNS, 'capped');
+    assert.strictEqual(kept[kept.length-1].q, 'q49', 'the newest turns are the ones kept');
+  });
+
+  test('a malformed saved turn is dropped, not rendered', () => {
+    // A save file is untrusted input like any other.
+    const kept = conv.trimConversation([null, {q:'ok', a:'fine', day:'2026-09-01'},
+      {q:'no answer'}, {a:'no question'}, 'garbage', 42]);
+    assert.strictEqual(kept.length, 1);
+    assert.strictEqual(kept[0].q, 'ok');
+  });
+
+  test('a very long answer is truncated so one reply cannot bloat the save', () => {
+    const kept = conv.trimConversation([T('q', 'x'.repeat(9000), '2026-09-01')]);
+    assert.ok(kept[0].a.length < 2000, 'stored answer length: ' + kept[0].a.length);
+  });
+
+  test('cited events are stored by id, not as a frozen copy', () => {
+    // The cards are re-rendered from live events; a saved copy would go stale
+    // the moment an event is edited.
+    const kept = conv.trimConversation([Object.assign(T('q','a','2026-09-01'),
+      { cited:[{ ref:1, id:'e1', line:'[1] 2026-09-02 Recital' }] })]);
+    assert.deepStrictEqual(Object.keys(kept[0].cited[0]).sort(), ['id','line']);
+  });
+
+  console.log('\nWhat is SHOWN vs what is SENT');
+
+  test("only today's turns are ever sent as context", () => {
+    // Yesterday's answer said "in 2 days" about a date that has since moved.
+    // Replaying it invites the model to repeat a claim that is now false.
+    const turns = [T('old q','old a','2026-08-31'), T('new q','new a','2026-09-01')];
+    const sent = conv.contextTurns(turns, '2026-09-01');
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].q, 'new q');
+  });
+
+  test('at most two turns are sent even within one day', () => {
+    const turns = Array.from({length: 8}, (_, i) => T('q'+i, 'a'+i, '2026-09-01'));
+    const sent = conv.contextTurns(turns, '2026-09-01');
+    assert.strictEqual(sent.length, conv.MAX_SENT_TURNS);
+    assert.strictEqual(sent[sent.length-1].q, 'q7', 'the most recent ones');
+  });
+
+  test('a conversation entirely from yesterday sends nothing but is still shown', () => {
+    const turns = [T('q','a','2026-08-31')];
+    assert.deepStrictEqual(conv.contextTurns(turns, '2026-09-01'), []);
+    assert.strictEqual(conv.isCarriedOver(turns, '2026-09-01'), true, 'and is marked as carried over');
+    assert.strictEqual(conv.trimConversation(turns).length, 1, 'and is still kept for display');
+  });
+
+  test('a fresh or same-day conversation is not marked as carried over', () => {
+    assert.strictEqual(conv.isCarriedOver([], '2026-09-01'), false);
+    assert.strictEqual(conv.isCarriedOver([T('q','a','2026-09-01')], '2026-09-01'), false);
+  });
+
+  test('the divider lands on the first turn from today', () => {
+    const turns = [T('a','a','2026-08-30'), T('b','b','2026-08-31'), T('c','c','2026-09-01')];
+    assert.strictEqual(conv.firstTurnOfToday(turns, '2026-09-01'), 2);
+    assert.strictEqual(conv.firstTurnOfToday(turns, '2026-09-09'), -1, 'nothing from today');
+    assert.strictEqual(conv.firstTurnOfToday([], '2026-09-01'), -1);
+  });
+
+  console.log('\nAI call logging');
+
+  const ailog = await import('./js/ailog.js');
+
+  test('an API key can never reach the log, whatever shape it arrives in', () => {
+    // The one place a credential can leak into a log is an error string the
+    // provider echoed back. This is the last line of defence.
+    const bad = 'API error 401: {"error":"invalid x-api-key sk-ant-api03-AbC_dEf-123"}';
+    const out = ailog.redact(bad);
+    assert.ok(!/sk-ant/.test(out), out);
+    assert.ok(!/AbC_dEf/.test(out), out);
+    assert.ok(/401/.test(out), 'the useful part must survive: ' + out);
+  });
+
+  test('other credential shapes and email addresses are redacted too', () => {
+    ['Bearer eyJhbGciOi.abc-123', 'key sk-ABCDEFGHIJKLMNOPQRSTUVWX', 'from logan@example.com']
+      .forEach(s => {
+        const out = ailog.redact(s);
+        assert.ok(/\[redacted\]/.test(out), 'not redacted: ' + s + ' -> ' + out);
+      });
+  });
+
+  test('redaction is bounded, so one enormous error cannot fill the save file', () => {
+    assert.ok(ailog.redact('x'.repeat(50000)).length <= 400);
+    assert.strictEqual(ailog.redact(null), '');
+    assert.strictEqual(ailog.redact(undefined), '');
+  });
+
+  test('failures classify into stable buckets rather than free text', () => {
+    const cases = [
+      [null, 401, 'auth'],
+      [null, 403, 'auth'],
+      [new Error('invalid x-api-key'), null, 'auth'],
+      [null, 429, 'rate_limit'],
+      [new Error('Overloaded'), null, 'rate_limit'],
+      [null, 503, 'provider_error'],
+      [new Error('timed out after 3 minutes'), null, 'timeout'],
+      [new Error('Failed to fetch'), null, 'network'],
+      [new Error('NO_API_KEY'), null, 'no_api_key'],
+      [new Error('Could not read that document.'), null, 'bad_response'],
+      [new Error('UNSUPPORTED_BLOCK:document'), null, 'unsupported_input'],
+      [null, 400, 'request_rejected'],
+      [new Error('something new'), null, 'unknown'],
+    ];
+    cases.forEach(([err, status, want]) =>
+      assert.strictEqual(ailog.classifyError(err, status), want,
+        String((err && err.message) || status) + ' should be ' + want));
+  });
+
+  test('status beats message: a 429 is rate_limit even when the body says "error"', () => {
+    assert.strictEqual(ailog.classifyError(new Error('error'), 429), 'rate_limit');
+  });
+
+  test('an entry never carries prompt or answer text', () => {
+    // The whole reason this module exists: in this app the prompts ARE
+    // children's names, schools and schedules.
+    const e = ailog.makeEntry({ at:'2026-08-22T10:00:00Z', op:'extract.image',
+      provider:'anthropic', reqModel:'m', ok:true, ms:1234.6,
+      inTokens:10, outTokens:20, finish:'end_turn',
+      prompt:'Ellie has soccer at Maple Elementary', answer:'secret' });
+    const json = JSON.stringify(e);
+    assert.ok(!/Ellie|Maple|secret/.test(json), json);
+    assert.strictEqual(e.ms, 1235, 'duration is rounded, not dropped');
+    assert.strictEqual(e.detail, null, 'a successful call carries no detail');
+  });
+
+  test('an entry survives being handed nothing at all', () => {
+    const e = ailog.makeEntry();
+    assert.strictEqual(e.op, 'unknown');
+    assert.strictEqual(e.ok, false);
+    assert.strictEqual(e.errorType, 'unknown');
+    assert.strictEqual(e.ms, null);
+    assert.strictEqual(ailog.makeEntry({ ms: NaN }).ms, null, 'NaN is not a duration');
+  });
+
+  test('the log rolls at a fixed cap and never mutates what it was given', () => {
+    let log = [];
+    for(let i = 0; i < ailog.AI_LOG_MAX + 25; i++){
+      const before = log;
+      log = ailog.appendEntry(log, ailog.makeEntry({ op:'op'+i, ok:true }));
+      assert.notStrictEqual(log, before, 'appendEntry must return a new array');
+    }
+    assert.strictEqual(log.length, ailog.AI_LOG_MAX);
+    assert.strictEqual(log[log.length-1].op, 'op' + (ailog.AI_LOG_MAX + 24), 'newest kept');
+    assert.strictEqual(log[0].op, 'op25', 'oldest dropped first');
+    assert.deepStrictEqual(ailog.appendEntry(null, ailog.makeEntry({})).length, 1,
+      'a missing log is not a crash');
+  });
+
+  test('the summary answers the questions actually worth asking', () => {
+    const log = [
+      ailog.makeEntry({ op:'a', ok:true,  ms:100, inTokens:5, outTokens:7 }),
+      ailog.makeEntry({ op:'a', ok:true,  ms:300, inTokens:5, outTokens:3 }),
+      ailog.makeEntry({ op:'a', ok:true,  ms:200 }),
+      ailog.makeEntry({ op:'b', ok:false, errorType:'network', fellBackTo:'anthropic' }),
+      ailog.makeEntry({ op:'b', ok:false, errorType:'network' }),
+      ailog.makeEntry({ op:'b', ok:false, errorType:'auth' }),
+    ];
+    const s = ailog.summarize(log);
+    assert.strictEqual(s.calls, 6);
+    assert.strictEqual(s.ok, 3);
+    assert.strictEqual(s.failed, 3);
+    assert.strictEqual(s.failureRate, 0.5);
+    assert.strictEqual(s.medianMs, 200, 'median ignores failed calls, which have no honest duration');
+    assert.strictEqual(s.slowestMs, 300);
+    assert.deepStrictEqual(s.byErrorType, { network:2, auth:1 });
+    assert.strictEqual(s.fellBack, 1);
+    assert.strictEqual(s.inTokens, 10);
+    assert.strictEqual(s.outTokens, 10);
+  });
+
+  test('an empty log summarises to zeros rather than NaN', () => {
+    const s = ailog.summarize([]);
+    assert.strictEqual(s.calls, 0);
+    assert.strictEqual(s.failureRate, 0);
+    assert.strictEqual(s.medianMs, null);
+    assert.deepStrictEqual(ailog.summarize(null).byErrorType, {});
+  });
+
+  test('the diagnostics file carries no events, notes, chores or API key', () => {
+    // This file gets emailed and AirDropped. If it ever carries the family's
+    // schedule, that is a privacy incident, not a bug report.
+    const state = {
+      settings:{ apiKey:'sk-ant-api03-SECRETKEY', localBaseUrl:'http://desk:11434/v1' },
+      events:[{ id:'e1', title:'Ellie recital at Maple Elementary', date:'2026-09-02',
+                notes:'bring $20 cash' }],
+      chores:[{ id:'c1', title:'take out bins' }],
+      lists:[{ id:'l1', name:'groceries' }],
+      aiLog:[ailog.makeEntry({ op:'extract.image', ok:true, ms:500 })],
+      problems:[{ where:'Local model', message:'Fell back: logan@example.com rejected',
+                  detail:'sk-ant-api03-LEAK', first:'x', last:'y', count:2, done:false }],
+    };
+    const d = ailog.buildDiagnostics(state, { now:'2026-08-22T10:00:00Z', appVersion:'v9.13' });
+    const json = JSON.stringify(d);
+    assert.ok(!/Ellie|Maple|recital|bring \$20|take out bins|groceries/.test(json),
+      'family data leaked into diagnostics: ' + json);
+    assert.ok(!/SECRETKEY|LEAK/.test(json), 'a key leaked into diagnostics: ' + json);
+    assert.ok(!/logan@example\.com/.test(json), 'an address leaked: ' + json);
+    assert.strictEqual(d.app.hasApiKey, true, 'WHETHER a key is set is exactly what a bug report needs');
+    assert.strictEqual(d.counts.events, 1, 'counts, not contents');
+    assert.strictEqual(d.problems.length, 1, 'the manual reports are the point of the file');
+  });
+
+  test('the local model URL is only included when asked for', () => {
+    const state = { settings:{ localBaseUrl:'http://desk:11434/v1' } };
+    assert.strictEqual(ailog.buildDiagnostics(state, {}).app.localBaseUrl, null);
+    assert.strictEqual(ailog.buildDiagnostics(state, { includeLocalUrl:true }).app.localBaseUrl,
+      'http://desk:11434/v1');
+  });
+
+  test('diagnostics survive a state with nothing in it', () => {
+    const d = ailog.buildDiagnostics({}, {});
+    assert.strictEqual(d.kind, 'flyersnap-diagnostics');
+    assert.strictEqual(d.app.hasApiKey, false);
+    assert.deepStrictEqual(d.aiLog, []);
+    assert.deepStrictEqual(d.problems, []);
+    assert.strictEqual(d.aiSummary.calls, 0);
+    assert.strictEqual(ailog.buildDiagnostics().kind, 'flyersnap-diagnostics');
+  });
+
+  console.log('\nAI logging is actually wired into the app');
+
+  test('both transports record, in success and in failure', () => {
+    const ai = script.split('async function callAI(')[1].split('async function callLocalModel')[0];
+    assert.ok(/recordAiCall\(\{[^}]*provider:'local'[^}]*ok:true/.test(ai.replace(/\n/g,' ')),
+      'a successful local call is not logged');
+    assert.ok(/fellBackTo:'anthropic'/.test(ai), 'the fallback itself is not logged');
+    assert.ok(/recordAiCall\(localFail\)/.test(ai),
+      'turning fallback off must not silently turn logging off with it');
+    const claude = script.split('async function callClaude(')[1].split('\n}')[0];
+    ['no_api_key', 'ok:true', 'classifyError'].forEach(k =>
+      assert.ok(claude.includes(k), 'callClaude does not log ' + k));
+  });
+
+  test('every callAI site names its operation', () => {
+    // An unnamed call logs as "unknown", which answers no question.
+    const sites = [...script.matchAll(/await callAI\(([\s\S]*?)\);/g)];
+    assert.ok(sites.length >= 10, 'expected the known call sites, found ' + sites.length);
+    const unnamed = sites.filter(m => !/['"][a-z]+\.[a-z]+['"]/.test(m[1]))
+                         .map(m => m[1].replace(/\s+/g,' ').slice(0, 60));
+    assert.deepStrictEqual(unnamed, [], 'callAI sites with no operation name: ' + unnamed.join(' | '));
+  });
+
+  test('recordAiCall can never break the call it is logging about', () => {
+    const fn = script.split('function recordAiCall(')[1].split('\n}')[0];
+    assert.ok(/try\{/.test(fn) && /catch/.test(fn), 'logging is not fail-safe');
+  });
+
+  test('the diagnostics export is reachable from Settings and is not the backup', () => {
+    assert.ok(/function exportDiagnostics\(\)/.test(script), 'no export function');
+    assert.ok(/onclick="exportDiagnostics\(\)"/.test(script), 'no way to reach it');
+    assert.ok(/tools\/diagnostics\.js/.test(script), 'the help text does not say how to read it');
+    const fn = script.split('function exportDiagnostics(')[1].split('\nfunction ')[0];
+    assert.ok(/buildDiagnostics/.test(fn), 'export must go through buildDiagnostics, not JSON.stringify(S)');
+    assert.ok(!/JSON\.stringify\(S\)/.test(fn), 'the diagnostics file must never be the whole state');
+  });
+
+  test('the inlined copy of ailog.js has not drifted from the source', () => {
+    const source = fs.readFileSync('./js/ailog.js', 'utf8');
+    for(const m of source.matchAll(/export function (\w+)\(/g)){
+      assert.ok(script.includes('function ' + m[1] + '('), 'not inlined: ' + m[1]);
+    }
+    assert.ok(script.includes("const AI_LOG_MAX = 200"), 'AI_LOG_MAX not inlined');
+  });
+
+  console.log('\nTheme — dark ships by default');
+
+  const th = await import('./js/theme.js');
+
+  test('a fresh install is dark, whatever the phone says', () => {
+    assert.strictEqual(th.themePref({}), 'dark');
+    assert.strictEqual(th.resolveTheme(th.themePref({}), true), 'dark',
+      'a light phone must not override the shipped default');
+    assert.strictEqual(th.resolveTheme(th.themePref({}), false), 'dark');
+  });
+
+  test('an explicit choice beats the phone in both directions', () => {
+    assert.strictEqual(th.resolveTheme('light', false), 'light', 'light chosen on a dark phone');
+    assert.strictEqual(th.resolveTheme('dark',  true),  'dark',  'dark chosen on a light phone');
+  });
+
+  test('"match my phone" actually follows the phone', () => {
+    assert.strictEqual(th.resolveTheme('system', true),  'light');
+    assert.strictEqual(th.resolveTheme('system', false), 'dark');
+  });
+
+  test('a corrupt saved value falls back to dark rather than nothing', () => {
+    ['neon', '', null, undefined, 42, {}].forEach(bad => {
+      assert.strictEqual(th.themePref({ theme: bad }), 'dark', String(bad));
+      assert.strictEqual(th.resolveTheme(bad, true), 'dark', String(bad));
+    });
+  });
+
+  test('every offered theme has a label and resolves to a real palette', () => {
+    th.THEMES.forEach(t => {
+      assert.ok(th.THEME_LABELS[t], t + ' has no label');
+      assert.ok(['light','dark'].includes(th.resolveTheme(t, true)), t);
+      assert.ok(['light','dark'].includes(th.resolveTheme(t, false)), t);
+    });
+  });
+
+  test('the CSS paints dark on the bare :root and light only when asked', () => {
+    // The structural half of "ships dark": if these ever flip, the default
+    // flips with them and no unit test on theme.js would notice.
+    const root = css.split(':root{')[1].split('}')[0];
+    assert.ok(/--bg:#131715/.test(root), 'the bare :root must carry the DARK background');
+    const light = css.split(':root[data-theme="light"]{')[1].split('}')[0];
+    assert.ok(/--bg:#F7F5F0/.test(light), 'light must be the opt-in override');
+  });
+
+  test('the canvas is painted the nav colour so the iOS 26 strip is covered', () => {
+    // iOS 26 leaves a strip below the layout viewport that NOTHING inside the
+    // page can paint -- only the canvas, which takes its colour from <html>.
+    // Measured on-device: 186 device px of page background were showing.
+    assert.ok(/\bhtml\{background:var\(--card\)\}/.test(css),
+      'html must be painted --card, or the strip shows page background');
+    assert.ok(/min-height:100vh/.test(css),
+      'body must fill the viewport, or --card shows through on short screens');
+  });
+
   console.log('\nDesign token contrast (WCAG AA)');
 
   const lum = (hex) => {
@@ -1051,10 +1501,13 @@ module.exports = async function runModuleTests(test){
     return t;
   };
 
-  const rootBlock = css.split(':root{')[1].split('}')[0];
-  const darkBlock = (css.split('prefers-color-scheme: dark')[1] || '').split('@media')[0];
-  const light = parseTokens(rootBlock);
-  const dark  = Object.assign({}, light, parseTokens(darkBlock));
+  // v9.9 flipped the model: the bare :root IS dark (the shipped default), and
+  // light is an opt-in override on :root[data-theme="light"]. Both palettes
+  // are still checked -- shipping dark does not make the light one optional.
+  const rootBlock  = css.split(':root{')[1].split('}')[0];
+  const lightBlock = (css.split(':root[data-theme="light"]{')[1] || '').split('}')[0];
+  const dark  = parseTokens(rootBlock);
+  const light = Object.assign({}, dark, parseTokens(lightBlock));
 
   // [foreground, background, minimum, where it is used]
   const PAIRS = [
@@ -1092,7 +1545,10 @@ module.exports = async function runModuleTests(test){
   }
 
   test('no raw colors outside the token blocks (kid palette and tap-highlights excepted)', () => {
-    const body = css.replace(/:root\{[\s\S]*?\}/, '').replace(/@media \(prefers-color-scheme: dark\)\{[\s\S]*?\}\s*\}/, '');
+    // Strip BOTH token blocks -- the dark default and the light override.
+    const body = css
+      .replace(/:root\{[\s\S]*?\}/, '')
+      .replace(/:root\[data-theme="light"\]\{[\s\S]*?\}/, '');
     const raw = [];
     for(const m of body.matchAll(/[^{};]*(?:#[0-9A-Fa-f]{3,8}\b|rgba?\([^)]*\))[^;}]*/g)){
       if(!/tap-highlight/.test(m[0])) raw.push(m[0].trim().slice(0, 60));

@@ -21,7 +21,7 @@ const srv=http.createServer((q,r)=>{let p=q.url.split('?')[0]; if(p==='/')p='/in
   r.end(fs.readFileSync(f));});
 (async()=>{
   await new Promise(r=>srv.listen(8736,r));
-  const b=await chromium.launch();
+  const b=await chromium.launch(process.env.PW_EXE?{executablePath:process.env.PW_EXE}:{});
   const pg=await b.newPage({viewport:{width:393,height:852}});
   await pg.addInitScript(()=>localStorage.setItem('flyersnap',JSON.stringify({schemaVersion:4,
     events:[{id:'e1',title:'Recital',date:'2026-12-01',kind:'event',personIds:[],unread:false,deleted:false}],

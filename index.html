@@ -18,22 +18,23 @@
 <title>FlyerSnap</title>
 <style>
   :root{
-    /* Color tokens. EVERY color in the app lives here (or in the dark block
-       below) -- nothing outside :root may name a raw color. Text/link colors
-       use --accent / --red-accent / --amber-accent so dark mode can brighten
-       them without touching the filled surfaces (--green, --red, --amber). */
-    --green:#2D5A4A; --accent:#2D5A4A; --green-lt:#E4EEE9; --green-line:#CBDDD2;
-    --red:#C0392B; --red-accent:#C0392B; --red-lt:#FDEBEA;
-    --amber:#B45309; --amber-accent:#B45309;
-    --bg:#F7F5F0; --card:#fff; --card-edge:transparent; --divider:#EEF2EF;
-    --ink:#1E2B26; --muted:#4A5B53; --faint:#637169; --line:#D5DDD8;
-    --placeholder:#7C9188; --on-accent:#fff; --overlay:rgba(0,0,0,.3);
-    --on-accent-press:rgba(255,255,255,.15);
-    --shadow-card:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
-    --shadow-near:0 1px 2px rgba(30,43,38,.05), 0 4px 14px rgba(30,43,38,.09);
-    --shadow-float:0 3px 10px rgba(0,0,0,.2);
-    --shadow-nav:0 -4px 12px rgba(0,0,0,.06);
-    --shadow-sheet:0 -2px 12px rgba(0,0,0,.12);
+    /* DARK -- the shipped default. True dark green-tinted neutrals, not an
+       inversion. Fills keep their weight; text accents brighten to hold WCAG
+       AA. Cards trade shadows for a 1px edge, the standard dark-elevation
+       cue. EVERY color in the app lives here or in the light block below --
+       nothing elsewhere may name a raw color, and a test enforces that. */
+    --green:#2F5D4C; --accent:#9CC9B4; --green-lt:#24382F; --green-line:#3C574B;
+    --red:#C0392B; --red-accent:#F0A091; --red-lt:#3B211D;
+    --amber:#B45309; --amber-accent:#E5A163;
+    --bg:#131715; --card:#1C2320; --card-edge:#2A332E; --divider:#2A332E;
+    --ink:#E9EDEA; --muted:#AEBAB3; --faint:#93A099; --line:#323D37;
+    --placeholder:#66756D; --on-accent:#fff; --overlay:rgba(0,0,0,.55);
+    --on-accent-press:rgba(255,255,255,.18);
+    --shadow-card:0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.35);
+    --shadow-near:0 1px 2px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.4);
+    --shadow-float:0 3px 12px rgba(0,0,0,.55);
+    --shadow-nav:0 -4px 12px rgba(0,0,0,.45);
+    --shadow-sheet:0 -2px 16px rgba(0,0,0,.55);
 
     /* Type scale. Five steps instead of twelve ad-hoc sizes. Body sits at 16px,
        the mobile minimum in Apple HIG (17pt) and Material (16sp). */
@@ -49,26 +50,28 @@
 
     /* WCAG 2.5.8 floor is 24px; 44px is the Apple HIG / WCAG 2.5.5 AAA target. */
     --tap:44px;
+
+    /* Tell the browser which way round this is, so form controls, scrollbars
+       and the like render in the matching scheme without extra CSS. */
+    color-scheme: dark;
   }
-  /* Dark theme: true dark green-tinted neutrals, not an inversion. Fills keep
-     their weight; text accents brighten to hold WCAG AA (the contrast test in
-     tests-modules.js checks every pair in BOTH themes). Cards trade shadows
-     for a 1px edge, the standard dark-elevation cue. */
-  @media (prefers-color-scheme: dark){
-    :root{
-      --green:#2F5D4C; --accent:#9CC9B4; --green-lt:#24382F; --green-line:#3C574B;
-      --red:#C0392B; --red-accent:#F0A091; --red-lt:#3B211D;
-      --amber:#B45309; --amber-accent:#E5A163;
-      --bg:#131715; --card:#1C2320; --card-edge:#2A332E; --divider:#2A332E;
-      --ink:#E9EDEA; --muted:#AEBAB3; --faint:#93A099; --line:#323D37;
-      --placeholder:#66756D; --on-accent:#fff; --overlay:rgba(0,0,0,.55);
-      --on-accent-press:rgba(255,255,255,.18);
-      --shadow-card:0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.35);
-      --shadow-near:0 1px 2px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.4);
-      --shadow-float:0 3px 12px rgba(0,0,0,.55);
-      --shadow-nav:0 -4px 12px rgba(0,0,0,.45);
-      --shadow-sheet:0 -2px 16px rgba(0,0,0,.55);
-    }
+  /* LIGHT -- opt in, either by choosing it or by choosing "match my phone"
+     while the phone is in light mode. Only the colors change; the type scale,
+     spacing and tap tokens above are shared. */
+  :root[data-theme="light"]{
+    --green:#2D5A4A; --accent:#2D5A4A; --green-lt:#E4EEE9; --green-line:#CBDDD2;
+    --red:#C0392B; --red-accent:#C0392B; --red-lt:#FDEBEA;
+    --amber:#B45309; --amber-accent:#B45309;
+    --bg:#F7F5F0; --card:#fff; --card-edge:transparent; --divider:#EEF2EF;
+    --ink:#1E2B26; --muted:#4A5B53; --faint:#637169; --line:#D5DDD8;
+    --placeholder:#7C9188; --on-accent:#fff; --overlay:rgba(0,0,0,.3);
+    --on-accent-press:rgba(255,255,255,.15);
+    --shadow-card:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
+    --shadow-near:0 1px 2px rgba(30,43,38,.05), 0 4px 14px rgba(30,43,38,.09);
+    --shadow-float:0 3px 10px rgba(0,0,0,.2);
+    --shadow-nav:0 -4px 12px rgba(0,0,0,.06);
+    --shadow-sheet:0 -2px 12px rgba(0,0,0,.12);
+    color-scheme: light;
   }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   /* Nothing in the app showed focus before -- switch-control and keyboard users
@@ -80,8 +83,17 @@
   @media (prefers-reduced-motion: reduce){
     *{animation-duration:.01ms !important;transition-duration:.01ms !important}
   }
+  /* iOS 26 leaves a strip below the layout viewport in an installed web app
+     (WebKit 158055568). Nothing inside the page can paint there -- only the
+     CANVAS background does, and the canvas takes its colour from <html>.
+     So html is painted the NAV colour, and body keeps the page colour and is
+     forced to fill the viewport so it always covers everything above the
+     strip. Result: the exposed strip reads as part of the tab bar instead of
+     a gap under it, on any device, in either theme. */
+  html{background:var(--card)}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
     background:var(--bg);color:var(--ink);font-size:var(--t-body);line-height:1.5;
+    min-height:100vh;
     padding-top:env(safe-area-inset-top);padding-bottom:calc(88px + env(safe-area-inset-bottom))}
   header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
     font-weight:800;font-size:19px;letter-spacing:-.01em;z-index:10;display:flex;align-items:center;gap:10px;
@@ -108,7 +120,9 @@
      bottom-fixed bar. Extend the nav's white downward to cover any such gap;
      when the viewport is sized correctly this paints off-screen and is
      invisible. */
-  nav::after{content:'';position:absolute;top:100%;left:0;right:0;height:120px;background:var(--card)}
+  /* (The old nav::after cover lived here. It could not work: the strip iOS 26
+     leaves exposed is OUTSIDE the layout viewport, and only the canvas
+     background paints there. Replaced by the html/body split above.) */
   .card{background:var(--card);border:1px solid var(--card-edge);border-radius:14px;padding:var(--s4);margin-bottom:var(--s3);
     box-shadow:var(--shadow-card);
     transition:transform .1s ease, box-shadow .1s ease}
@@ -176,10 +190,35 @@
     padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
   textarea{min-height:90px;resize:vertical}
   .formrow{display:flex;gap:8px;margin-bottom:10px}
+  /* Two-up only. Three flex:1 columns on a 393px screen leave ~116px each,
+     which is too narrow for these labels (they wrap and break alignment) and
+     too narrow for a native time input (it clips). Baymard's tested failure:
+     a field that cannot show its own value cannot be checked by the user. */
+  .fieldpair{display:flex;gap:var(--s3);margin-bottom:var(--s3)}
+  .fieldpair > *{flex:1;min-width:0}
+  /* Inline validation, next to the field it is about (NN/g). */
+  /* Sits directly under its field. No negative margin: the inputs carry no
+     bottom margin of their own, so pulling up collides with the border. */
+  .fielderr{display:block;font-size:var(--t-sm);font-weight:600;color:var(--red-accent);
+    margin:var(--s2) 0 0;line-height:1.4}
+  input.bad,textarea.bad{border-color:var(--red-accent);border-width:2px}
+  /* Form screens need the last control to clear the tab bar with room to
+     spare -- the Save button was being clipped by it. */
+  main.isform{padding-bottom:120px}
+  textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:12px;font-size:var(--t-body);font-family:inherit;color:var(--ink)}
   /* Now a real <label for>, which is inline by default -- keep it block so
      the layout is identical to the <div> it replaced. */
-  .label{display:block;font-size:var(--t-cap);font-weight:700;color:var(--muted);margin:var(--s4) 0 var(--s2);
-    text-transform:uppercase;letter-spacing:.06em}
+  .label{display:block;font-size:var(--t-sm);font-weight:700;color:var(--ink);
+    margin:var(--s4) 0 var(--s2)}
+  /* "(optional)" is a modifier, not part of the name -- GOV.UK marks optional
+     fields rather than required ones, so this appears often and must not
+     shout. */
+  .label .opt{font-weight:600;color:var(--faint)}
+  /* Read-only metadata shown inside a form. Deliberately NOT .label, which
+     would make it read as an editable field. */
+  .metalabel{display:block;font-size:var(--t-cap);font-weight:700;color:var(--faint);
+    margin:var(--s4) 0 var(--s1);text-transform:uppercase;letter-spacing:.06em}
   .empty{text-align:center;padding:44px 24px 40px;color:var(--muted)}
   /* Empty-state mark: large, quiet, unmistakably the same family as the
      controls. Tinted surface rather than a heavy outline so it recedes. */
@@ -193,6 +232,11 @@
   .empty .eb{font-size:var(--t-body);line-height:1.6;max-width:34ch;margin:0 auto}
   .sect{font-size:var(--t-lg);font-weight:800;margin:var(--s6) 0 var(--s2);letter-spacing:-.02em}
   .help{font-size:var(--t-sm);color:var(--muted);line-height:1.55;margin-bottom:var(--s3)}
+  /* A command the user is meant to type. break-all rather than overflow:
+     a wrapped command can still be read; a clipped one cannot. */
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em;
+    background:var(--bg);border:1px solid var(--line);border-radius:6px;
+    padding:1px 5px;word-break:break-all}
   .filterbar{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch}
   .balance{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid;
     border-radius:16px;padding:6px 12px;font-size:13px;font-weight:700;white-space:nowrap}
@@ -269,6 +313,22 @@
     justify-content:center;border-radius:10px;padding:0}
   .headerbtn .ico{width:22px;height:22px;margin:0}
   .headerbtn:active{background:var(--on-accent-press)}
+  /* Ask composer. Pinned directly above the tab bar, the way every messaging
+     UI does it: the input must stay reachable no matter how long the
+     conversation gets, and it must not drift into the middle of an empty
+     screen. 54px is the measured nav height. */
+  .composer{position:fixed;left:0;right:0;bottom:calc(54px + env(safe-area-inset-bottom));
+    background:var(--bg);border-top:1px solid var(--line);z-index:20;
+    padding:var(--s2) var(--s4);display:flex;gap:var(--s2);
+    max-width:640px;margin:0 auto}
+  .composer input{flex:1}
+  .composer .btn{width:auto;flex-shrink:0}
+  /* Room so the last message is never hidden behind the composer. */
+  main.hascomposer{padding-bottom:96px}
+  /* Suggestions as chips rather than six full-width buttons -- lighter, and
+     they wrap instead of pushing the input off the screen. */
+  .suggest{display:flex;flex-wrap:wrap;gap:var(--s2);margin-bottom:var(--s3)}
+  .suggest .chip{margin:0}
 </style>
 </head>
 <body>
@@ -328,6 +388,22 @@
 <input type="file" id="fImport" aria-label="Restore from a backup file" accept="application/json" hidden>
 
 <script>'use strict';
+// Paint the theme before anything renders. Reads localStorage directly
+// because S does not exist yet, and a flash of the wrong palette on every
+// launch is exactly the kind of cheap-feeling detail this app is trying to
+// leave behind. Wrapped: a themeless app is worse than a mis-themed one.
+(function paintThemeEarly(){
+  try{
+    var raw = localStorage.getItem('flyersnap');
+    var pref = 'dark';
+    if(raw){ var s = JSON.parse(raw); if(s && s.settings && s.settings.theme) pref = s.settings.theme; }
+    var light = pref === 'light' ||
+      (pref === 'system' && window.matchMedia
+        && window.matchMedia('(prefers-color-scheme: light)').matches);
+    if(light) document.documentElement.setAttribute('data-theme', 'light');
+  }catch(e){ /* dark is the default; leaving the attribute off is correct */ }
+})();
+
 // ---------------------------------------------------------------------------
 // MODULES ARE INLINED HERE ON PURPOSE.
 //
@@ -594,11 +670,11 @@ let loadError = null;
 let storageWarned = false;
 
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
-  redemptions:[], lists:[], listItems:[],
+  redemptions:[], lists:[], listItems:[], ask:{ turns:[] }, aiLog:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
     aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true,
-    aiEnabled:true, dismissedConflicts:[] },
+    aiEnabled:true, dismissedConflicts:[], theme:'dark' },
   schemaVersion: SCHEMA_VERSION }; }
 // ============================================================
 // FlyerSnap PWA — single file, zero dependencies.
@@ -919,7 +995,13 @@ function findConflicts(events, todayISO, opts){
   for(const e of live){
     if(e.kind !== 'deadline') continue;
     if(e.date >= todayISO) continue;
-    if(e.exported || e.done) continue;            // already acted on
+    // `handled` is set by "Mark as handled" on the warning itself. Exported
+    // (added to the calendar) also counts, but it is a poor proxy on its own:
+    // a form can be submitted in real life without ever being exported, and
+    // before v9.9 the app had no way to hear that. (This line previously also
+    // checked `e.done`, a field NOTHING in the app ever set -- dead code that
+    // implied a concept that did not exist.)
+    if(e.exported || e.handled) continue;
     out.push({ type: 'missed-deadline', date: e.date, events: [e] });
   }
 
@@ -1567,6 +1649,348 @@ function describeIntent(route, resolved){
   }
 }
 
+/**
+ * Classify WITHOUT a model call when the wording makes it obvious.
+ *
+ * The router added a full round-trip in front of every answer -- ask a
+ * question and you waited for a classification call, then an answer call.
+ * That is the cost Anthropic warns about ("compounding error rates per extra
+ * LLM call"), and their own advice is that high-frequency, low-complexity
+ * work belongs in deterministic code.
+ *
+ * So the obvious cases are decided here, instantly and for free, and the
+ * model router is only consulted when this cannot tell. Deliberately
+ * CONSERVATIVE: it only ever short-circuits to an `answer` intent, never to
+ * anything that could change data. If it is not sure, it returns null and the
+ * model decides.
+ */
+function quickRoute(text){
+  const q = String(text || '').trim();
+  if(!q) return null;
+  const low = q.toLowerCase();
+
+  // Anything that smells like an instruction to change something goes to the
+  // model, so the safety checks in validateRoute still apply to it.
+  if(/\b(add|put|create|make|remove|delete|clear|set|schedule|book|open|go to|take me)\b/.test(low)) return null;
+
+  // "whats on the list" has no apostrophe and no question mark, and is still
+  // obviously a question. The optional 's covers what's/whats/wheres.
+  const isQuestion = /\?\s*$/.test(q) ||
+    /^(what|when|where|who|which|how)('?s)?\b/.test(low) ||
+    /^(is|are|do|does|did|can|will|any|anything|show|tell)\b/.test(low);
+  if(!isQuestion) return null;
+
+  const intent =
+    /\bchore|\bstar|\brout(ine|ines)\b/.test(low) ? 'ask_chores' :
+    /\blist\b|\blists\b|\bshopping|\bgrocer|\bcostco\b/.test(low) ? 'ask_lists' :
+    /\bneed(s)? doing\b|\bmiss(ing|ed)?\b|\bclash|\boverlap|\bbehind\b/.test(low) ? 'what_needs_doing' :
+    'ask_schedule';
+
+  const params = intent === 'what_needs_doing' ? {} : { question: q };
+  // Routed through the same validator as a model answer, so a short-circuit
+  // can never bypass a check the slow path applies.
+  return validateRoute({ intent, params, confidence: 0.95 });
+}
+
+/**
+ * Theme resolution.
+ *
+ * DARK IS THE DEFAULT (v9.9). The setting has three states, and only two of
+ * them are a colour:
+ *
+ *   'dark'   -> dark, always            (the default)
+ *   'light'  -> light, always
+ *   'system' -> whatever the phone says, and it follows along live
+ *
+ * CSS alone cannot express the third one -- a prefers-color-scheme media
+ * query has no way to mean "only when the user has not chosen". So the
+ * resolution happens here and lands on <html data-theme>, which is the only
+ * thing css/tokens.css looks at. That also keeps the light palette written
+ * once instead of duplicated into a media block, where it would drift.
+ *
+ * Pure and DOM-free below `applyTheme`, so the resolution rules are testable
+ * without a browser.
+ */
+
+const THEMES = ['dark', 'light', 'system'];
+const DEFAULT_THEME = 'dark';
+
+const THEME_LABELS = {
+  dark:   'Dark',
+  light:  'Light',
+  system: 'Match my phone',
+};
+
+/**
+ * The stored preference, defended against anything unexpected in a save file.
+ * An unknown value must not leave the app themeless.
+ */
+function themePref(settings){
+  const t = settings && settings.theme;
+  return THEMES.includes(t) ? t : DEFAULT_THEME;
+}
+
+/**
+ * Preference + what the phone reports -> the palette to actually paint.
+ * `systemPrefersLight` is passed in rather than read here, so this is pure.
+ */
+function resolveTheme(pref, systemPrefersLight){
+  const p = THEMES.includes(pref) ? pref : DEFAULT_THEME;
+  if(p === 'system') return systemPrefersLight ? 'light' : 'dark';
+  return p;
+}
+
+/** The browser-chrome colour for a resolved theme. Matches --green in tokens. */
+const THEME_META = { dark: '#2F5D4C', light: '#2D5A4A' };
+
+/**
+ * Conversation memory for the assistant.
+ *
+ * HAX G12 is "remember recent interactions", and until now Gordon forgot
+ * everything the moment the app was closed. It now persists until the user
+ * starts a new chat or clears it.
+ *
+ * Two things are deliberately separated, because conflating them is how a
+ * remembering assistant starts saying wrong things:
+ *
+ *  - WHAT IS SHOWN. The whole saved conversation, so the user sees continuity.
+ *  - WHAT IS SENT. Only the last couple of turns, and only from TODAY.
+ *
+ * The second rule is not fussiness. Every answer this assistant gives is
+ * relative to the date it was asked ("this week", "in 2 days", "tomorrow").
+ * Feeding yesterday's answer back in as context invites the model to repeat a
+ * claim that has since become false -- and a confidently stale date is exactly
+ * the failure this whole app exists to prevent. So a conversation that spans
+ * midnight stays visible, with a divider, but starts a fresh context.
+ *
+ * Pure: no DOM, no app state, no clock of its own.
+ */
+
+// Enough to scroll back through, small enough that it cannot bloat a save
+// file that iOS may evict if it grows. Storage here is a convenience; the
+// user's events are the thing that actually matters.
+const MAX_KEPT_TURNS = 20;
+
+// How many turns are ever sent as context. Kept small on purpose: every extra
+// turn widens what leaves the device on a follow-up, which is the same
+// discipline the question scoping already applies.
+const MAX_SENT_TURNS = 2;
+
+// A stored answer is for re-reading, not re-processing. Cap it so one long
+// reply cannot dominate the save file.
+const MAX_STORED_ANSWER = 1200;
+
+/** Strip a saved conversation down to what is worth keeping. */
+function trimConversation(turns){
+  return (turns || [])
+    .filter(t => t && typeof t.q === 'string' && typeof t.a === 'string')
+    .slice(-MAX_KEPT_TURNS)
+    .map(t => ({
+      q: String(t.q).slice(0, 500),
+      a: String(t.a).slice(0, MAX_STORED_ANSWER),
+      day: t.day || null,
+      domain: t.domain || 'events',
+      // Only the ids are kept: the cards are re-rendered from live events, so
+      // a saved copy would go stale the moment an event is edited.
+      cited: (t.cited || []).map(c => ({ id: c.id, line: String(c.line || '').slice(0, 200) })),
+      sourceNote: String(t.sourceNote || '').slice(0, 200),
+    }));
+}
+
+/** Was this turn asked on the given day? */
+function isSameDay(turn, todayISO){
+  return !!turn && turn.day === todayISO;
+}
+
+/**
+ * Where the "earlier" divider goes: the index of the first turn from today.
+ * -1 means every saved turn is from a previous day.
+ */
+function firstTurnOfToday(turns, todayISO){
+  return (turns || []).findIndex(t => isSameDay(t, todayISO));
+}
+
+/**
+ * The turns that may be sent to the model as context.
+ * Today's only, and at most MAX_SENT_TURNS of them.
+ */
+function contextTurns(turns, todayISO){
+  return (turns || [])
+    .filter(t => isSameDay(t, todayISO))
+    .slice(-MAX_SENT_TURNS)
+    .map(t => ({ q: t.q, a: t.a }));
+}
+
+/** True when the saved conversation is from before today. */
+function isCarriedOver(turns, todayISO){
+  const list = turns || [];
+  if(!list.length) return false;
+  return !list.some(t => isSameDay(t, todayISO));
+}
+
+/**
+ * AI call logging.
+ *
+ * Modelled on the OpenTelemetry GenAI semantic conventions, which are the
+ * vendor-neutral standard for what to record around a model call. Field names
+ * mirror the `gen_ai.*` namespace so the log means the same thing an engineer
+ * would expect it to mean:
+ *
+ *   op            gen_ai.operation.name   what was being done
+ *   provider      gen_ai.provider.name    anthropic | local
+ *   reqModel      gen_ai.request.model    what we asked for
+ *   resModel      gen_ai.response.model   what actually answered (can differ)
+ *   inTokens/out  gen_ai.usage.*_tokens
+ *   finish        gen_ai.response.finish_reasons
+ *   ms            gen_ai.client.operation.duration
+ *   errorType     error.type
+ *
+ * WHAT IS DELIBERATELY NOT LOGGED
+ *
+ * The conventions exclude prompt and completion bodies from standard
+ * attributes because they "routinely contain names, emails, account numbers,
+ * or proprietary business logic". That warning lands harder here than in most
+ * apps: the prompts ARE children's names, schools, addresses and schedules.
+ * So no prompt text, no answer text, and never the API key. `redact()` below
+ * is the last line of defence for error strings, which are the one place a
+ * provider can hand back something sensitive without being asked.
+ *
+ * Pure: no DOM, no app state, no clock of its own.
+ */
+
+const AI_LOG_MAX = 200;          // rolling window; oldest dropped first
+
+// Anything shaped like a key must never reach storage, a file, or a screen.
+const KEYISH = [
+  /sk-ant-[A-Za-z0-9_\-]+/g,            // Anthropic
+  /\bsk-[A-Za-z0-9]{20,}/g,             // OpenAI-style
+  /Bearer\s+[A-Za-z0-9._\-]+/gi,
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,   // addresses in errors
+];
+
+/** Strip credentials and addresses out of any string before it is stored. */
+function redact(text){
+  let s = String(text == null ? '' : text);
+  for(const re of KEYISH) s = s.replace(re, '[redacted]');
+  return s.slice(0, 400);
+}
+
+/**
+ * Classify a failure into a small, stable set.
+ *
+ * Free-text messages vary between providers and versions; a class does not.
+ * This is what makes "how often does the local model time out?" answerable.
+ */
+function classifyError(err, status){
+  const msg = String((err && err.message) || err || '').toLowerCase();
+  if(status === 401 || status === 403 || /unauthor|forbidden|invalid.*key|api key/.test(msg)) return 'auth';
+  if(status === 429 || /rate.?limit|too many requests|overloaded/.test(msg))                  return 'rate_limit';
+  if(status && status >= 500)                                                                 return 'provider_error';
+  if(/abort|timeout|timed out/.test(msg))                                                     return 'timeout';
+  if(/failed to fetch|networkerror|load failed|connection|unreachable|econnrefused/.test(msg))return 'network';
+  if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
+  if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
+  if(/unsupported_block/.test(msg))                                                           return 'unsupported_input';
+  if(status && status >= 400)                                                                 return 'request_rejected';
+  return 'unknown';
+}
+
+/** Build one log entry. Everything optional; nothing here can throw. */
+function makeEntry(e){
+  const v = e || {};
+  const entry = {
+    at: v.at || null,                     // ISO, injected so this stays pure
+    op: String(v.op || 'unknown'),
+    provider: String(v.provider || 'unknown'),
+    reqModel: v.reqModel ? String(v.reqModel) : null,
+    resModel: v.resModel ? String(v.resModel) : null,
+    ms: typeof v.ms === 'number' && isFinite(v.ms) ? Math.round(v.ms) : null,
+    ok: !!v.ok,
+    inTokens: typeof v.inTokens === 'number' ? v.inTokens : null,
+    outTokens: typeof v.outTokens === 'number' ? v.outTokens : null,
+    finish: v.finish ? String(v.finish).slice(0, 40) : null,
+    status: typeof v.status === 'number' ? v.status : null,
+    errorType: v.ok ? null : (v.errorType || 'unknown'),
+    // Redacted, and short. Enough to recognise a failure, never enough to
+    // leak a key or a child's name.
+    detail: v.ok ? null : redact(v.detail || ''),
+    fellBackTo: v.fellBackTo ? String(v.fellBackTo) : null,
+  };
+  return entry;
+}
+
+/** Append with a rolling cap. Returns a NEW array; never mutates the input. */
+function appendEntry(log, entry){
+  const next = (Array.isArray(log) ? log : []).concat([entry]);
+  return next.length > AI_LOG_MAX ? next.slice(next.length - AI_LOG_MAX) : next;
+}
+
+/**
+ * A short health summary — the thing worth reading first.
+ * Counts, failure rate, median latency, and which errors dominate.
+ */
+function summarize(log){
+  const rows = Array.isArray(log) ? log : [];
+  const ok = rows.filter(r => r.ok);
+  const bad = rows.filter(r => !r.ok);
+  const byType = {};
+  bad.forEach(r => { byType[r.errorType || 'unknown'] = (byType[r.errorType || 'unknown'] || 0) + 1; });
+  const times = ok.map(r => r.ms).filter(n => typeof n === 'number').sort((a, b) => a - b);
+  const median = times.length ? times[Math.floor(times.length / 2)] : null;
+  const slowest = times.length ? times[times.length - 1] : null;
+  return {
+    calls: rows.length,
+    ok: ok.length,
+    failed: bad.length,
+    failureRate: rows.length ? bad.length / rows.length : 0,
+    medianMs: median,
+    slowestMs: slowest,
+    byErrorType: byType,
+    fellBack: rows.filter(r => r.fellBackTo).length,
+    inTokens: ok.reduce((n, r) => n + (r.inTokens || 0), 0),
+    outTokens: ok.reduce((n, r) => n + (r.outTokens || 0), 0),
+  };
+}
+
+/**
+ * The file that leaves the phone.
+ *
+ * Contains the AI call log, the manually-reported problem log, and enough
+ * version context to interpret them. Deliberately does NOT contain events,
+ * chores, lists, notes or the API key -- a diagnostics file gets emailed and
+ * AirDropped around, and it should be safe to do that.
+ */
+function buildDiagnostics(state, meta){
+  const s = state || {};
+  const m = meta || {};
+  return {
+    kind: 'flyersnap-diagnostics',
+    version: 1,
+    generatedAt: m.now || null,
+    app: {
+      version: m.appVersion || null,
+      provider: m.provider || null,
+      model: m.model || null,
+      hasApiKey: !!(s.settings && s.settings.apiKey),   // whether, never what
+      aiEnabled: !(s.settings && s.settings.aiEnabled === false),
+      localBaseUrl: m.includeLocalUrl ? redact((s.settings || {}).localBaseUrl || '') : null,
+      userAgent: m.userAgent ? String(m.userAgent).slice(0, 200) : null,
+    },
+    counts: {
+      events: (s.events || []).length,
+      chores: (s.chores || []).length,
+      lists: (s.lists || []).length,
+    },
+    aiSummary: summarize(s.aiLog || []),
+    aiLog: (s.aiLog || []).slice(-AI_LOG_MAX),
+    // The manual side: problems reported by the app's own logProblem().
+    problems: (s.problems || []).map(p => ({
+      where: p.where, message: redact(p.message), detail: p.detail ? redact(p.detail) : null,
+      first: p.first, last: p.last, count: p.count, resolved: !!p.done,
+    })),
+  };
+}
+
 // ---------- State & storage ----------
 const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA'];
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1879,6 +2303,88 @@ const ASSISTANT_NAME = 'Gordon';
 
 function aiName(){ return ASSISTANT_NAME; }
 
+// ---------- AI call logging (see js/ailog.js) ----------
+// Field names follow the OpenTelemetry GenAI conventions so the log means
+// what an engineer would expect. Prompt and answer text are NEVER recorded:
+// in this app the prompts are children's names, schools and schedules.
+function recordAiCall(fields){
+  try{
+    S.aiLog = appendEntry(S.aiLog || [], makeEntry(
+      Object.assign({ at: new Date().toISOString() }, fields)));
+    save();
+  }catch(e){ /* logging must never break the thing it is logging about */ }
+}
+
+// Settings sections, split out of renderSettings when it crossed the size
+// heuristic the refactor tests enforce. Pure string builders, no state.
+function appearanceSection(){
+  return `<div class="sect">Appearance</div>
+    <div class="help">FlyerSnap ships dark. Change it whenever you like — the
+      choice sticks, and "match my phone" follows your phone's own setting.</div>
+    <div class="filterbar">
+      ${THEMES.map(t => `<span class="chip ${themePref(S.settings)===t?'on':''}"
+        role="button" tabindex="0"
+        onclick="setTheme('${t}')">${esc(THEME_LABELS[t])}</span>`).join('')}
+    </div>`;
+}
+
+function aiCapabilitySection(){
+  const riskLine = (a) => a.risk === RISK.DERIVE
+    ? 'Not AI — plain calculation, always on'
+    : a.risk === RISK.READ ? 'Reads only — changes nothing'
+    : 'Suggests only — you review before anything is saved';
+  return `<div class="sect">What ${aiName()} can and cannot do</div>
+    <div class="help">Every AI feature in the app, what it is for, and where it
+      falls down. Rendered from the same list the code uses, so it cannot drift
+      from what actually happens.</div>
+    ${AI_ACTIONS.map(a => `<div class="card">
+      <div class="row">
+        <div class="grow"><div class="title" style="font-size:15px">${esc(a.label)}</div>
+          <div class="meta" style="font-size:12px">${riskLine(a)}</div></div>
+      </div>
+      <div class="help" style="margin:8px 0 4px">${esc(a.can)}</div>
+      <div class="help" style="margin:0"><b>Limits:</b> ${esc(a.cannot)}</div>
+      ${a.risk !== RISK.DERIVE ? `<div class="meta" style="font-size:12px;margin-top:6px">
+        Without AI: ${esc(a.fallback)}</div>` : ''}
+    </div>`).join('')}
+    <div class="card row">
+      <div class="grow"><div class="title" style="font-size:15px">AI features</div>
+        <div class="meta">Turn these off and the app keeps working — every job above
+          still has a way to do it by hand.</div></div>
+      <button class="btn sm ${aiEnabled()?'':'alt'}" style="width:auto"
+        onclick="setAiEnabled(${aiEnabled()?'false':'true'})">${aiEnabled()?'On':'Off'}</button>
+    </div>`;
+}
+
+// ---------- Theme ----------
+function systemPrefersLight(){
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+}
+function applyTheme(){
+  const resolved = resolveTheme(themePref(S.settings), systemPrefersLight());
+  const root = document.documentElement;
+  if(resolved === 'light') root.setAttribute('data-theme', 'light');
+  else root.removeAttribute('data-theme');           // bare :root IS dark
+  // Keep the browser/status-bar chrome in step. One meta, updated here,
+  // rather than two media-scoped ones -- those cannot follow an explicit
+  // choice that disagrees with the phone.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute('content', THEME_META[resolved]);
+  return resolved;
+}
+function setTheme(pref){
+  S.settings.theme = THEMES.includes(pref) ? pref : DEFAULT_THEME;
+  save(); applyTheme(); render();
+  toast(THEME_LABELS[S.settings.theme]);
+}
+// "Match my phone" has to keep matching when the phone changes at sunset.
+if(window.matchMedia){
+  try{
+    window.matchMedia('(prefers-color-scheme: light)')
+      .addEventListener('change', () => { if(themePref(S.settings) === 'system'){ applyTheme(); render(); } });
+  }catch(e){ /* older WebKit: the choice still works, it just will not follow live */ }
+}
+
 // ---------- AI capability gate ----------
 // One switch (HAX G17). With AI off, every model-backed surface disappears
 // and the manual path for each still works -- the app stays a usable
@@ -1908,15 +2414,38 @@ function aiWorkingHint(){
   return ASSISTANT_NAME + ' is ' + lines[Math.floor(Math.random()*lines.length)];
 }
 
+// One source of truth for the build stamp. The footer and the diagnostics
+// file both read it, so a bug report can never name a build that is not the
+// one that produced it.
+const APP_VERSION = 'v9.13';
+const APP_TAGLINE = 'AI call logging';
+
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
-async function callAI(contentBlocks, maxTokens, system){
+// Which task the current call belongs to (gen_ai.operation.name). Set once at
+// the top of callAI and read by both transports, so a log line says WHAT was
+// being attempted -- "extract.photo failed" rather than "a call failed".
+let aiOp = 'unknown';
+
+async function callAI(contentBlocks, maxTokens, system, op){
+  aiOp = op || 'unknown';
   if(aiProvider() === 'local'){
+    // Timed at this boundary rather than inside callLocalModel so that a
+    // local millisecond and an Anthropic millisecond mean the same thing.
+    const started = Date.now();
     try{
-      return await callLocalModel(contentBlocks, maxTokens, system);
+      const out = await callLocalModel(contentBlocks, maxTokens, system);
+      recordAiCall({ op: aiOp, provider:'local', reqModel: S.settings.localModel || null,
+        ok:true, ms: Date.now() - started });
+      return out;
     }catch(err){
       const unsupported = /^UNSUPPORTED_BLOCK:/.test(err.message);
+      const localFail = { op: aiOp, provider:'local',
+        reqModel: S.settings.localModel || null, ok:false, ms: Date.now() - started,
+        errorType: unsupported ? 'unsupported_input' : classifyError(err),
+        detail: err && err.message };
       if(S.settings.aiFallback){
+        recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
         toast(unsupported ? 'PDFs need Anthropic — using it for this one'
                           : 'Local model unavailable — using Anthropic');
         logProblem('Local model', unsupported
@@ -1924,6 +2453,7 @@ async function callAI(contentBlocks, maxTokens, system){
           : 'Fell back to Anthropic: ' + err.message, aiModelName());
         return await callClaude(contentBlocks, maxTokens, system);
       }
+      recordAiCall(localFail);
       if(unsupported){
         logProblem('Local model', 'Cannot read PDFs or fetched links', aiModelName());
         throw new Error('The local model cannot read PDFs or fetched links — only photos and text.\n\nEither photograph the page instead, or turn on "Fall back to Anthropic" in Settings.');
@@ -2070,8 +2600,15 @@ async function callLocalModel(contentBlocks, maxTokens, system){
 }
 
 async function callClaude(contentBlocks, maxTokens, system){
-  if(!S.settings.apiKey) throw new Error('NO_API_KEY');
-  const res = await fetch(API_URL, {
+  if(!S.settings.apiKey){
+    recordAiCall({ op: aiOp, provider:'anthropic', reqModel: MODEL, ok:false,
+      errorType:'no_api_key', detail:'No API key saved' });
+    throw new Error('NO_API_KEY');
+  }
+  const started = Date.now();
+  let res;
+  try{
+    res = await fetch(API_URL, {
     method:'POST',
     headers:{
       'Content-Type':'application/json',
@@ -2083,12 +2620,26 @@ async function callClaude(contentBlocks, maxTokens, system){
       { model: MODEL, max_tokens: maxTokens||2000,
         messages:[{role:'user', content: contentBlocks}] },
       system ? { system: SECRETARY_PERSONA + '\n\n' + system } : {}))
-  });
+    });
+  }catch(err){
+    // A thrown fetch is the network layer: no status, no body.
+    recordAiCall({ op: aiOp, provider:'anthropic', reqModel: MODEL, ok:false,
+      ms: Date.now() - started, errorType: classifyError(err), detail: err && err.message });
+    throw err;
+  }
   if(!res.ok){
     const body = await res.text();
+    recordAiCall({ op: aiOp, provider:'anthropic', reqModel: MODEL, ok:false,
+      ms: Date.now() - started, status: res.status,
+      errorType: classifyError(null, res.status), detail: body.slice(0, 300) });
     throw new Error('API error '+res.status+': '+body.slice(0,200));
   }
   const data = await res.json();
+  const u = data.usage || {};
+  recordAiCall({ op: aiOp, provider:'anthropic', reqModel: MODEL,
+    resModel: data.model || null, ok:true, ms: Date.now() - started,
+    inTokens: u.input_tokens, outTokens: u.output_tokens,
+    finish: data.stop_reason || null });
   return (data.content||[]).map(b=>b.type==='text'?b.text:'').join('\n')
     .replace(/```json|```/g,'').trim();
 }
@@ -2138,7 +2689,8 @@ async function extractAny(base64, mediaType, isPdf){
     ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
     : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
   const text = await callAI([block,
-    {type:'text', text: CLASSIFY_PROMPT.replace('{TODAY}', todayISO())}], 3000);
+    {type:'text', text: CLASSIFY_PROMPT.replace('{TODAY}', todayISO())}], 3000,
+    undefined, isPdf ? 'classify.pdf' : 'classify.image');
   let out;
   try{ out = JSON.parse(text); }catch(e){ throw new Error('Could not read that. Try a clearer photo.'); }
   if(out && out.type === 'recipe' && out.recipe && out.recipe.title){
@@ -2154,7 +2706,8 @@ async function extractEvents(base64, mediaType, isPdf){
   const block = isPdf
     ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:base64}}
     : {type:'image', source:{type:'base64', media_type:mediaType, data:base64}};
-  const text = await callAI(withContext([block]), 3000, GROUNDING_EVENTS);
+  const text = await callAI(withContext([block]), 3000, GROUNDING_EVENTS,
+    isPdf ? 'extract.pdf' : 'extract.image');
   return parseExtractedEvents(text);
 }
 
@@ -2162,7 +2715,7 @@ async function extractEventsFromUrl(url){
   // Anthropic's servers fetch the URL — no browser CORS, no proxy needed.
   // Works cleanly for PDFs; HTML pages behind a login will return an error we translate below.
   const block = {type:'document', source:{type:'url', url}};
-  const text = await callAI(withContext([block]), 3000, GROUNDING_EVENTS);
+  const text = await callAI(withContext([block]), 3000, GROUNDING_EVENTS, 'extract.url');
   return parseExtractedEvents(text);
 }
 
@@ -2189,7 +2742,7 @@ ${many ? 'Combine every page into one complete recipe. Do not repeat ingredients
 If it is not a recipe, respond with {"title":null}.`;
   const blocks = images.map(im => ({type:'image', source:{type:'base64', media_type:im.mediaType, data:im.base64}}));
   blocks.push({type:'text', text:prompt});
-  const text = await callAI(blocks, 2000, GROUNDING_RECIPE);
+  const text = await callAI(blocks, 2000, GROUNDING_RECIPE, 'extract.recipe');
   const r = JSON.parse(text);
   if(!r || !r.title) throw new Error('That does not look like a recipe.');
   return r;
@@ -2555,6 +3108,8 @@ function render(){
     meals:renderMeals, settings:renderSettings};
   const changedScreen = key !== lastViewKey;
   m.classList.remove('enter');
+  m.classList.remove('hascomposer');   // only the Ask screen has a composer
+  m.classList.remove('isform');        // only form screens need the extra clearance
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
   if(changedScreen){
     // Retrigger the animation. Only on a genuine navigation -- animating every
@@ -2908,7 +3463,38 @@ function conflictBanner(){
       </div>
       <button class="linkbtn" aria-label="Dismiss this warning"
         onclick="event.stopPropagation();dismissConflict('${esc(conflictKey(c))}')">${ico('x')}</button>
-    </div></div>`;
+    </div>
+    <div class="actionrow" style="margin:10px 0 0">${conflictActions(c)}</div>
+    </div>`;
+}
+
+// HAX G9 is "support efficient correction": make it easy to FIX the thing,
+// not just to hide it. The first version of this banner only had a dismiss,
+// which trains you to bury problems instead of dealing with them -- and the
+// event itself was buried under "Past events", which made acting on it a
+// chore. These are the actions that actually resolve a warning.
+function conflictActions(c){
+  const e = c.events[0];
+  if(c.type === 'missed-deadline'){
+    return `<button class="btn sm" onclick="markHandled('${esc(e.id)}')">${ico('check-circle')}Mark as handled</button>
+      <button class="btn alt sm" onclick="eventActions('${esc(e.id)}')">${ico('edit')}Open it</button>`;
+  }
+  // Overlaps and busy days: there is nothing to "resolve", so just get the
+  // user to the events involved.
+  return c.events.slice(0, 2).map(ev =>
+    `<button class="btn alt sm" onclick="eventActions('${esc(ev.id)}')">${esc(ev.title || 'Untitled')}</button>`
+  ).join('');
+}
+
+// The real field, set here and read by findConflicts. Undoable, like every
+// other state change in the app.
+function markHandled(id){
+  const e = S.events.find(x => x.id === id);
+  if(!e) return;
+  e.handled = true; save(); render();
+  toast('Marked as handled', { label:'Undo', fn:() => {
+    e.handled = false; save(); render(); toast('Put back');
+  }});
 }
 
 // HAX G8: support efficient dismissal -- one tap, and it stays dismissed.
@@ -2922,22 +3508,41 @@ function dismissConflict(key){
 // A conversation, not a single shot. Turns are kept so a follow-up can say
 // "and Braelyn?" -- HAX G12, remember recent interactions. Only the last
 // couple are ever SENT (see HISTORY_TURNS); the rest stay on the phone.
-let askState = { turns:[], busy:false, error:'', draft:'' };
+// Restored from the save file, so Gordon picks up where you left off.
+// Trimmed on the way in as well as out: a save file is untrusted input like
+// any other, and a malformed turn must not break the screen.
+let askState = { turns: trimConversation((S.ask && S.ask.turns) || []),
+                 busy:false, error:'', draft:'' };
+
+// Persist after every exchange. Kept out of the render path so a re-render
+// never writes.
+function saveConversation(){
+  S.ask = S.ask || { turns: [] };
+  S.ask.turns = trimConversation(askState.turns);
+  save();
+}
 
 function renderAsk(m){
   setHeader('Ask ' + aiName(), true);
+  // The composer is fixed above the nav; without this the last message hides
+  // behind it.
+  m.classList.add('hascomposer');
   const a = askState;
   // Generated from the intent registry so the app can never suggest something
   // it cannot do, nor hide something it can (NN/g discoverability).
   const suggestions = assistantCapabilityChips();
   m.innerHTML = `
-    <div class="help" style="margin-top:0">
-      ${esc(aiName())} answers from what is already in this app — your events,
-      chores and lists. It cannot see the internet and it changes nothing.
-      Every answer shows what it was based on.
-    </div>
+    ${!a.turns.length ? `<div class="help" style="margin-top:0">
+      Answers from what is already in this app — never the internet — and shows
+      what each answer was based on. It cannot change anything on its own.
+    </div>` : ''}
 
+    ${(() => { const i = firstTurnOfToday(a.turns, todayISO());
+        return (a.turns.length && i !== 0)
+          ? `<div class="bucket">Earlier<span class="bucket-n">${i < 0 ? a.turns.length : i}</span></div>` : ''; })()}
     ${a.turns.map((t, i) => `
+      ${i === firstTurnOfToday(a.turns, todayISO()) && i > 0
+        ? `<div class="bucket">Today<span class="bucket-n">${a.turns.length - i}</span></div>` : ''}
       <div class="card" style="background:var(--green-lt);border:none">
         <div style="font-weight:700">${esc(t.q)}</div>
       </div>
@@ -2960,7 +3565,12 @@ function renderAsk(m){
     `).join('')}
 
     ${a.busy ? `<div class="spin" style="padding:24px"><div class="spinner"></div>
-      <div class="meta">${esc(aiName())} is looking…</div></div>` : ''}
+      <div class="meta">${aiProvider() === 'local'
+        ? `Trying your local model (${esc(S.settings.localModel || 'local')})…`
+        : `Asking ${esc(aiModelName())}…`}</div>
+      ${aiProvider() === 'local' && S.settings.aiFallback ? `<div class="help" style="margin:0">
+        If your desktop is asleep this waits for it to time out, then uses Anthropic.</div>` : ''}
+      </div>` : ''}
 
     ${a.error ? `<div class="card" style="border-left:5px solid var(--red-accent)">
       <div class="title" style="font-size:15px">Could not answer that</div>
@@ -2969,20 +3579,23 @@ function renderAsk(m){
         Events list, its search, and the person filters are all unaffected.</div>
     </div>` : ''}
 
-    ${!a.turns.length && !a.busy ? `<div class="label">Try one of these</div>` +
-      suggestions.map(s => `<button class="btn alt" style="margin-bottom:8px;text-align:left"
-        onclick="askThis('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</button>`).join('') : ''}
+    ${!a.turns.length && !a.busy ? `<div class="label">Try one of these</div>
+      <div class="suggest">${suggestions.map(s => `<span class="chip" role="button" tabindex="0"
+        onclick="askThis('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join('')}</div>` : ''}
 
-    <div class="formrow" style="margin-top:12px">
+    <div class="composer">
       <input type="text" id="askQ" aria-label="Your question"
         placeholder="${a.turns.length ? 'Ask a follow-up…' : 'Ask about events, chores or lists…'}"
         value="${esc(a.draft)}" oninput="askState.draft=this.value"
         onkeydown="if(event.key==='Enter')runAsk()">
       <button class="btn sm" onclick="runAsk()" ${a.busy?'disabled':''}>Ask</button>
     </div>
+    ${isCarriedOver(a.turns, todayISO()) ? `<div class="help" style="text-align:center">
+      That was an earlier day. Gordon can still see it, but starts fresh from here —
+      answers about "this week" change when the week does.</div>` : ''}
     ${a.turns.length ? `<div style="text-align:center">
-      <button class="linkbtn" onclick="clearAsk()">Start again</button></div>` : ''}
-    <div style="height:60px"></div>`;
+      <button class="linkbtn" onclick="clearAsk()">${ico('plus')}New chat</button></div>` : ''}
+`;
 }
 
 // Render whatever a citation pointed at, in the shape that screen already uses.
@@ -2998,7 +3611,13 @@ function askSourceCard(domain, c){
 }
 
 function askThis(q){ runAsk(q); }
-function clearAsk(){ askState = { turns:[], busy:false, error:'', draft:'' }; render(); }
+function clearAsk(){
+  askState = { turns:[], busy:false, error:'', draft:'' };
+  pendingAction = null;
+  S.ask = { turns: [] };
+  save(); render();
+  toast('Started a new chat');
+}
 
 // `explicit` is passed when a suggestion chip is tapped. Without it the chips
 // were dead: they set askState.draft, but this read the (empty) input box and
@@ -3012,26 +3631,35 @@ async function runAsk(explicit){
   askState.busy = true; askState.error = ''; pendingAction = null;
   render();
   try{
-    // ONE model call: classify. It does not act, and it does not loop.
-    const routeText = await callAI(
-      [{ type:'text', text:`Today is ${todayISO()}.\n\nSentence: ${q}` }],
-      300, buildRouterPrompt());
-    const route = routeFromText(cleanModelText(routeText));
+    // Classify for free when the wording is obvious. Routing used to add a
+    // whole round-trip in front of every answer, which is why asking a simple
+    // question felt slow -- and Anthropic's own guidance is that
+    // high-frequency, low-complexity work belongs in deterministic code.
+    // quickRoute only ever short-circuits to a read-only intent; anything
+    // that could change data still goes to the model and through every check.
+    let route = quickRoute(q);
+    if(!route){
+      const routeText = await callAI(
+        [{ type:'text', text:`Today is ${todayISO()}.\n\nSentence: ${q}` }],
+        300, buildRouterPrompt(), 'ask.route');
+      route = routeFromText(cleanModelText(routeText));
+    }
 
     if(!route.ok){
       // A routing failure becomes capability disclosure rather than a dead
       // end -- HAX G1, and PAIR's "safe, boring" failure.
-      askState.turns.push({ q, domain:'events', cited:[],
+      askState.turns.push({ q, domain:'events', cited:[], day: todayISO(),
         a: `I could not turn that into something I can do (${route.reason}).`,
         sourceNote: 'Try one of the suggestions below.' });
     } else {
       const out = await performRoute(route, q);
-      askState.turns.push({ q, a: out.answer, domain: out.domain,
+      askState.turns.push({ q, a: out.answer, domain: out.domain, day: todayISO(),
         cited: out.cited || [], sourceNote: out.sourceNote || '',
         confirm: !!out.confirm, choices: out.choices || null,
         intentTitle: (intentById(route.intent) || {}).title || '' });
     }
     askState.busy = false;
+    saveConversation();
   }catch(err){
     askState.busy = false;
     askState.error = err && err.message === 'NO_API_KEY'
@@ -3059,7 +3687,7 @@ function assistantCapabilityChips(){
   // cannot advertise something the app cannot do.
   return INTENTS.filter(i => (i.examples || []).length)
     .map(i => i.examples[0])
-    .slice(0, 6);
+    .slice(0, 4);   // four is enough to teach the shape; six is a wall
 }
 
 /** Turn a validated route into something that happened. */
@@ -3082,9 +3710,12 @@ async function performRoute(route, question){
     const built = buildAskPrompt(question, scope, allPeople(), todayISO(), {
       domain, chores:S.chores, balances:starBalances(),
       lists:S.lists, listItems:S.listItems,
-      history: askState.turns.map(t => ({ q:t.q, a:t.a })),
+      // Today's turns only. Yesterday's answer said "in 2 days" about a date
+      // that has since moved; replaying it invites the model to repeat a
+      // claim that is now false.
+      history: contextTurns(askState.turns, todayISO()),
     });
-    const text = await callAI([{ type:'text', text: built.user }], 700, built.system);
+    const text = await callAI([{ type:'text', text: built.user }], 700, built.system, 'ask.answer');
     const answer = cleanModelText(text).trim();
     return { answer, cited: citedEvents(answer, built.refs), domain,
       sourceNote: domain === 'events'
@@ -3559,7 +4190,7 @@ async function extractFromEmailPayload(payload){
       const blocks = emailBlocks(payload, true);
       blocks.push({ type:'text', text: MULTI_SOURCE_NOTE });
       blocks.push({ type:'text', text: eventPrompt() });
-      const text = await callAI(blocks, 8000, GROUNDING_EVENTS);
+      const text = await callAI(blocks, 8000, GROUNDING_EVENTS, 'email.combined');
       const events = parseExtractedEvents(text) || [];
       if(events.length) return { events, problems };
       problems.push('combined read found nothing; trying each part separately');
@@ -3575,7 +4206,7 @@ async function extractFromEmailPayload(payload){
       const text = await callAI([
         {type:'text', text:'Email from ' + (payload.from||'unknown') +
           '\nSubject: ' + (payload.subject||'') + '\n\n' + payload.text},
-        {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS);
+        {type:'text', text:eventPrompt()}], 8000, GROUNDING_EVENTS, 'email.body');
       (parseExtractedEvents(text)||[]).forEach(e => found.push(e));
     }catch(err){ problems.push('body text: ' + err.message); }
   }
@@ -3599,7 +4230,7 @@ async function extractFromEmailPayload(payload){
           '\n\nExtract from the ATTACHMENT above. Use the email only for context when writing notes.'});
       }
       blocks.push({type:'text', text:eventPrompt()});
-      const text = await callAI(blocks, 8000, GROUNDING_EVENTS);
+      const text = await callAI(blocks, 8000, GROUNDING_EVENTS, 'email.attachment');
       (parseExtractedEvents(text)||[]).forEach(e => found.push(e));
     }catch(err){
       problems.push((att.name || 'attachment') + ': ' + err.message);
@@ -4380,44 +5011,89 @@ function openPendingEdit(i){
   sub('eventEdit');
 }
 function renderEventEdit(m){
+  // F5: every other screen gets its title through setHeader, which renders an
+  // <h1>. This one wrote a bare text node, leaving the screen with no heading
+  // at all.
   document.getElementById('header').innerHTML =
-    `<button class="back" aria-label="Back" onclick="cancelEventEdit()">${ico('chevron-left')}</button>Edit Event`;
+    `<button class="back" aria-label="Back" onclick="cancelEventEdit()">${ico('chevron-left')}</button>`
+    + `<h1 class="htitle">Edit Event</h1>`;
+  m.classList.add('isform');            // F3: room for Save to clear the tab bar
   const f = eventForm;
-  const kids = allPeople();
+  const err = f.errors || {};
+  const bad = (k) => err[k] ? ' class="bad"' : '';
+  const errLine = (k) => err[k] ? `<span class="fielderr" id="err-${k}">${esc(err[k])}</span>` : '';
+  const aria = (k) => err[k] ? ` aria-invalid="true" aria-describedby="err-${k}"` : '';
+
   m.innerHTML = `
     <label class="label" style="margin-top:0" for="efTitle">Title</label>
-    <input type="text" id="efTitle" value="${esc(f.title)}">
-    <div class="formrow" style="margin-top:10px;margin-bottom:0">
-      <div style="flex:1"><label class="label" style="margin-top:0" for="efDate">Date</label>
-        <input type="date" id="efDate" value="${esc(f.date)}"></div>
-      <div style="flex:1"><label class="label" style="margin-top:0" for="efTime">Start (optional)</label>
+    <input type="text" id="efTitle"${bad('title')}${aria('title')} value="${esc(f.title)}">
+    ${errLine('title')}
+
+    <label class="label" for="efDate">Date</label>
+    <input type="date" id="efDate"${bad('date')}${aria('date')} value="${esc(f.date)}">
+    ${errLine('date')}
+
+    <div class="label" id="lbl-times">Start and end <span class="opt">(optional)</span></div>
+    <div class="fieldpair" role="group" aria-labelledby="lbl-times">
+      <div><label class="label" style="margin:0 0 var(--s1)" for="efTime">Start</label>
         <input type="time" id="efTime" value="${esc(f.time)}"></div>
-      <div style="flex:1"><label class="label" style="margin-top:0" for="efEnd">End (optional)</label>
+      <div><label class="label" style="margin:0 0 var(--s1)" for="efEnd">End</label>
         <input type="time" id="efEnd" value="${esc(f.endTime||'')}"></div>
     </div>
-    <div class="label">Type</div>
-    <span class="chip ${f.kind==='event'?'on':''}" onclick="syncEventForm();eventForm.kind='event';render()">Event</span>
-    <span class="chip ${f.kind==='deadline'?'on':''}" onclick="syncEventForm();eventForm.kind='deadline';render()">Deadline</span>
-    ${allPeople().length ? `<div class="label">Who (tap all that apply)</div>
-      <span class="chip ${!(f.personIds||[]).length?'on':''}" onclick="syncEventForm();eventForm.personIds=[];render()">No one</span>` +
-      allPeople().map(k=>`<span class="chip" style="${(f.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
-        onclick="toggleEventPerson('${k.id}')">${esc(k.name)}</span>`).join('') : ''}
-    <label class="label" for="efLoc">Location</label>
+    <div class="help">Leave both blank for something with no set time. An end
+      time is only kept if there is a start time.</div>
+
+    <div class="label" id="lbl-type">Type</div>
+    <div role="radiogroup" aria-labelledby="lbl-type">
+      ${['event','deadline'].map(k => `<span class="chip ${f.kind===k?'on':''}"
+        role="radio" aria-checked="${f.kind===k}" tabindex="0"
+        onclick="setEventKind('${k}')"
+        onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();setEventKind('${k}')}"
+        >${k==='event'?'Event':'Deadline'}</span>`).join('')}
+    </div>
+
+    ${allPeople().length ? `<div class="label" id="lbl-who">Who <span class="opt">(tap all that apply)</span></div>
+      <div role="group" aria-labelledby="lbl-who">
+      <span class="chip ${!(f.personIds||[]).length?'on':''}"
+        role="checkbox" aria-checked="${!(f.personIds||[]).length}" tabindex="0"
+        onclick="clearEventPeople()"
+        onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();clearEventPeople()}"
+        >No one</span>` +
+      allPeople().map(k=>{
+        const on = (f.personIds||[]).includes(k.id);
+        return `<span class="chip" role="checkbox" aria-checked="${on}" tabindex="0"
+          style="${on?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
+          onclick="toggleEventPerson('${k.id}')"
+          onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();toggleEventPerson('${k.id}')}"
+          >${esc(k.name)}</span>`;
+      }).join('') + `</div>` : ''}
+
+    <label class="label" for="efLoc">Location <span class="opt">(optional)</span></label>
     <input type="text" id="efLoc" value="${esc(f.location)}">
+
     ${(function(){
       const ev = eventForm.ref ? (S.events.find(x=>x.id===eventForm.ref)||{}) : {};
       if(!ev.from && !ev.aiSource) return '';
-      return '<div class="label">Came from</div><div class="help" style="margin-top:0">' +
+      // F9: read-only provenance, deliberately not styled as a field label.
+      return '<div class="metalabel">Came from</div><div class="help" style="margin-top:0">' +
         (ev.from ? esc(ev.from) : '') +
         (ev.aiSource ? '<br><span style="opacity:.75">read by ' + esc(ev.aiSource) + '</span>' : '') +
         '</div>';
     })()}
-    <label class="label" for="efNotes">Notes</label>
-    <textarea id="efNotes" rows="5" style="width:100%;min-height:110px;font-family:inherit;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:10px;box-sizing:border-box;resize:vertical">${esc(f.notes)}</textarea>
+
+    <label class="label" for="efNotes">Notes <span class="opt">(optional)</span></label>
+    <textarea id="efNotes" rows="5" style="min-height:110px">${esc(f.notes)}</textarea>
+
     <div style="height:14px"></div>
     <button class="btn" onclick="saveEventEdit()">Save changes</button>
     <div style="text-align:center;margin-top:8px"><button class="linkbtn" onclick="cancelEventEdit()">Cancel</button></div>`;
 }
+
+// Chips act as radios/checkboxes, so they need real handlers rather than
+// inline state pokes -- and keyboard users need the same route.
+function setEventKind(kind){ syncEventForm(); eventForm.kind = kind; render(); }
+function clearEventPeople(){ syncEventForm(); eventForm.personIds = []; render(); }
+
 function syncEventForm(){
   const g = id => document.getElementById(id);
   if(g('efTitle')) eventForm.title = g('efTitle').value;
@@ -4438,9 +5114,19 @@ function toggleEventPerson(id){
 function saveEventEdit(){
   syncEventForm();
   const f = eventForm;
-  if(!f.title.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(f.date)){
-    alert('The event needs a title and a valid date.'); return;
+  // NN/g: an error must sit next to the field it is about, or the user has to
+  // memorise it. A blocking alert also has to be dismissed before they can
+  // even look at the form.
+  const errors = {};
+  if(!f.title.trim()) errors.title = 'Give it a name so you can recognise it later.';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) errors.date = 'Pick a date — an item with no date cannot be reminded about.';
+  if(Object.keys(errors).length){
+    f.errors = errors; render();
+    const first = document.getElementById(errors.title ? 'efTitle' : 'efDate');
+    if(first) try{ first.focus({ preventScroll:false }); }catch(e){ first.focus(); }
+    return;
   }
+  f.errors = null;
   const ids = Array.isArray(f.personIds) ? f.personIds : [];
   const fields = { title:f.title.trim(), date:f.date, time:f.time||null,
     endTime:(f.time && f.endTime)?f.endTime:null,
@@ -4925,6 +5611,40 @@ function renderMeals(m){
   m.innerHTML = html;
 }
 
+// Health, not a wall of numbers. Two questions get answered on the screen --
+// "is it working" and "is it slow" -- and everything else lives in the export,
+// because a phone is a bad place to read a log.
+function aiHealthLine(){
+  const s = summarize(S.aiLog || []);
+  if(!s.calls) return 'No AI calls recorded yet.';
+  const parts = [s.calls + ' AI call' + (s.calls === 1 ? '' : 's')];
+  parts.push(s.failed ? s.failed + ' failed' : 'none failed');
+  if(s.medianMs != null) parts.push('typically ' +
+    (s.medianMs >= 1000 ? (s.medianMs/1000).toFixed(1) + 's' : s.medianMs + 'ms'));
+  if(s.fellBack) parts.push('fell back to Anthropic ' + s.fellBack + '\u00d7');
+  return parts.join(' \u00b7 ') + '.';
+}
+
+function diagnosticsSection(){
+  const problems = activeProblems().length;
+  const failed = summarize(S.aiLog || []).failed;
+  return `
+    <div class="sect">When something goes wrong</div>
+    <div class="help">${aiHealthLine()} Every AI call is recorded automatically —
+      what was attempted, which model answered, how long it took and what failed.
+      Never the wording of a request or its answer.</div>
+    ${problems ? `<button class="btn alt" style="border-color:var(--amber-accent);color:var(--amber-accent);margin-bottom:var(--s2)" onclick="openProblems()">
+      ${ico('alert')}${problems} problem${problems===1?'':'s'} to look at</button>`
+      : `<button class="btn alt" style="margin-bottom:var(--s2)" onclick="openProblems()">
+      ${ico('clipboard')}Problem log</button>`}
+    <button class="btn alt" ${failed ? 'style="border-color:var(--amber-accent);color:var(--amber-accent)"' : ''} onclick="exportDiagnostics()">
+      ${ico('download')}Export diagnostics for desktop</button>
+    <div class="help">A small file holding the AI call log and anything reported as
+      a problem — no events, notes or API key in it, so it is safe to email to
+      yourself. On the desktop, read it with:
+      <code>node tools/diagnostics.js &lt;file&gt;</code></div>`;
+}
+
 function mealPlanDiagnostic(){
   let raw = null, err = null;
   try{ raw = localStorage.getItem('mealplan-out'); }catch(e){ err = e.message; }
@@ -5161,35 +5881,10 @@ function renderSettings(m){
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
 
-    ${activeProblems().length ? `<button class="btn alt" style="border-color:var(--amber-accent);color:var(--amber-accent)" onclick="openProblems()">
-      ${ico('alert')}${activeProblems().length} problem${activeProblems().length===1?'':'s'} to look at</button>` :
-      `<button class="btn alt" onclick="openProblems()">Problem log</button>`}
+    ${diagnosticsSection()}
 
-    <div class="sect">What ${aiName()} can and cannot do</div>
-    <div class="help">Every AI feature in the app, what it is for, and where it
-      falls down. Rendered from the same list the code uses, so it cannot drift
-      from what actually happens.</div>
-    ${AI_ACTIONS.map(a => `<div class="card">
-      <div class="row">
-        <div class="grow"><div class="title" style="font-size:15px">${esc(a.label)}</div>
-          <div class="meta" style="font-size:12px">${a.risk === RISK.DERIVE
-            ? 'Not AI — plain calculation, always on'
-            : a.risk === RISK.READ ? 'Reads only — changes nothing'
-            : 'Suggests only — you review before anything is saved'}</div></div>
-      </div>
-      <div class="help" style="margin:8px 0 4px">${esc(a.can)}</div>
-      <div class="help" style="margin:0"><b>Limits:</b> ${esc(a.cannot)}</div>
-      ${a.risk !== RISK.DERIVE ? `<div class="meta" style="font-size:12px;margin-top:6px">
-        Without AI: ${esc(a.fallback)}</div>` : ''}
-    </div>`).join('')}
-
-    <div class="card row">
-      <div class="grow"><div class="title" style="font-size:15px">AI features</div>
-        <div class="meta">Turn these off and the app keeps working — every job above
-          still has a way to do it by hand.</div></div>
-      <button class="btn sm ${aiEnabled()?'':'alt'}" style="width:auto"
-        onclick="setAiEnabled(${aiEnabled()?'false':'true'})">${aiEnabled()?'On':'Off'}</button>
-    </div>
+    ${appearanceSection()}
+    ${aiCapabilitySection()}
 
     <div class="sect">Gordon</div>
     <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
@@ -5278,7 +5973,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v9.8 · assistant with intent routing</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap ${APP_VERSION} · ${APP_TAGLINE}</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -5429,14 +6124,14 @@ async function compareProviders(file){
     try{
       S.settings.aiProvider = 'anthropic';
       compareResult.anthropic = parseExtractedEvents(
-        await callAI(blocks(), 8000, GROUNDING_EVENTS)) || [];
+        await callAI(blocks(), 8000, GROUNDING_EVENTS, 'compare.anthropic')) || [];
     }catch(err){ compareResult.anthropicErr = err.message; }
 
     sub('busy', {msg:'Reading with the local model…', hint:'this one may be slower'});
     try{
       S.settings.aiProvider = 'local';
       compareResult.local = parseExtractedEvents(
-        await callAI(blocks(), 8000, GROUNDING_EVENTS)) || [];
+        await callAI(blocks(), 8000, GROUNDING_EVENTS, 'compare.local')) || [];
     }catch(err){ compareResult.localErr = err.message; }
   }catch(err){
     compareResult.anthropicErr = compareResult.anthropicErr || err.message;
@@ -5629,6 +6324,29 @@ function saveKey(){
   S.settings.apiKey = v; save(); render();
   toast('API key saved on this device');
 }
+// Diagnostics leave the phone as their own file. Deliberately NOT the full
+// backup: no events, chores, lists, notes or API key, so it is safe to email
+// or AirDrop to a desktop.
+function exportDiagnostics(){
+  try{
+    const diag = buildDiagnostics(S, {
+      now: new Date().toISOString(),
+      appVersion: 'FlyerSnap ' + APP_VERSION,
+      provider: aiProvider(), model: aiModelName(),
+      includeLocalUrl: true,
+      userAgent: navigator.userAgent,
+    });
+    const blob = new Blob([JSON.stringify(diag, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'flyersnap-diagnostics-' + todayISO() + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`Diagnostics downloaded (${diag.aiLog.length} AI calls, ${diag.problems.length} problems)`);
+  }catch(e){
+    alert('Could not build the diagnostics file: ' + (e && e.message));
+  }
+}
+
 function exportBackup(){
   S.settings.lastBackup = todayISO();
   save();
@@ -5684,6 +6402,7 @@ if(navigator.storage && navigator.storage.persist) navigator.storage.persist().c
   }catch(e){ /* no URLSearchParams, or an unparseable URL: just open normally */ }
 })();
 
+applyTheme();
 render();
 
 // ---------- Swipe between tabs ----------

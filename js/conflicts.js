@@ -93,7 +93,13 @@ export function findConflicts(events, todayISO, opts){
   for(const e of live){
     if(e.kind !== 'deadline') continue;
     if(e.date >= todayISO) continue;
-    if(e.exported || e.done) continue;            // already acted on
+    // `handled` is set by "Mark as handled" on the warning itself. Exported
+    // (added to the calendar) also counts, but it is a poor proxy on its own:
+    // a form can be submitted in real life without ever being exported, and
+    // before v9.9 the app had no way to hear that. (This line previously also
+    // checked `e.done`, a field NOTHING in the app ever set -- dead code that
+    // implied a concept that did not exist.)
+    if(e.exported || e.handled) continue;
     out.push({ type: 'missed-deadline', date: e.date, events: [e] });
   }
 

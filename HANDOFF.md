@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.8 · **Tests:** 343 passing
+**Updated:** August 22, 2026 · **Live version:** v9.13 · **Tests:** 394 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -69,6 +69,11 @@ a per-version progress log.
 | v9.6 | Extraction accuracy benchmark (corpus + scorer + runner) |
 | v9.7 | AI throughout the app: capability registry, Ask, clash warnings, global off switch |
 | v9.8 | Real assistant: intent registry + router, app-wide, can act (with consent) |
+| v9.9 | Dark by default, actionable warnings, faster assistant, iOS 26 nav gap actually fixed |
+| v9.10 | Gordon remembers the conversation across launches |
+| v9.11 | Ask screen reworked: pinned composer, honest busy state |
+| v9.12 | Edit Event rebuilt against form-usability research (FORM-UI-REVIEW.md) |
+| v9.13 | AI call logging + desktop diagnostics reader (`tools/diagnostics.js`) |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -120,6 +125,150 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.13 — AI call logging.** Every AI call is now recorded, on both providers
+and in both outcomes, and the record can be read on the desktop.
+
+Field names follow the **OpenTelemetry GenAI semantic conventions** — the
+vendor-neutral standard for instrumenting a model call — so the log means what
+an engineer expects it to mean: `op` (`gen_ai.operation.name`), `provider`,
+`reqModel`/`resModel`, `inTokens`/`outTokens`, `finish`, `ms`, `errorType`
+(`error.type`). Those conventions deliberately exclude prompt and completion
+bodies from standard attributes because they "routinely contain names, emails,
+account numbers". That warning lands harder here than in most apps: in
+FlyerSnap the prompts ARE children's names, schools, addresses and schedules.
+**So no prompt text, no answer text, and never the API key** — `redact()` in
+`js/ailog.js` is the last line of defence for error strings, which is the one
+place a provider can hand back something sensitive without being asked.
+
+- `js/ailog.js` — pure: `redact`, `classifyError`, `makeEntry`, `appendEntry`,
+  `summarize`, `buildDiagnostics`. No DOM, no state, no clock of its own.
+- Errors classify into a small stable set — `auth`, `rate_limit`,
+  `provider_error`, `timeout`, `network`, `no_api_key`, `bad_response`,
+  `unsupported_input`, `request_rejected`, `unknown` — because free-text
+  provider messages vary and a class does not. That is what makes "how often
+  does the local model time out?" answerable at all.
+- `callAI(blocks, maxTokens, system, op)` gained an operation name; every one
+  of its eleven call sites passes one (`extract.image`, `ask.route`,
+  `email.attachment`, `compare.local`, …). A test fails the build if any site
+  forgets, because an unnamed call logs as `unknown` and answers no question.
+- Both transports are instrumented, in success and in failure, and the
+  local→Anthropic fallback is recorded as its own line — that line is the
+  answer to "why did this take three minutes". Turning the fallback OFF must
+  not silently turn logging off with it; there is a test for that too.
+- Rolling 200-entry cap. Logging is wrapped in try/catch: it must never break
+  the thing it is logging about.
+
+**Reading it on the desktop.** Settings → *When something goes wrong* shows a
+one-line health summary and exports a diagnostics file. That file is
+deliberately NOT the backup: it carries the AI log, the manual problem log and
+version context, and **no events, chores, lists, notes or API key** — so it is
+safe to email or AirDrop. Then:
+
+```
+node tools/diagnostics.js flyersnap-diagnostics-2026-08-22.json
+node tools/diagnostics.js <file> --errors   # only the failures
+node tools/diagnostics.js <file> --all      # every call, not just the last 40
+node tools/diagnostics.js <file> --json     # machine-readable summary
+```
+
+It prints health, a per-operation breakdown (so "extraction is fine but Ask is
+failing" reads differently from "everything is failing"), the call list with
+redacted error detail, the manual reports, and a short *Worth checking* list.
+That list is a shortlist, never a diagnosis — the file cannot see the network
+it is describing.
+
+Also in v9.13: `APP_VERSION` became a single constant read by both the footer
+and the diagnostics file, so a bug report can never name a build that is not
+the one that produced it. `tools/a11y-audit.js` takes an optional `PW_EXE`
+env var for environments where Playwright's bundled Chromium is elsewhere.
+
+**v9.12 — Edit Event rebuilt.** Full written review in **FORM-UI-REVIEW.md**,
+measured against Baymard's mobile form testing, NN/g's form usability top 10
+and cognitive-load principles, and the GOV.UK/Parliament design system. Ten
+findings, all fixed:
+
+The Date/Start/End row put three `flex:1` columns on a 393px screen — about
+116px each — so "Start (optional)" wrapped, broke the alignment, and the End
+field clipped. That is NN/g's side-by-side exception ("logically related SHORT
+fields") misapplied, and Baymard's documented failure of a field too narrow to
+show its own value. Date is now full width; Start and End share one row.
+
+All-caps labels went (called out as an accessibility problem, and they were a
+contributing cause of the row breaking). The Save button was clipped by the
+tab bar with Cancel entirely off-screen — `main.isform` now reserves the
+clearance. `alert()` validation became inline per-field errors with
+`aria-invalid` and focus moved to the first bad field. Type and Who were bare
+`<span onclick>` — invisible to keyboard and screen readers — and are now a
+proper radiogroup and checkbox group. The screen had no `<h1>` at all. Notes
+lost its duplicated inline styling. Provenance stopped masquerading as a field
+label.
+
+Eight guard tests were added, one per finding. Two notes for future work:
+the a11y audit only walks the five top-level tabs, which is why F4 and F5
+survived v9.1 — extending it to sub-screens is worth doing. And one guard
+was written as an assertion that could never fail; it was caught and replaced,
+which is the standard to hold.
+
+**v9.11 — Ask screen UI pass.** The composer floated in the middle of the
+screen and drifted as the conversation grew; it is now pinned directly above
+the tab bar (measured nav height, 54px) the way every messaging UI does it,
+with `main.hascomposer` reserving room so the last message never hides behind
+it. The intro paragraph now shows only while the conversation is empty. Six
+full-width suggestion buttons became four compact chips.
+
+The busy state now NAMES what it is waiting on — "Asking claude-sonnet-4-6…"
+or "Trying your local model (qwen3-vl:8b)…", plus a line warning that a
+sleeping desktop has to time out first. Logan's complaint was "it took a long
+time and then said the local model wasn't available"; the wait was explained
+nowhere, which made it feel broken rather than slow (HAX G11).
+
+**v9.10 — the assistant remembers.** The conversation now persists across
+app launches, until "New chat" clears it. `js/conversation.js` holds the pure
+logic; it is capped at 20 turns, drops malformed entries from the save file,
+truncates long answers, and stores cited events by ID rather than freezing a
+copy that would go stale when an event is edited.
+
+The design decision worth knowing: **what is SHOWN and what is SENT are
+deliberately different.** The whole saved conversation is displayed, but only
+TODAY's turns — at most two — are ever sent to the model as context. Every
+answer this assistant gives is date-relative ("this week", "in 2 days"), so
+feeding yesterday's answer back in invites the model to repeat a claim that
+has since become false, which is exactly the failure the whole app exists to
+prevent. A conversation spanning midnight stays visible under an "Earlier"
+divider, starts a fresh context, and tells the user so in one line.
+
+**v9.9 — four fixes, three of them mine.**
+
+*Dark ships by default*, with Dark / Light / Match my phone in Settings. The
+bare `:root` is now the dark palette and light is the opt-in override;
+resolution happens in JS because CSS cannot express "follow the phone only
+when the user has not chosen". An inline script paints it before first render
+so there is no flash. Both palettes still pass WCAG AA.
+
+*The iOS 26 nav gap is actually fixed now.* The v8.7 `nav::after` cover never
+worked — measuring Logan's screenshot showed 186 device px of page background
+still below the tab bar. The strip sits OUTSIDE the layout viewport, where
+nothing inside the page can paint; only the canvas does, and the canvas takes
+its colour from `<html>`. So html is painted the nav colour and body is forced
+to fill the viewport. This also fixes the light-mode version of the same gap.
+
+*Warnings became actionable.* The clash banner could only be dismissed —
+which trains you to bury problems, and directly contradicted the HAX G9
+"support efficient correction" the plan cited. It now offers **Mark as
+handled** and **Open it**. That also fixed a real bug: `findConflicts` checked
+`e.done`, a field NOTHING in the app ever set. Dead code implying a concept
+that did not exist. There is now a real `handled` field, set by the button and
+undoable. Exporting to the calendar still counts, but it was a poor proxy on
+its own — a form can be submitted in real life without ever being exported.
+
+*The assistant got faster.* Routing added a full model round-trip in front of
+every answer, so a simple question cost two sequential calls (three if the
+local model timed out first). `quickRoute()` now classifies obvious questions
+locally, for free — Anthropic's own guidance that high-frequency,
+low-complexity work belongs in deterministic code. It only ever short-circuits
+to read-only intents; anything that could change data still goes through the
+model and every validation check, and a test asserts exactly that.
 
 **v9.8 — a real assistant, not a chatbot.** Research-first again; see
 **ASSISTANT-PLAN.md** for sources. The reframing insight: Apple App Intents
@@ -260,12 +409,13 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 343 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 394 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
 - `node tools/preview.js [outDir]` — screenshots every tab, light and dark.
 - `node tools/a11y-audit.js` — accessible names and tap targets in the real DOM.
+- `node tools/diagnostics.js <file>` — read a diagnostics export from the phone.
 - `node tools/inline.js --check` — CSS source/inline drift.
 - `bash tools/run-lighthouse.sh` — mobile Lighthouse scores.
 - `python3 tools/build-app-icons.py` — regenerate every app icon from the
