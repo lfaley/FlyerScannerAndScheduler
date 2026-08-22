@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.6 · **Tests:** 289 passing (`node tests.js`)
+**Current version:** v9.7 · **Tests:** 315 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -63,6 +63,30 @@ incident and recommended shipping `<script type="module" src="js/app.js">` —
 exactly the change that blanked the app. Its surviving conclusions are above;
 the full text is in git history if it is ever wanted.)
 
+## THE WORKING SEQUENCE — follow this order, always
+
+**Research → Plan → Scaffold → Code → Verify.** Not one of these steps is
+optional, and they do not get reordered.
+
+1. **Research.** Read primary sources — the actual spec, the actual docs, the
+   actual published guidance — and quote them. Recalled best practice is
+   guessing wearing a hat. Every production incident in this repo traces back
+   to acting on an assumption that a five-minute check would have killed.
+2. **Plan.** Write it down before writing code: what is being built, why, what
+   is deliberately NOT being built, and what could go wrong. Plans live as
+   `*-PLAN.md` in the repo.
+3. **Scaffold.** Structure first — the module boundaries, the data shapes, the
+   registry, the seams a test can reach. Get this reviewed by reality (a test,
+   a browser) before filling it in.
+4. **Code.** Implement into the scaffold.
+5. **Verify.** Tests, then the browser harnesses, then Logan on the installed
+   PWA. A guard that has never been proven to fail is decoration — mutation-test
+   the important ones by reintroducing the bug and watching them catch it.
+
+If a step feels skippable because the task is small, it is still not skippable.
+Say what was researched and what was verified; do not assert a cause without
+having checked it.
+
 ## Rules that exist because something burned
 
 1. **Never remove/replace a feature without asking Logan.** Add alongside.
@@ -94,7 +118,7 @@ the full text is in git history if it is ever wanted.)
 
 ## Verification tooling
 
-- `node tests.js` — 289 tests: data safety, migrations, inline-handler
+- `node tests.js` — 315 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -110,6 +134,19 @@ the full text is in git history if it is ever wanted.)
   corpus in `eval/`. Costs API tokens, so it is NOT in `node tests.js`; run it
   before and after any prompt change and commit `eval/last-run.json`.
   `--dry` self-checks the scorer for free.
+
+AI FEATURES: every AI capability is declared in `js/ai-actions.js` with a
+risk class — `read` (changes nothing), `propose` (draft, user reviews before
+anything is saved) or `derive` (NO model at all, plain code). There is
+deliberately no class meaning "writes on its own"; adding one means editing
+that file and its test. Settings renders the can/cannot text straight from
+this registry so the promise cannot drift from the code. `aiEnabled()` is the
+global off switch and every model-backed surface must respect it while its
+manual fallback keeps working. See AI-INTEGRATION-PLAN.md for the research.
+
+Clash warnings (`js/conflicts.js`) are deliberately NOT AI — overlap is
+arithmetic with an exact answer, and a model would trade certainty for
+latency, cost and the chance of being wrong. Keep it that way.
 
 FOLDER RULE: everything in `js/` SHIPS (it gets inlined into index.html).
 Tooling-only code belongs in `eval/` or `tools/`. The drift test enforces

@@ -589,7 +589,8 @@ function blank(){ return { events:[], kids:[], chores:[], completions:[], reward
   redemptions:[], lists:[], listItems:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
-    aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true },
+    aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true,
+    aiEnabled:true, dismissedConflicts:[] },
   schemaVersion: SCHEMA_VERSION }; }
 // ============================================================
 // FlyerSnap PWA — single file, zero dependencies.
@@ -701,6 +702,405 @@ function startsOnSomethingElse(el){
     }
   }
   return false;
+}
+
+/**
+ * The AI capability registry.
+ *
+ * Every AI-touched capability in the app is declared here, with what it can
+ * do, what it cannot, and — most importantly — its RISK CLASS. Settings and
+ * the in-context disclosures both render from this list, so the promise a user
+ * reads can never drift from what the code actually does. Same discipline the
+ * design tokens and the icon sprite already use.
+ *
+ * Grounded in published guidance rather than intuition (see
+ * AI-INTEGRATION-PLAN.md for sources):
+ *
+ *  - Microsoft HAX G1/G2: make clear what the system can do, and how well.
+ *    Hence `can` and `cannot` are required fields, not documentation.
+ *  - HAX G16 + Stanford HAI human agency: nothing writes without review, so
+ *    there is deliberately NO risk class meaning "acts on its own". A future
+ *    contributor cannot add one without editing this file and its test.
+ *  - Google PAIR: always provide a non-AI fallback. Every action names the
+ *    manual path that does the same job, and a test checks it is filled in.
+ */
+
+// The only three classes an AI capability may have. Adding a fourth is a
+// deliberate act with a test to update, which is the point.
+const RISK = {
+  // Reads data and answers. Changes nothing. Worst case: a wrong answer the
+  // user can check, because answers cite what they were based on.
+  READ: 'read',
+  // Produces a DRAFT. It reaches the user's data only after they review and
+  // accept it in the existing review screen. Worst case: wasted taps.
+  PROPOSE: 'propose',
+  // No model involved at all -- plain, deterministic code. Listed here so the
+  // app can be honest that it is NOT AI, which is its own kind of
+  // transparency, and so the capability list is complete.
+  DERIVE: 'derive',
+};
+
+const ALL_RISKS = new Set(Object.values(RISK));
+
+const AI_ACTIONS = [
+  {
+    id: 'extract',
+    label: 'Read paperwork',
+    risk: RISK.PROPOSE,
+    can: 'Reads a photo, PDF, link or email and pulls out the dates, times, places and what to bring.',
+    cannot: 'It can misread messy handwriting or a low-contrast photo, and it will leave out anything the source does not actually state. Nothing is saved until you review it.',
+    fallback: 'Add an event by hand with ＋ Add paperwork → type it in.',
+  },
+  {
+    id: 'ask',
+    label: 'Ask about your schedule',
+    risk: RISK.READ,
+    can: 'Answers questions about the events already in the app — what is coming up, what a particular person has on, when something is due.',
+    cannot: 'It only sees the events shown to it, never your whole history, and it cannot look anything up on the internet or change anything. Every answer lists the events it used so you can check it.',
+    fallback: 'Search and the person filters on the Events screen.',
+  },
+  {
+    id: 'quickadd',
+    label: 'Type it in plain words',
+    risk: RISK.PROPOSE,
+    can: 'Turns a sentence like "dentist for Braelyn next Tuesday at 3" into a draft event, or a line like "milk, eggs, bread" into list items.',
+    cannot: 'It will not guess a date you did not give it. Anything unclear comes back blank for you to fill in, and nothing is saved until you accept it.',
+    fallback: 'The normal add form, which is always available.',
+  },
+  {
+    id: 'clashes',
+    label: 'Clash and deadline warnings',
+    risk: RISK.DERIVE,
+    can: 'Points out two events that overlap, a day that has become crowded, and a deadline that has slipped past.',
+    cannot: 'Nothing — this one is not AI at all. It is ordinary arithmetic on the dates you already have, so it works offline, costs nothing, and cannot be wrong about a time overlap.',
+    fallback: 'n/a — always on, and it does not use the network.',
+  },
+];
+
+/** Look up one capability. */
+function aiAction(id){
+  return AI_ACTIONS.find(a => a.id === id) || null;
+}
+
+/**
+ * Which capabilities are currently available.
+ *
+ * HAX G17 (provide global controls) + PAIR (always provide a non-AI fallback):
+ * with AI switched off, everything of class read/propose disappears and the
+ * app keeps working as a plain manual organiser. `derive` survives, because
+ * it never used a model in the first place.
+ */
+function availableActions(aiEnabled){
+  return AI_ACTIONS.filter(a => aiEnabled || a.risk === RISK.DERIVE);
+}
+
+/**
+ * Sanity check used by the tests, and cheap enough to be worth exporting:
+ * a capability that does not say what it cannot do is not documented.
+ */
+function registryProblems(){
+  const problems = [];
+  const seen = new Set();
+  for(const a of AI_ACTIONS){
+    if(!a.id || seen.has(a.id)) problems.push(`duplicate or missing id: ${a.id}`);
+    seen.add(a.id);
+    if(!ALL_RISKS.has(a.risk)) problems.push(`${a.id}: unknown risk class "${a.risk}"`);
+    for(const f of ['label', 'can', 'cannot', 'fallback']){
+      if(!a[f] || !String(a[f]).trim()) problems.push(`${a.id}: missing ${f}`);
+    }
+    // G2 is about honesty, and an empty-sounding limitation is not honesty.
+    if(a.risk !== RISK.DERIVE && String(a.cannot).length < 40){
+      problems.push(`${a.id}: "cannot" is too thin to set expectations`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Clash and deadline detection. Pure, deterministic, NO MODEL INVOLVED.
+ *
+ * This file is the argument that knowing where *not* to put AI is part of
+ * integrating it well.
+ *
+ * "Do these two events overlap?" is arithmetic. It has one exact answer.
+ * Routing it through a language model would add latency, cost, a network
+ * dependency and non-determinism to a question that needs none of them — and
+ * would introduce the possibility of being wrong about something that cannot
+ * be wrong. So this is ordinary code: it runs offline, instantly, free, and
+ * a test can prove it correct.
+ *
+ * It is still listed in the AI capability registry (as class `derive`) so the
+ * app can tell the user plainly that this particular help is NOT AI. That is
+ * its own kind of transparency, and it is what HAX G2 ("make clear how well
+ * the system can do what it can do") looks like when the honest answer is
+ * "perfectly, because it isn't guessing".
+ */
+
+const clashMinutes = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  if(!m) return null;
+  const h = Number(m[1]), mi = Number(m[2]);
+  if(h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+};
+
+// An event with a start but no end is treated as this long when checking for
+// an overlap. A school event with no stated end is realistically an hour;
+// assuming zero would report no clashes at all, and assuming all day would
+// report clashes constantly. Both failure modes are worse than one hour.
+const ASSUMED_MINUTES = 60;
+
+function clashSpan(e){
+  const start = clashMinutes(e.time);
+  if(start === null) return null;                 // all-day: not a time clash
+  const end = clashMinutes(e.endTime);
+  return { start, end: (end !== null && end > start) ? end : start + ASSUMED_MINUTES };
+}
+
+/**
+ * Two events clash when they are on the same day and their times overlap.
+ * Touching endpoints (one ends exactly as the other starts) do NOT clash --
+ * back-to-back is normal family life, not a problem to warn about.
+ */
+function eventsClash(a, b){
+  if(!a || !b || a.date !== b.date) return false;
+  if(a.deleted || b.deleted) return false;
+  const A = clashSpan(a), B = clashSpan(b);
+  if(!A || !B) return false;                      // an all-day item clashes with nothing
+  return A.start < B.end && B.start < A.end;
+}
+
+/**
+ * Find everything worth warning about, newest concern first.
+ *
+ * Deliberately conservative about what counts as a problem: an app that cries
+ * wolf gets its warnings ignored, which is worse than not warning at all.
+ * Only three things qualify.
+ *
+ * @param events  all events (deleted ones are skipped)
+ * @param todayISO  reference date, injected so this stays pure and testable
+ * @param opts.busyDayThreshold  how many items make a day "crowded"
+ */
+function findConflicts(events, todayISO, opts){
+  const busyThreshold = (opts && opts.busyDayThreshold) || 4;
+  const live = (events || []).filter(e => e && !e.deleted && e.date);
+  const out = [];
+
+  // 1. Overlapping times on the same day.
+  const byDate = new Map();
+  for(const e of live){
+    if(!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date).push(e);
+  }
+  const seenPair = new Set();
+  for(const [date, list] of byDate){
+    for(let i = 0; i < list.length; i++){
+      for(let j = i + 1; j < list.length; j++){
+        if(!eventsClash(list[i], list[j])) continue;
+        const key = [list[i].id, list[j].id].sort().join('~');
+        if(seenPair.has(key)) continue;
+        seenPair.add(key);
+        out.push({ type: 'overlap', date, events: [list[i], list[j]] });
+      }
+    }
+  }
+
+  // 2. A deadline that has quietly gone past without being dealt with.
+  //    Only deadlines: a past *event* is simply over, and warning about it
+  //    would be noise.
+  for(const e of live){
+    if(e.kind !== 'deadline') continue;
+    if(e.date >= todayISO) continue;
+    if(e.exported || e.done) continue;            // already acted on
+    out.push({ type: 'missed-deadline', date: e.date, events: [e] });
+  }
+
+  // 3. A day that has become crowded. Upcoming only -- a busy day already
+  //    survived is not information.
+  for(const [date, list] of byDate){
+    if(date < todayISO) continue;
+    if(list.length < busyThreshold) continue;
+    out.push({ type: 'busy-day', date, events: list.slice() });
+  }
+
+  // Soonest first, and within a date the more urgent kind first.
+  const rank = { 'missed-deadline': 0, overlap: 1, 'busy-day': 2 };
+  out.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : rank[x.type] - rank[y.type]));
+  return out;
+}
+
+/**
+ * One plain sentence per conflict. Written here rather than generated, because
+ * a fixed sentence is predictable, instant, translatable and cannot drift --
+ * and because "two things overlap" does not need prose written for it.
+ */
+function describeConflict(c){
+  const t = (e) => e.title || 'Untitled';
+  if(c.type === 'overlap')          return `${t(c.events[0])} and ${t(c.events[1])} overlap`;
+  if(c.type === 'missed-deadline')  return `${t(c.events[0])} was due and has not been dealt with`;
+  if(c.type === 'busy-day')         return `${c.events.length} things on one day`;
+  return '';
+}
+
+/**
+ * "Ask about your schedule" — the read-only AI surface.
+ *
+ * Risk class READ: it answers questions and changes nothing. The two things
+ * that make it trustworthy are both here, and both are pure functions so they
+ * can be tested without a network:
+ *
+ *  1. SCOPING (`scopeForQuestion`). The model is only ever shown a bounded
+ *     slice of the user's events, never the whole database. That is HAX G10
+ *     ("scope services when in doubt") and it is also a privacy decision: a
+ *     question about this week has no business shipping last year's
+ *     appointments to an API.
+ *
+ *  2. CITATION (`ANSWER_CONTRACT`). Every answer must name the events it used.
+ *     HAX G11 is "make clear why the system did what it did", and Stanford
+ *     HAI's framing is sharper: build tools people can learn to use, not
+ *     oracles that hand down answers and withhold the reasoning. A cited
+ *     answer can be checked in two seconds; an uncited one has to be trusted.
+ *
+ * The model is never asked to do arithmetic on dates it could get wrong: the
+ * scope is computed here, in code, and each event is handed over with its date
+ * already resolved and its distance from today already worked out.
+ */
+
+// How far each kind of question reaches. Deliberately small: a tight scope is
+// faster, cheaper, more private, and gives the model less room to wander.
+const SCOPES = {
+  today:    { back: 0,  forward: 0,   label: 'today' },
+  week:     { back: 0,  forward: 7,   label: 'the next 7 days' },
+  fortnight:{ back: 0,  forward: 14,  label: 'the next 2 weeks' },
+  month:    { back: 0,  forward: 31,  label: 'the next month' },
+  recent:   { back: 30, forward: 0,   label: 'the last 30 days' },
+  wide:     { back: 7,  forward: 90,  label: 'the next 3 months' },
+};
+
+// Namespaced deliberately: these are inlined into one global scope
+// alongside the whole app, and a generic name like `iso` collides.
+const ASK_DAY_MS = 86400000;
+const askISODate = (d) => d.toISOString().slice(0, 10);
+
+function askShiftDays(todayISO, days){
+  const d = new Date(todayISO + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return askISODate(d);
+}
+
+function daysBetween(fromISO, toISO){
+  return Math.round((Date.parse(toISO + 'T00:00:00Z') - Date.parse(fromISO + 'T00:00:00Z')) / ASK_DAY_MS);
+}
+
+/**
+ * Pick a scope from the wording of the question.
+ *
+ * Keyword matching rather than a model call, on purpose: choosing how much
+ * data to send is a privacy decision, and a privacy decision should be
+ * predictable and auditable, not delegated to a model. When the wording gives
+ * no clue we widen rather than narrow -- a missing answer is more annoying
+ * than a slightly larger prompt, and `wide` is still bounded.
+ */
+function pickScope(question){
+  const q = String(question || '').toLowerCase();
+  if(/\btoday\b|\btonight\b|\bthis evening\b/.test(q))          return 'today';
+  if(/\byesterday\b|\blast week\b|\brecently\b|\bdid i\b|\bwas there\b/.test(q)) return 'recent';
+  if(/\bthis week\b|\bthis weekend\b|\btomorrow\b|\bnext few days\b/.test(q))    return 'week';
+  if(/\bnext week\b|\bfortnight\b|\btwo weeks\b/.test(q))        return 'fortnight';
+  if(/\bthis month\b|\bnext month\b|\bcoming weeks\b/.test(q))   return 'month';
+  return 'wide';
+}
+
+/**
+ * The events a question is allowed to see.
+ * Returns both the slice and the human-readable window, so the UI can tell the
+ * user exactly what was looked at -- part of G11, and it makes an empty answer
+ * explicable rather than mysterious.
+ */
+function scopeForQuestion(question, events, todayISO){
+  const key = pickScope(question);
+  const s = SCOPES[key];
+  const from = askShiftDays(todayISO, -s.back);
+  const to   = askShiftDays(todayISO, s.forward);
+  const inWindow = (events || [])
+    .filter(e => e && !e.deleted && e.date && e.date >= from && e.date <= to)
+    .sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
+  return { key, label: s.label, from, to, events: inWindow };
+}
+
+/**
+ * Turn the scoped events into the compact block the model sees.
+ *
+ * Only the fields an answer could need. Notes are truncated: they are the
+ * longest field and a question about *when* something is rarely needs the
+ * full packing list. Every event carries a short id so the model can cite it
+ * without repeating the title back.
+ */
+function buildAskContext(scope, people){
+  const nameById = new Map((people || []).map(p => [p.id, p.name]));
+  return scope.events.map((e, i) => {
+    const who = (e.personIds || []).map(id => nameById.get(id)).filter(Boolean).join(', ');
+    const rel = daysBetween(scope.from, e.date);
+    const bits = [
+      `[${i + 1}]`,
+      e.date,
+      e.time ? e.time + (e.endTime ? '-' + e.endTime : '') : 'all day',
+      e.kind === 'deadline' ? 'DEADLINE' : 'event',
+      e.title,
+    ];
+    if(who) bits.push(`for ${who}`);
+    if(e.location) bits.push(`at ${e.location}`);
+    if(e.notes) bits.push('— ' + String(e.notes).slice(0, 160));
+    return { ref: i + 1, id: e.id, line: bits.join(' '), rel };
+  });
+}
+
+/**
+ * What the model is told about answering. Kept as a constant so the rules are
+ * reviewable in one place, and so the extraction benchmark can eventually
+ * measure this prompt the same way it measures the extraction one.
+ */
+const ANSWER_CONTRACT = `You are answering a parent's question about their own family calendar.
+
+Rules, in order of importance:
+
+1. ANSWER ONLY FROM THE LIST. The numbered events below are everything you can see. If the answer is not in them, say plainly that you cannot see it in the range that was checked. Never fill a gap with something plausible.
+
+2. CITE EVERY CLAIM. After each fact, put the reference number(s) it came from, like [2] or [1][4]. A statement with no reference is not allowed.
+
+3. BE SHORT. Two or three sentences, or a short list. This is read on a phone, usually in a hurry.
+
+4. DO NOT DO ARITHMETIC ON DATES. Each event already states its date and time; use them as given rather than working anything out.
+
+5. NO ADVICE, NO ENCOURAGEMENT, NO OPINION. State what is on the calendar. If nothing is, say so.`;
+
+function buildAskPrompt(question, scope, people, todayISO){
+  const ctx = buildAskContext(scope, people);
+  const list = ctx.length
+    ? ctx.map(c => c.line).join('\n')
+    : '(no events in this range)';
+  return {
+    system: ANSWER_CONTRACT,
+    user: `Today is ${todayISO}. You are looking at ${scope.label} (${scope.from} to ${scope.to}).
+
+EVENTS:
+${list}
+
+QUESTION: ${question}`,
+    refs: ctx,
+  };
+}
+
+/**
+ * Pull the [n] citations out of an answer and map them back to real events, so
+ * the UI can show what was used rather than asking the user to trust it.
+ * A citation pointing at nothing is dropped rather than displayed -- showing a
+ * dangling reference would undermine the very thing citations are for.
+ */
+function citedEvents(answer, refs){
+  const nums = new Set();
+  for(const m of String(answer || '').matchAll(/\[(\d{1,2})\]/g)) nums.add(Number(m[1]));
+  return (refs || []).filter(r => nums.has(r.ref));
 }
 
 // ---------- State & storage ----------
@@ -1014,6 +1414,18 @@ const MODEL = 'claude-sonnet-4-6';
 const ASSISTANT_NAME = 'Gordon';
 
 function aiName(){ return ASSISTANT_NAME; }
+
+// ---------- AI capability gate ----------
+// One switch (HAX G17). With AI off, every model-backed surface disappears
+// and the manual path for each still works -- the app stays a usable
+// organiser, which is PAIR's "always provide a non-AI fallback" taken
+// literally. Deterministic help (clash warnings) is unaffected: it never
+// used a model.
+function aiEnabled(){ return S.settings.aiEnabled !== false; }
+function setAiEnabled(on){
+  S.settings.aiEnabled = !!on; save(); render();
+  toast(on ? 'AI features on' : 'AI off — everything still works by hand');
+}
 
 // The actual model, for places where the truth matters more than the voice.
 function aiModelName(){
@@ -1666,7 +2078,8 @@ function render(){
     listDetail:renderListDetail, recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
     shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue,
-    problems:renderProblems,     selfTest:renderSelfTest, compare:renderCompare};
+    problems:renderProblems,     selfTest:renderSelfTest, compare:renderCompare,
+    ask:renderAsk};
   const tabs = {events:renderEvents, chores:renderChores, lists:renderLists,
     meals:renderMeals, settings:renderSettings};
   const changedScreen = key !== lastViewKey;
@@ -1942,6 +2355,8 @@ function renderEvents(m){
       <button class="linkbtn" style="padding:2px 8px" onclick="markAllRead()">✓ Mark all as seen</button></div>`;
   }
 
+  html += conflictBanner();
+
   const dGroups = duplicateGroups();
   if(dGroups.length && !eventSearch){
     const first = dGroups[0];
@@ -1968,6 +2383,7 @@ function renderEvents(m){
     // Always available. These used to be hidden while an export queue was
     // running, which made the button vanish if a queue was left unfinished.
     html += `<div style="display:flex;justify-content:flex-end">
+      ${aiEnabled() ? `<button class="linkbtn" style="padding:2px 8px" onclick="openAsk()">${ico('search')}Ask</button>` : ''}
       <button class="linkbtn" style="padding:2px 8px" onclick="openShareEvents()">${ico('share')}Share</button>
       <button class="linkbtn" style="padding:2px 8px" onclick="calendarOptions()">${ico('calendar-plus')}Add to Calendar</button></div>`;
     html += groupedUpcoming(evts).map(g => `
@@ -1998,6 +2414,104 @@ function renderEvents(m){
     <div style="height:70px"></div>`;
   m.innerHTML = html;
 }
+// ---------- Clash warnings (deterministic -- see js/conflicts.js) ----------
+// Not AI. Deliberately: "do these overlap?" is arithmetic with one exact
+// answer, and routing it through a model would trade certainty for latency,
+// cost and the chance of being wrong. Shown here so the app can say so.
+
+function conflictKey(c){ return c.type + '|' + c.date + '|' + c.events.map(e=>e.id).sort().join(','); }
+
+function conflictBanner(){
+  const dismissed = new Set(S.settings.dismissedConflicts || []);
+  const all = findConflicts(S.events, todayISO());
+  const live = all.filter(c => !dismissed.has(conflictKey(c)));
+  if(!live.length) return '';
+  const c = live[0];
+  const more = live.length - 1;
+  return `<div class="card" style="border-left:5px solid var(--amber-accent)">
+    <div class="row">
+      <div class="grow">
+        <div style="font-weight:800;font-size:14px;margin-bottom:2px">
+          ${ico('alert')}${esc(describeConflict(c))}</div>
+        <div class="meta" style="font-size:12px">${friendly(c.date)}${more ? ` · ${more} more to look at` : ''}</div>
+      </div>
+      <button class="linkbtn" aria-label="Dismiss this warning"
+        onclick="event.stopPropagation();dismissConflict('${esc(conflictKey(c))}')">${ico('x')}</button>
+    </div></div>`;
+}
+
+// HAX G8: support efficient dismissal -- one tap, and it stays dismissed.
+function dismissConflict(key){
+  const list = S.settings.dismissedConflicts || (S.settings.dismissedConflicts = []);
+  if(!list.includes(key)) list.push(key);
+  save(); render();
+}
+
+// ---------- Ask (read-only -- see js/ask.js) ----------
+let askState = { q:'', answer:'', cited:[], scope:null, busy:false, error:'' };
+
+function renderAsk(m){
+  setHeader('Ask ' + aiName(), true);
+  const a = askState;
+  m.innerHTML = `
+    <div class="help" style="margin-top:0">
+      ${aiName()} can answer questions about events already in the app —
+      what is coming up, what one person has on, when something is due.
+      It only sees the events it is shown, never the internet, and it changes nothing.
+    </div>
+    <div class="formrow">
+      <input type="text" id="askQ" aria-label="Your question"
+        placeholder="e.g. what does Olivia have this week?"
+        value="${esc(a.q)}" onkeydown="if(event.key==='Enter')runAsk()">
+      <button class="btn sm" onclick="runAsk()" ${a.busy?'disabled':''}>${a.busy?'…':'Ask'}</button>
+    </div>
+    ${!a.answer && !a.busy && !a.error ? `<div class="help">
+      Try: “what is on this week?” · “when is the next form due?” · “anything for Braelyn tomorrow?”
+    </div>` : ''}
+    ${a.error ? `<div class="card" style="border-left:5px solid var(--red-accent)">
+      <div class="title" style="font-size:15px">Could not answer that</div>
+      <div class="meta">${esc(a.error)}</div>
+      <div class="help" style="margin:8px 0 0">The Events list and its search still work as normal.</div>
+    </div>` : ''}
+    ${a.answer ? `<div class="card">
+      <div style="white-space:pre-wrap;line-height:1.55">${esc(a.answer)}</div>
+      ${a.scope ? `<div class="meta" style="font-size:12px;margin-top:10px">
+        Looked at ${esc(a.scope.label)} — ${a.scope.events.length} event${a.scope.events.length===1?'':'s'}.</div>` : ''}
+    </div>` : ''}
+    ${a.cited.length ? `<div class="label">Based on these</div>` + a.cited.map(c => {
+        const ev = S.events.find(e => e.id === c.id);
+        return ev ? evtCard(ev, false) : '';
+      }).join('') : ''}
+    ${a.answer && !a.cited.length ? `<div class="help">
+      This answer did not point at a specific event — treat it with care.</div>` : ''}`;
+}
+
+async function runAsk(){
+  const el = document.getElementById('askQ');
+  const q = (el ? el.value : askState.q).trim();
+  if(!q) return;
+  askState = { q, answer:'', cited:[], scope:null, busy:true, error:'' };
+  render();
+  try{
+    const scope = scopeForQuestion(q, S.events, todayISO());
+    const built = buildAskPrompt(q, scope, allPeople(), todayISO());
+    const text = await callAI([{ type:'text', text: built.user }], 700, built.system);
+    const answer = cleanModelText(text).trim();
+    askState = { q, answer, cited: citedEvents(answer, built.refs), scope, busy:false, error:'' };
+  }catch(err){
+    // PAIR: failure should be safe, boring, and a normal part of the product,
+    // and the easiest path forward is usually to let the user take over.
+    askState = { q, answer:'', cited:[], scope:null, busy:false,
+      error: err && err.message === 'NO_API_KEY'
+        ? 'No API key saved yet — add one in Settings.'
+        : (err && err.message) || 'Something went wrong.' };
+    logProblem('Ask', 'Could not answer a question', (err && err.message) || '');
+  }
+  render();
+  const again = document.getElementById('askQ');
+  if(again) again.focus();
+}
+
 // ---------- Gmail watcher ----------
 // A Google Apps Script reads matching emails on Google's servers every 15 min
 // and holds extracted events in a queue. We just fetch and review them.
@@ -2515,6 +3029,7 @@ async function openEmailReview(fresh){
 // nothing links back to this app and nothing is shared that wasn't ticked.
 let shareSel = null;
 
+function openAsk(){ askState = { q:'', answer:'', cited:[], scope:null, busy:false, error:'' }; sub('ask'); }
 function openShareEvents(){ shareSel = new Set(); sub('shareEvents'); }
 function toggleShare(id){ shareSel.has(id) ? shareSel.delete(id) : shareSel.add(id); render(); }
 function shareSelectAll(){
@@ -3989,6 +4504,32 @@ function renderSettings(m){
       ${ico('alert')}${activeProblems().length} problem${activeProblems().length===1?'':'s'} to look at</button>` :
       `<button class="btn alt" onclick="openProblems()">Problem log</button>`}
 
+    <div class="sect">What ${aiName()} can and cannot do</div>
+    <div class="help">Every AI feature in the app, what it is for, and where it
+      falls down. Rendered from the same list the code uses, so it cannot drift
+      from what actually happens.</div>
+    ${AI_ACTIONS.map(a => `<div class="card">
+      <div class="row">
+        <div class="grow"><div class="title" style="font-size:15px">${esc(a.label)}</div>
+          <div class="meta" style="font-size:12px">${a.risk === RISK.DERIVE
+            ? 'Not AI — plain calculation, always on'
+            : a.risk === RISK.READ ? 'Reads only — changes nothing'
+            : 'Suggests only — you review before anything is saved'}</div></div>
+      </div>
+      <div class="help" style="margin:8px 0 4px">${esc(a.can)}</div>
+      <div class="help" style="margin:0"><b>Limits:</b> ${esc(a.cannot)}</div>
+      ${a.risk !== RISK.DERIVE ? `<div class="meta" style="font-size:12px;margin-top:6px">
+        Without AI: ${esc(a.fallback)}</div>` : ''}
+    </div>`).join('')}
+
+    <div class="card row">
+      <div class="grow"><div class="title" style="font-size:15px">AI features</div>
+        <div class="meta">Turn these off and the app keeps working — every job above
+          still has a way to do it by hand.</div></div>
+      <button class="btn sm ${aiEnabled()?'':'alt'}" style="width:auto"
+        onclick="setAiEnabled(${aiEnabled()?'false':'true'})">${aiEnabled()?'On':'Off'}</button>
+    </div>
+
     <div class="sect">Gordon</div>
     <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
     <div style="margin-bottom:10px">
@@ -4076,7 +4617,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v9.6 · swipe between tabs</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v9.7 · ask, clash warnings, AI controls</div>`;
 }
 function manualPrune(){
   const n = pruneData();

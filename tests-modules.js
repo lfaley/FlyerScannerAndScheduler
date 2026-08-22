@@ -275,6 +275,231 @@ module.exports = async function runModuleTests(test){
   // build with the exact pair named.
   // -------------------------------------------------------------------------
 
+
+  // -------------------------------------------------------------------------
+  // AI integration. Three modules, three different jobs, one shared rule:
+  // nothing an AI produces reaches the user's data without them accepting it.
+  // See AI-INTEGRATION-PLAN.md for the research these encode.
+  // -------------------------------------------------------------------------
+  console.log('\nAI capability registry');
+
+  const reg = await import('./js/ai-actions.js');
+
+  test('every capability declares a risk class, a can, a cannot and a fallback', () => {
+    // HAX G1/G2: make clear what the system can do and how well. A capability
+    // that ships undocumented has failed that before a user ever taps it.
+    assert.deepStrictEqual(reg.registryProblems(), []);
+  });
+
+  test('there is no risk class that lets AI write without review', () => {
+    // HAX G16 + human agency. The absence of a fourth class is the guarantee;
+    // this test is what makes adding one a deliberate act.
+    assert.deepStrictEqual(Object.values(reg.RISK).sort(), ['derive', 'propose', 'read']);
+  });
+
+  test('turning AI off leaves only the non-model capability', () => {
+    // PAIR: always provide a non-AI fallback. With AI off the app must still
+    // work as a plain manual organiser.
+    const off = reg.availableActions(false);
+    assert.ok(off.every(a => a.risk === reg.RISK.DERIVE), 'a model-backed action survived the off switch');
+    assert.ok(off.length >= 1, 'the deterministic help should still be there');
+    assert.ok(reg.availableActions(true).length > off.length, 'turning AI on should add capabilities');
+  });
+
+  test('every model-backed capability names a manual way to do the same job', () => {
+    reg.AI_ACTIONS.filter(a => a.risk !== reg.RISK.DERIVE).forEach(a => {
+      assert.ok(a.fallback && a.fallback.length > 10, a.id + ' has no usable fallback');
+    });
+  });
+
+
+  test('no inlined module declares a name the app already uses', () => {
+    // js/ modules are inlined into ONE global scope alongside 4,000 lines of
+    // app code. A duplicate top-level name silently shadows the other -- the
+    // exact shape of the duplicate-logProblem bug. Adding js/ask.js hit this
+    // immediately with a helper called `iso`, so it is now a build failure
+    // rather than a debugging session.
+    //
+    // Counting declarations is the reliable check: a js/ name should appear
+    // as a top-level declaration in the shipped script EXACTLY ONCE -- that
+    // one being its own inlined copy. Twice means something else claimed it.
+    const declRe = (name) =>
+      new RegExp('^(?:export\\s+)?(?:function|const|let|var)\\s+' + name + '\\b', 'gm');
+    const owner = new Map();
+    const clashes = [];
+    for(const f of fs.readdirSync('js').filter(x => x.endsWith('.js'))){
+      const body = fs.readFileSync('js/' + f, 'utf8');
+      for(const m of body.matchAll(/^(?:export\s+)?(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)/gm)){
+        if(owner.has(m[1])) clashes.push(`${m[1]}: declared in both ${owner.get(m[1])} and ${f}`);
+        else owner.set(m[1], f);
+      }
+    }
+    for(const [name, f] of owner){
+      const n = (script.match(declRe(name)) || []).length;
+      if(n > 1) clashes.push(`${name} (from ${f}) is declared ${n} times in the shipped script`);
+      if(n === 0) clashes.push(`${name} (from ${f}) is not inlined at all`);
+    }
+    assert.deepStrictEqual(clashes, [], 'top-level name collisions: ' + clashes.join(' | '));
+  });
+
+  console.log('\nClash detection (deterministic, no model)');
+
+  const cf = await import('./js/conflicts.js');
+  const E = (o) => Object.assign({ id:'x', title:'T', date:'2026-09-01', time:null,
+    endTime:null, kind:'event', deleted:false }, o);
+
+  test('two overlapping events on the same day clash', () => {
+    assert.strictEqual(cf.eventsClash(
+      E({id:'a', time:'09:00', endTime:'10:30'}),
+      E({id:'b', time:'10:00', endTime:'11:00'})), true);
+  });
+
+  test('back-to-back is not a clash', () => {
+    // One ending exactly as the other starts is normal family life. Warning
+    // about it would train the user to ignore warnings.
+    assert.strictEqual(cf.eventsClash(
+      E({id:'a', time:'09:00', endTime:'10:00'}),
+      E({id:'b', time:'10:00', endTime:'11:00'})), false);
+  });
+
+  test('same time on different days is not a clash', () => {
+    assert.strictEqual(cf.eventsClash(
+      E({id:'a', date:'2026-09-01', time:'09:00'}),
+      E({id:'b', date:'2026-09-02', time:'09:00'})), false);
+  });
+
+  test('an event with no end time is assumed to last an hour', () => {
+    assert.strictEqual(cf.eventsClash(E({id:'a', time:'09:00'}), E({id:'b', time:'09:30'})), true);
+    assert.strictEqual(cf.eventsClash(E({id:'a', time:'09:00'}), E({id:'b', time:'10:30'})), false);
+  });
+
+  test('an all-day item clashes with nothing', () => {
+    assert.strictEqual(cf.eventsClash(E({id:'a', time:null}), E({id:'b', time:'09:00'})), false);
+  });
+
+  test('a deleted event never clashes', () => {
+    assert.strictEqual(cf.eventsClash(
+      E({id:'a', time:'09:00', deleted:true}), E({id:'b', time:'09:15'})), false);
+  });
+
+  test('a passed deadline is reported, a passed event is not', () => {
+    const found = cf.findConflicts([
+      E({id:'d', date:'2026-08-01', kind:'deadline', title:'Form due'}),
+      E({id:'e', date:'2026-08-01', kind:'event', title:'Concert'}),
+    ], '2026-09-01');
+    const kinds = found.map(c => c.type);
+    assert.deepStrictEqual(kinds, ['missed-deadline']);
+    assert.strictEqual(found[0].events[0].id, 'd');
+  });
+
+  test('a deadline already dealt with is not nagged about', () => {
+    const found = cf.findConflicts(
+      [E({id:'d', date:'2026-08-01', kind:'deadline', exported:true})], '2026-09-01');
+    assert.deepStrictEqual(found, []);
+  });
+
+  test('a crowded upcoming day is flagged, a crowded past day is not', () => {
+    const four = (date) => [1,2,3,4].map(n => E({id:date+n, date, title:'T'+n}));
+    const upcoming = cf.findConflicts(four('2026-09-10'), '2026-09-01');
+    assert.ok(upcoming.some(c => c.type === 'busy-day'));
+    const past = cf.findConflicts(four('2026-08-10'), '2026-09-01');
+    assert.ok(!past.some(c => c.type === 'busy-day'), 'a busy day already survived is not news');
+  });
+
+  test('the same overlapping pair is reported once, not twice', () => {
+    const found = cf.findConflicts([
+      E({id:'a', time:'09:00', endTime:'11:00'}),
+      E({id:'b', time:'10:00', endTime:'12:00'}),
+    ], '2026-08-01');
+    assert.strictEqual(found.filter(c => c.type === 'overlap').length, 1);
+  });
+
+  test('a quiet calendar produces no warnings at all', () => {
+    assert.deepStrictEqual(cf.findConflicts([E({id:'a', date:'2026-09-05'})], '2026-09-01'), []);
+  });
+
+  test('every conflict can be described in one plain sentence', () => {
+    const found = cf.findConflicts([
+      E({id:'a', time:'09:00', endTime:'11:00', title:'Ballet'}),
+      E({id:'b', time:'10:00', endTime:'12:00', title:'Swimming'}),
+    ], '2026-08-01');
+    const s = cf.describeConflict(found[0]);
+    assert.ok(s.includes('Ballet') && s.includes('Swimming'), s);
+  });
+
+  console.log('\nAsk (read-only, scoped and cited)');
+
+  const ask = await import('./js/ask.js');
+
+  test('the question decides how much data is sent', () => {
+    assert.strictEqual(ask.pickScope('what is on today?'), 'today');
+    assert.strictEqual(ask.pickScope('what does Olivia have this week?'), 'week');
+    assert.strictEqual(ask.pickScope('anything next week?'), 'fortnight');
+    assert.strictEqual(ask.pickScope('did I miss anything recently?'), 'recent');
+  });
+
+  test('an unclear question widens rather than narrows', () => {
+    // A missing answer is more annoying than a slightly larger prompt, and
+    // the wide scope is still bounded.
+    assert.strictEqual(ask.pickScope('when is the dentist'), 'wide');
+  });
+
+  test('scoping never sends events outside the window', () => {
+    // The privacy property: a question about this week must not ship last
+    // year's appointments to an API.
+    const events = [
+      E({id:'old',  date:'2020-01-01', title:'Ancient'}),
+      E({id:'soon', date:'2026-09-03', title:'Soon'}),
+      E({id:'far',  date:'2030-01-01', title:'Far future'}),
+    ];
+    const s = ask.scopeForQuestion('what is on this week?', events, '2026-09-01');
+    assert.deepStrictEqual(s.events.map(e => e.id), ['soon']);
+  });
+
+  test('deleted events are never sent', () => {
+    const s = ask.scopeForQuestion('what is on this week?',
+      [E({id:'gone', date:'2026-09-02', deleted:true})], '2026-09-01');
+    assert.strictEqual(s.events.length, 0);
+  });
+
+  test('the prompt states the window it looked at, so an empty answer is explicable', () => {
+    const s = ask.scopeForQuestion('what is on this week?', [], '2026-09-01');
+    const p = ask.buildAskPrompt('what is on this week?', s, [], '2026-09-01');
+    assert.ok(p.user.includes('2026-09-01'), 'prompt should state the window');
+    assert.ok(p.user.includes('no events in this range'));
+  });
+
+  test('the answer contract demands citations and forbids inventing', () => {
+    assert.ok(/CITE EVERY CLAIM/.test(ask.ANSWER_CONTRACT));
+    assert.ok(/ANSWER ONLY FROM THE LIST/.test(ask.ANSWER_CONTRACT));
+  });
+
+  test('citations map back to the real events they name', () => {
+    const events = [E({id:'e1', date:'2026-09-02', title:'Recital'}),
+                    E({id:'e2', date:'2026-09-03', title:'Form due'})];
+    const s = ask.scopeForQuestion('what is on this week?', events, '2026-09-01');
+    const p = ask.buildAskPrompt('what is on this week?', s, [], '2026-09-01');
+    const cited = ask.citedEvents('Recital is on Wednesday [1].', p.refs);
+    assert.deepStrictEqual(cited.map(c => c.id), ['e1']);
+  });
+
+  test('a citation pointing at nothing is dropped, not displayed', () => {
+    const p = ask.buildAskPrompt('q', ask.scopeForQuestion('q', [], '2026-09-01'), [], '2026-09-01');
+    assert.deepStrictEqual(ask.citedEvents('Something [7].', p.refs), []);
+  });
+
+  test('context lines carry the fields an answer needs and truncate notes', () => {
+    const long = 'x'.repeat(400);
+    const s = ask.scopeForQuestion('what is on this week?',
+      [E({id:'e1', date:'2026-09-02', time:'09:00', endTime:'10:00',
+          title:'Ballet', location:'Studio B', notes:long, personIds:['k1']})], '2026-09-01');
+    const ctx = ask.buildAskContext(s, [{id:'k1', name:'Olivia'}]);
+    assert.ok(ctx[0].line.includes('Ballet'));
+    assert.ok(ctx[0].line.includes('Olivia'));
+    assert.ok(ctx[0].line.includes('Studio B'));
+    assert.ok(ctx[0].line.length < 400, 'notes must be truncated, not sent whole');
+  });
+
   // -------------------------------------------------------------------------
   // Extraction scoring. A benchmark you cannot trust is worse than none --
   // it produces confident numbers that hide regressions. These cases pin down

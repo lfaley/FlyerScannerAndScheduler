@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.6 · **Tests:** 289 passing
+**Updated:** August 22, 2026 · **Live version:** v9.7 · **Tests:** 315 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -67,6 +67,7 @@ a per-version progress log.
 | v9.4 | Swipe left/right between the five tabs |
 | v9.5 | EXPERT-QA.md — presentation prep; UI plan complete |
 | v9.6 | Extraction accuracy benchmark (corpus + scorer + runner) |
+| v9.7 | AI throughout the app: capability registry, Ask, clash warnings, global off switch |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -118,6 +119,36 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.7 — AI across the app, on a researched footing.** Built research-first
+from Microsoft's HAX guidelines, Google PAIR, Stanford HAI and IBM's
+generative-AI principles; see **AI-INTEGRATION-PLAN.md** for the sources and
+the reasoning.
+
+The structural idea is a **capability registry** (`js/ai-actions.js`) where
+every AI feature declares what it can do, what it cannot, its manual fallback,
+and a **risk class**: `read`, `propose`, or `derive`. There is deliberately no
+class meaning "writes on its own" — nothing an AI produces reaches the data
+without the user accepting it, and the absence of that fourth class is
+enforced by a test. Settings renders the can/cannot text from this same
+registry, so what the user is promised cannot drift from what the code does.
+
+Shipped with it: **Ask** (read-only questions over your own events — scoped in
+code rather than by the model, because how much data leaves the device is a
+privacy decision that should be auditable; every answer cites the events it
+used, and the cited events render as real cards so the answer can be checked
+in seconds). **Clash warnings** (`js/conflicts.js`) — overlapping events, a
+crowded day, a deadline that slipped past — which are deliberately **not AI**:
+overlap is arithmetic with one exact answer, so it is plain code that runs
+offline, costs nothing and cannot hallucinate. And a **global off switch**:
+with AI off, every model-backed surface disappears, the clash warnings remain
+(they never used a model), and every manual path still works.
+
+Wiring it surfaced a real collision — `js/ask.js` declared a helper called
+`iso`, which the app already had. Because js/ modules are inlined into one
+global scope, that silently shadows, the same shape as the old duplicate
+`logProblem` bug. There is now a test that every js/ name appears exactly once
+in the shipped script; it was mutation-tested by planting a collision.
 
 **v9.6 — extraction benchmark.** `eval/cases.json` (labelled corpus),
 `eval/score.js` (pure scorer, 12 tests) and `tools/eval-extraction.js` (runner
@@ -200,7 +231,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 289 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 315 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
