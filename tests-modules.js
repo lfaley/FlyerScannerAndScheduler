@@ -781,14 +781,14 @@ module.exports = async function runModuleTests(test){
   // -------------------------------------------------------------------------
   console.log('\nExtraction scoring');
 
-  const sc = await import('./eval/score.js');
+  const sc = await import('./js/extract-score.js');
 
   const EV = (o) => Object.assign({ title:'', date:'', time:null, endTime:null,
     kind:'event', location:null, notes:null }, o);
 
   test('a perfect answer scores a perfect 1', () => {
     const want = [EV({title:'Picture Day', date:'2026-09-09'})];
-    const r = sc.scoreCase(want, want.map(e => ({...e})));
+    const r = sc.scoreExtraction(want, want.map(e => ({...e})));
     assert.strictEqual(r.f1, 1);
     assert.strictEqual(r.invented.length, 0);
     assert.strictEqual(r.missed.length, 0);
@@ -797,7 +797,7 @@ module.exports = async function runModuleTests(test){
   test('the right title on the WRONG DAY is not a match', () => {
     // The single most important property. This app exists to get dates right;
     // a scorer that gave partial credit here would hide its worst failure.
-    const r = sc.scoreCase(
+    const r = sc.scoreExtraction(
       [EV({title:'Picture Day', date:'2026-09-09'})],
       [EV({title:'Picture Day', date:'2026-09-10'})]);
     assert.strictEqual(r.matched, 0);
@@ -806,20 +806,20 @@ module.exports = async function runModuleTests(test){
   });
 
   test('an invented event is counted as invented, not merely as poor precision', () => {
-    const r = sc.scoreCase([], [EV({title:'Book Fair', date:'2026-10-01'})]);
+    const r = sc.scoreExtraction([], [EV({title:'Book Fair', date:'2026-10-01'})]);
     assert.strictEqual(r.invented.length, 1);
     assert.strictEqual(r.precision, 0);
   });
 
   test('returning nothing when nothing is there scores perfectly', () => {
-    const r = sc.scoreCase([], []);
+    const r = sc.scoreExtraction([], []);
     assert.strictEqual(r.f1, 1);
     assert.strictEqual(r.precision, 1);
     assert.strictEqual(r.recall, 1);
   });
 
   test('re-worded titles on the right day still match', () => {
-    const r = sc.scoreCase(
+    const r = sc.scoreExtraction(
       [EV({title:'Fall Picture Day', date:'2026-09-09'})],
       [EV({title:'Picture Day', date:'2026-09-09'})]);
     assert.strictEqual(r.matched, 1);
@@ -828,13 +828,13 @@ module.exports = async function runModuleTests(test){
   test('two same-day items are not collapsed into one', () => {
     const want = [EV({title:'Yearbook orders close', date:'2026-08-28', kind:'deadline'}),
                   EV({title:'Spirit-wear payment due', date:'2026-08-28', kind:'deadline'})];
-    const r = sc.scoreCase(want, want.map(e => ({...e})));
+    const r = sc.scoreExtraction(want, want.map(e => ({...e})));
     assert.strictEqual(r.matched, 2);
     assert.strictEqual(r.invented.length, 0);
   });
 
   test('a wrong time inside a matched event is caught per field', () => {
-    const r = sc.scoreCase(
+    const r = sc.scoreExtraction(
       [EV({title:'Open House', date:'2026-09-08', time:'18:00'})],
       [EV({title:'Open House', date:'2026-09-08', time:'18:30'})]);
     assert.strictEqual(r.matched, 1, 'still the same event');
@@ -844,27 +844,27 @@ module.exports = async function runModuleTests(test){
 
   test('an invented detail scores as wrong, and so does a dropped one', () => {
     const base = { title:'Practice', date:'2026-09-02' };
-    const invented = sc.scoreCase([EV({...base, location:null})],
+    const invented = sc.scoreExtraction([EV({...base, location:null})],
                                   [EV({...base, location:'band room'})]);
     assert.strictEqual(invented.fields.location.rate, 0, 'inventing a location is wrong');
-    const dropped = sc.scoreCase([EV({...base, location:'band room'})],
+    const dropped = sc.scoreExtraction([EV({...base, location:'band room'})],
                                  [EV({...base, location:null})]);
     assert.strictEqual(dropped.fields.location.rate, 0, 'dropping a stated location is wrong');
   });
 
   test('kind is exact: a deadline reported as an event is wrong', () => {
-    const r = sc.scoreCase(
+    const r = sc.scoreExtraction(
       [EV({title:'Forms due', date:'2026-08-21', kind:'deadline'})],
       [EV({title:'Forms due', date:'2026-08-21', kind:'event'})]);
     assert.strictEqual(r.fields.kind.rate, 0);
   });
 
   test('notes are judged on substance, not wording', () => {
-    const yes = sc.scoreCase(
+    const yes = sc.scoreExtraction(
       [EV({title:'Trip', date:'2026-09-03', notes:'Bring a sack lunch and wear closed-toe shoes'})],
       [EV({title:'Trip', date:'2026-09-03', notes:'Wear closed-toe shoes; bring a sack lunch.'})]);
     assert.strictEqual(yes.fields.notes.rate, 1, 'same facts, different order, should pass');
-    const no = sc.scoreCase(
+    const no = sc.scoreExtraction(
       [EV({title:'Trip', date:'2026-09-03', notes:'Bring a sack lunch and wear closed-toe shoes'})],
       [EV({title:'Trip', date:'2026-09-03', notes:'It will be a fun day out.'})]);
     assert.strictEqual(no.fields.notes.rate, 0, 'different substance should fail');
@@ -873,16 +873,16 @@ module.exports = async function runModuleTests(test){
   test('a title made only of stop-words still matches itself', () => {
     // normTitle strips words like "the" and "a"; "The Note" normalises to
     // nothing, and without a fallback it would never match even itself.
-    const r = sc.scoreCase([EV({title:'The Note', date:'2026-09-01'})],
+    const r = sc.scoreExtraction([EV({title:'The Note', date:'2026-09-01'})],
                            [EV({title:'The Note', date:'2026-09-01'})]);
     assert.strictEqual(r.matched, 1);
   });
 
   test('aggregate sums cases without losing the invented count', () => {
-    const a = sc.scoreCase([EV({title:'Picture Day', date:'2026-09-01'})],
+    const a = sc.scoreExtraction([EV({title:'Picture Day', date:'2026-09-01'})],
                            [EV({title:'Picture Day', date:'2026-09-01'})]);
-    const b = sc.scoreCase([], [EV({title:'Ghost Event', date:'2026-09-02'})]);
-    const agg = sc.aggregate([a, b]);
+    const b = sc.scoreExtraction([], [EV({title:'Ghost Event', date:'2026-09-02'})]);
+    const agg = sc.aggregateExtraction([a, b]);
     assert.strictEqual(agg.cases, 2);
     assert.strictEqual(agg.matched, 1);
     assert.strictEqual(agg.inventedTotal, 1);
@@ -905,7 +905,7 @@ module.exports = async function runModuleTests(test){
         assert.ok(['event','deadline'].includes(e.kind), c.id + ': bad kind ' + e.kind);
         if(e.time) assert.ok(/^\d{2}:\d{2}$/.test(e.time), c.id + ': bad time ' + e.time);
       });
-      const self = sc.scoreCase(c.expected, c.expected.map(x => ({...x})));
+      const self = sc.scoreExtraction(c.expected, c.expected.map(x => ({...x})));
       assert.strictEqual(self.f1, 1, c.id + ': its own labels do not score perfectly');
     });
     assert.ok(corpus.cases.some(c => c.expected.length === 0),
@@ -1498,6 +1498,82 @@ module.exports = async function runModuleTests(test){
       'a button that makes 34 model calls must say what it will not do');
   });
 
+  console.log('\nThe reading benchmark runs inside the app (v9.19)');
+
+  const xb = await import('./js/extract-cases.js');
+
+  test('the shipped reading corpus has not drifted from eval/cases.json', () => {
+    const source = JSON.parse(fs.readFileSync('./eval/cases.json', 'utf8'));
+    assert.strictEqual(xb.EXTRACT_BENCH.cases.length, source.cases.length);
+    source.cases.forEach((c, i) => {
+      const s = xb.EXTRACT_BENCH.cases[i];
+      assert.strictEqual(s.id, c.id, 'case order changed at ' + i);
+      assert.strictEqual(s.today, c.today, c.id);
+      assert.strictEqual(s.source, c.source, c.id);
+      assert.deepStrictEqual(s.expected, c.expected, c.id);
+    });
+    const shipped = fs.readFileSync('./js/extract-cases.js', 'utf8');
+    assert.ok(!/"note"\s*:/.test(shipped), 'the human notes are being shipped');
+    assert.ok(/GENERATED by tools\/build-extract-corpus\.py/.test(shipped),
+      'a generated file must say so, or someone will hand-edit it');
+  });
+
+  test('the reading benchmark extracts and scores — it never saves', () => {
+    // A benchmark that could write into the review screen is a benchmark
+    // nobody dares run. It must not touch pendingEvents or open review.
+    const fn = script.split('async function runExtractionBench(')[1]
+                     .split('\nasync function runRoutingBench')[0];
+    [/pendingEvents\s*=/, /pendingSource\s*=/, /sub\('review'\)/, /S\.events\.push/,
+     /save\(\)/, /confirmPendingAction\(/]
+      .forEach(re => assert.ok(!re.test(fn), 'the reading benchmark can write: ' + re));
+    assert.ok(/scoreExtraction\(/.test(fn), 'and it must still score something');
+  });
+
+  test('it measures the pipeline that ships, not a reimplementation of it', () => {
+    const fn = script.split('async function runExtractionBench(')[1]
+                     .split('\nasync function runRoutingBench')[0];
+    assert.ok(/eventPrompt\(\)/.test(fn), 'it does not use the shipping prompt');
+    assert.ok(/GROUNDING_EVENTS/.test(fn), 'it does not use the shipping grounding');
+    assert.ok(/parseExtractedEvents\(/.test(fn), "it does not use the app's own parser");
+    assert.ok(/'bench\.extract'/.test(fn), 'its calls are indistinguishable in the AI log');
+  });
+
+  test('the two benchmarks share a runner but never share a scorer', () => {
+    // benchSummary must pick by kind. Scoring a reading run with the routing
+    // scorer would produce confident nonsense.
+    const fn = script.split('function benchSummary(')[1].split('\n}')[0];
+    assert.ok(/kind === 'extraction'/.test(fn), 'benchSummary does not branch on kind');
+    assert.ok(/aggregateExtraction\(/.test(fn) && /summarise\(/.test(fn));
+  });
+
+  test('the two exports are different file kinds', () => {
+    // A reader must never have to guess which benchmark it is holding.
+    assert.ok(/kind: 'flyersnap-extraction-benchmark'/.test(script));
+    assert.ok(/kind: 'flyersnap-router-benchmark'/.test(script));
+    const fn = script.split('function exportExtractionBenchmark(')[1].split('\nfunction ')[0];
+    [/S\.events/, /S\.chores/, /S\.lists/, /S\.ask/, /apiKey/]
+      .forEach(re => assert.ok(!re.test(fn), 'the export reaches into user data: ' + re));
+    assert.ok(/redact\(/.test(fn), 'a transport error could carry a key and is not redacted');
+  });
+
+  test('invented events are the headline, not a footnote', () => {
+    // A missed flyer gets noticed; an invented one quietly gets trusted.
+    const fn = script.split('function renderExtractionBench(')[1].split('\nfunction renderBench')[0];
+    assert.ok(/invented/.test(fn.split('sect')[0]),
+      'the invented count is not above the first section heading');
+    assert.ok(/red-accent|'red'/.test(fn), 'nothing marks it as the bad outcome');
+  });
+
+  test('both benchmarks are offered, and both say they change nothing', () => {
+    const settings = script.split('function renderSettings(')[1].split('\nfunction ')[0];
+    assert.ok(/runExtractionBench\(\)/.test(settings), 'the reading benchmark is unreachable');
+    assert.ok(/runRoutingBench\(\)/.test(settings), 'the routing benchmark is unreachable');
+    const claims = settings.match(/nothing is added, changed or deleted/gi) || [];
+    assert.ok(claims.length >= 2,
+      'a button that makes a dozen model calls must say what it will not do: found '
+      + claims.length + ' such statements');
+  });
+
   console.log('\nEvery screen is audited (v9.15)');
 
   test('the a11y audit covers every sub-screen the app can show', () => {
@@ -1523,7 +1599,7 @@ module.exports = async function runModuleTests(test){
     // 'playwright'" on a clean checkout -- Logan's machine, which had never
     // run the audit. A heavy or optional dependency must be required INSIDE
     // the function that needs it, never at module load.
-    const deps = ['tools/a11y-audit.js', 'tools/eval-router.js', 'eval/score.js',
+    const deps = ['tools/a11y-audit.js', 'tools/eval-router.js', 'js/extract-score.js',
                   'js/route-score.js'];
     const OPTIONAL = ['playwright', 'puppeteer', 'lighthouse'];
     const bad = [];

@@ -166,6 +166,20 @@ const SCREENS = [
             missing:[], wrongValue:[], invented:['date="2026-09-09"'] },
         ] };
       sub('bench')` },
+  { key:'bench-extract', setup:`
+      benchState = { kind:'extraction', running:false, done:true, i:8, total:8, cancelled:false,
+        provider:'local', model:'qwen2.5vl', startedAt:0, ms:52000, error:'',
+        results:[
+          { id:'deadline-vs-event', precision:1, recall:1, matched:2, missed:[], invented:[],
+            fields:{ title:{right:2,seen:2}, time:{right:2,seen:2}, endTime:{right:2,seen:2},
+                     kind:{right:2,seen:2}, location:{right:2,seen:2}, notes:{right:2,seen:2} } },
+          { id:'schedule-grid', precision:0.5, recall:0.4, matched:2,
+            missed:[{ date:'2026-09-14', title:'Ballet (Marla)' }],
+            invented:[{ date:'2026-09-14', title:'Fun Run' }],
+            fields:{ title:{right:2,seen:2}, time:{right:1,seen:2}, endTime:{right:2,seen:2},
+                     kind:{right:2,seen:2}, location:{right:2,seen:2}, notes:{right:2,seen:2} } },
+        ] };
+      sub('bench')` },
   { key:'bench-running', setup:`
       benchState = { running:true, done:false, i:7, total:34, cancelled:false,
         provider:'local', model:'qwen2.5:14b-instruct', startedAt:0, ms:0, error:'', results:[] };

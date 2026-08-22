@@ -3,6 +3,7 @@
  *
  *   ANTHROPIC_API_KEY=sk-ant-... node tools/eval-extraction.js
  *   node tools/eval-extraction.js --local http://192.168.1.9:11434/v1 qwen3-vl:8b
+ *   node tools/eval-extraction.js --read <exported.json>  (a run done on the phone)
  *   node tools/eval-extraction.js --dry          (scorer self-check, no network)
  *
  * Runs every case in eval/cases.json through a provider, scores the result
@@ -25,10 +26,49 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 
 async function main(){
-  const { scoreCase, aggregate, FIELDS } = await import(path.join(root, 'eval/score.js'));
+  const { scoreExtraction: scoreCase, aggregateExtraction: aggregate, FIELDS } =
+    await import(path.join(root, 'js/extract-score.js'));
   const corpus = JSON.parse(fs.readFileSync(path.join(root, 'eval/cases.json'), 'utf8'));
   const cases = corpus.cases;
   const args = process.argv.slice(2);
+
+  // Read a run exported from the phone. The API key lives in the browser's
+  // storage, so the run that matters most happens in the app.
+  const readIdx = args.indexOf('--read');
+  if(readIdx >= 0){
+    const file = args[readIdx + 1];
+    if(!file){ console.error('usage: node tools/eval-extraction.js --read <exported.json>'); process.exit(2); }
+    let d;
+    try{ d = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch(e){ console.error('Could not read ' + file + ': ' + e.message); process.exit(2); }
+    if(d.kind !== 'flyersnap-extraction-benchmark'){
+      console.error('That is not a reading-benchmark export (kind: ' + (d.kind || 'unknown') + ').');
+      console.error('Export it from Settings -> "How well does it read paperwork?"');
+      process.exit(2);
+    }
+    const a = d.summary, app = d.app || {};
+    const pct = (v) => v === null || v === undefined ? '  n/a' : (v * 100).toFixed(1).padStart(5) + '%';
+    console.log('\n' + '='.repeat(52));
+    console.log(`ran on     the app, ${app.version || '?'}, ${app.provider || '?'} ${app.model || ''}`);
+    console.log(`cases      ${a.cases}   expected ${a.expected}   returned ${a.returned}`);
+    console.log(`precision ${pct(a.precision)}   recall ${pct(a.recall)}   f1 ${pct(a.f1)}`);
+    console.log(`missed     ${a.missedTotal}`);
+    console.log(`INVENTED   ${a.inventedTotal}   <- the failure that matters most`);
+    console.log('\nper-field accuracy, within correctly matched events:');
+    for(const f of FIELDS) console.log(`  ${f.padEnd(10)} ${pct(a.fields[f].rate)}  (${a.fields[f].right}/${a.fields[f].seen})`);
+    const bad = (d.cases || []).filter(c => c.invented.length || c.missed.length || c.transportError);
+    if(bad.length){
+      console.log('\nwhere it slipped:');
+      bad.forEach(c => {
+        console.log('  ' + c.id + (c.transportError ? '  CALL FAILED: ' + c.transportError : ''));
+        c.invented.forEach(e => console.log(`      INVENTED: ${e.date} ${e.title}`));
+        c.missed.forEach(e => console.log(`      missed:   ${e.date} ${e.title}`));
+      });
+    }
+    console.log('='.repeat(52));
+    if(a.inventedTotal) process.exitCode = 1;
+    return;
+  }
 
   if(args.includes('--dry')){
     // Self-check: score every case against its OWN labels. Anything below a

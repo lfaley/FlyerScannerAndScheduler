@@ -2733,6 +2733,197 @@ function buildDiagnostics(state, meta){
   };
 }
 
+/**
+ * Extraction scoring. Pure -- no DOM, no network, no app state.
+ *
+ * Answers the question the project could not previously answer: "is the
+ * extraction any good, and did that prompt change help or hurt?" Until now
+ * prompt changes were judged by eye, which does not scale and cannot detect a
+ * small regression.
+ *
+ * How it scores, and why:
+ *
+ * MATCHING IS TWO-STAGE. An extracted event is paired with an expected one
+ * only if they land on the SAME DATE and their titles are recognisably the
+ * same thing. Date is required because a right-looking title on the wrong day
+ * is not a partial success -- it is the exact failure this app exists to
+ * prevent. Title similarity reuses the app's own normalisation so the
+ * benchmark cannot drift from how the app itself compares events.
+ *
+ * THEN FIELDS ARE SCORED WITHIN A PAIR. Precision and recall are computed
+ * over events, and separately per field over matched pairs, because the
+ * failure modes are different: missing a whole event is a different problem
+ * from getting an event's time wrong, and a single blended number hides both.
+ *
+ * WHY THIS LIVES IN js/ RATHER THAN eval/. Everything in js/ ships. This moved
+ * here in v9.19 when the extraction benchmark became runnable from inside the
+ * app: the API key lives in the phone's browser storage, so a desktop script
+ * cannot reach the provider actually in use. One scorer, so a run on the phone
+ * and a run from the terminal cannot disagree. The exported names are
+ * `scoreExtraction` / `aggregateExtraction` rather than `scoreCase` /
+ * `aggregate` because js/route-score.js already owns those, and both are
+ * inlined into one global scope.
+ *
+ * HALLUCINATION IS TRACKED SEPARATELY. An invented event (no expected
+ * counterpart) is the worst failure mode for this app -- worse than a miss,
+ * because a missed flyer gets noticed and an invented one quietly gets
+ * trusted. It is reported on its own, not just folded into precision.
+ */
+
+// The app's OWN matching, imported rather than copied. It used to be a copy
+// with a comment claiming it could not diverge -- and it had diverged: this
+// file handled titles made entirely of stop-words and js/matching.js did not,
+// so the app failed to spot two byte-identical "The Note" events on one day.
+// Consolidating the two is what found it (v9.18).
+
+/** Kept as a name so the scoring code below reads the way it always did. */
+const titleMatch = titleSimilarity;
+
+// Fields compared inside a matched pair. `soft` fields tolerate wording
+// differences; the rest must be exact, because a time or a date that is
+// "close" is simply wrong.
+const FIELDS = ['title', 'time', 'endTime', 'kind', 'location', 'notes'];
+const SOFT = new Set(['title', 'location', 'notes']);
+
+// `blankToNull`, not `norm`: js/intents.js already owns a top-level `norm`,
+// and every js/ module is inlined into ONE global scope, so a second one would
+// silently shadow it. A test fails the build on exactly this.
+const blankToNull = (v) => (v === undefined || v === null || v === '') ? null : String(v).trim();
+
+function fieldAgrees(field, expected, actual){
+  const e = blankToNull(expected), a = blankToNull(actual);
+  if(e === null && a === null) return true;      // both silent: correct
+  if(e === null || a === null) return false;     // one invented or dropped it
+  if(!SOFT.has(field)) return e.toLowerCase() === a.toLowerCase();
+  if(field === 'notes'){
+    // Notes are prose; demand the substance, not the wording. Scored as
+    // "did it capture the facts", i.e. token recall against the expected note.
+    const E = normTitle(e).split(' ').filter(Boolean);
+    const A = new Set(normTitle(a).split(' ').filter(Boolean));
+    if(!E.length) return true;
+    return E.filter(w => A.has(w)).length / E.length >= 0.6;
+  }
+  return titleMatch(e, a) >= 0.8;
+}
+
+/**
+ * Score one case: the events a model returned against the events a human said
+ * were there.
+ *
+ * Greedy pairing on (date, best title similarity). Greedy is adequate here
+ * because a single flyer rarely holds two same-day events with confusable
+ * titles; when it does, the report shows the pairing so it can be inspected.
+ */
+function scoreExtraction(expected, actual){
+  const exp = (expected || []).map((e, i) => ({ e, i }));
+  const act = (actual || []).map((a, i) => ({ a, i }));
+  const takenA = new Set();
+  const pairs = [];
+
+  for(const { e } of exp){
+    let best = null, bestSim = 0;
+    for(const { a, i } of act){
+      if(takenA.has(i)) continue;
+      if(blankToNull(a.date) !== blankToNull(e.date)) continue;      // wrong day is never a match
+      const sim = titleMatch(e.title, a.title);
+      if(sim > bestSim){ bestSim = sim; best = { a, i }; }
+    }
+    // 0.5 is deliberately lower than the app's 0.8 duplicate threshold: here we
+    // WANT to pair a near-miss so its fields get scored and the error is
+    // visible, rather than counting it as both a miss and a hallucination.
+    if(best && bestSim >= 0.5){
+      takenA.add(best.i);
+      pairs.push({ expected: e, actual: best.a, titleSim: bestSim });
+    } else {
+      pairs.push({ expected: e, actual: null, titleSim: 0 });
+    }
+  }
+
+  const missed = pairs.filter(p => !p.actual).map(p => p.expected);
+  const invented = act.filter(x => !takenA.has(x.i)).map(x => x.a);
+  const matched = pairs.filter(p => p.actual);
+
+  const fields = {};
+  for(const f of FIELDS){
+    let right = 0, seen = 0;
+    for(const p of matched){
+      seen++;
+      if(fieldAgrees(f, p.expected[f], p.actual[f])) right++;
+    }
+    fields[f] = { right, seen, rate: seen ? right / seen : null };
+  }
+
+  const tp = matched.length;
+  return {
+    expected: exp.length,
+    returned: act.length,
+    matched: tp,
+    missed,
+    invented,
+    precision: act.length ? tp / act.length : (exp.length ? 0 : 1),
+    recall: exp.length ? tp / exp.length : 1,
+    f1: (tp && (act.length + exp.length)) ? (2 * tp) / (act.length + exp.length) : (exp.length || act.length ? 0 : 1),
+    fields,
+    pairs,
+  };
+}
+
+/** Roll several case results into one report. */
+function aggregateExtraction(results){
+  const sum = (f) => results.reduce((n, r) => n + f(r), 0);
+  const tp = sum(r => r.matched);
+  const returned = sum(r => r.returned);
+  const expected = sum(r => r.expected);
+  const fields = {};
+  for(const f of FIELDS){
+    const right = sum(r => r.fields[f].right);
+    const seen = sum(r => r.fields[f].seen);
+    fields[f] = { right, seen, rate: seen ? right / seen : null };
+  }
+  return {
+    cases: results.length,
+    expected, returned, matched: tp,
+    precision: returned ? tp / returned : (expected ? 0 : 1),
+    recall: expected ? tp / expected : 1,
+    f1: (returned + expected) ? (2 * tp) / (returned + expected) : 1,
+    missedTotal: sum(r => r.missed.length),
+    inventedTotal: sum(r => r.invented.length),
+    fields,
+  };
+}
+
+/**
+ * The extraction benchmark corpus, as the app carries it.
+ *
+ * GENERATED by tools/build-extract-corpus.py from eval/cases.json.
+ * Do not edit by hand -- a test fails the build if the two disagree.
+ *
+ * Each case is a piece of source text plus the events a human says are
+ * genuinely in it. The `note` explaining WHY each case exists is stripped:
+ * that is for a person reading the repo, not for the runtime.
+ *
+ * Why the app carries this: the API key lives in the phone's browser storage,
+ * so a desktop script cannot reach the provider actually in use. The only
+ * place this benchmark can measure what Logan really runs is here.
+ *
+ * THE CASES ARE STILL SYNTHETIC SEEDS. They cover the failure modes the prompt
+ * was designed against; they are not real family paperwork. Ten real labelled
+ * flyers would be worth more than all of them. See eval/cases.json.
+ */
+
+const EXTRACT_BENCH = {
+  cases: [
+    {"id": "deadline-vs-event", "today": "2026-08-20", "source": "CHAPEL LAKES ELEMENTARY — Fall Volleyball\n\nTryouts begin Monday, August 24 at 4:00 PM in the North Gym.\nAll athletes must have a completed physical form on file. Forms are due to the front office no later than Friday, August 21.\nBring water, athletic shoes and a completed form. Questions: coach Alvarez.", "expected": [{"title": "Physical form due", "date": "2026-08-21", "kind": "deadline", "notes": "Completed physical form due to the front office; required before tryouts."}, {"title": "Volleyball Tryouts", "date": "2026-08-24", "time": "16:00", "kind": "event", "location": "North Gym", "notes": "Bring water, athletic shoes and a completed physical form."}]},
+    {"id": "vague-date-must-not-resolve", "today": "2026-08-20", "source": "PTA Newsletter\n\nThe book fair returns later this fall — dates to be announced.\nPicture day is Wednesday, September 9. Order envelopes went home Tuesday; exact change only.\nWe are still looking for volunteers for the fall festival sometime in October.", "expected": [{"title": "Picture Day", "date": "2026-09-09", "kind": "event", "notes": "Order envelopes went home Tuesday; exact change only."}]},
+    {"id": "schedule-grid", "today": "2026-08-20", "source": "DANCE INTENSIVE — Week of Sept 14\n\nTime | Mon Sept 14 | Tue Sept 15\n9:00 | Ballet (Marla) | Ballet (Marla)\n10:30 | Mini Jazz (Austin) | Tap (Austin)\n12:00 | Lunch | Lunch\n1:00 | | Mini M.T. (Austin)\n\nWear all black. Hair up. Bring water and a healthy snack.", "expected": [{"title": "Ballet (Marla)", "date": "2026-09-14", "time": "09:00", "kind": "event", "notes": "Wear all black; hair up; bring water and a healthy snack."}, {"title": "Mini Jazz (Austin)", "date": "2026-09-14", "time": "10:30", "kind": "event", "notes": "Wear all black; hair up; bring water and a healthy snack."}, {"title": "Ballet (Marla)", "date": "2026-09-15", "time": "09:00", "kind": "event", "notes": "Wear all black; hair up; bring water and a healthy snack."}, {"title": "Tap (Austin)", "date": "2026-09-15", "time": "10:30", "kind": "event", "notes": "Wear all black; hair up; bring water and a healthy snack."}, {"title": "Mini M.T. (Austin)", "date": "2026-09-15", "time": "13:00", "kind": "event", "notes": "Wear all black; hair up; bring water and a healthy snack."}]},
+    {"id": "notes-live-elsewhere", "today": "2026-08-20", "source": "Subject: Field trip — Thursday\n\nHi families,\n\nOur trip to the science museum is Thursday, September 3. The bus leaves at 8:15 AM sharp from the front loop.\n\nA reminder that permission slips were due last week — if you have not sent one, your child cannot ride.\n\nStudents should wear their class t-shirt and closed-toe shoes, and bring a sack lunch in a disposable bag. No money is needed; admission is covered.", "expected": [{"title": "Science museum field trip", "date": "2026-09-03", "time": "08:15", "kind": "event", "location": "front loop", "notes": "Bus leaves 8:15 AM sharp; wear class t-shirt and closed-toe shoes; bring a sack lunch in a disposable bag; no money needed; permission slip required to ride."}]},
+    {"id": "time-range", "today": "2026-08-20", "source": "Open House — Tuesday, September 8, 6:00-8:30 PM in the cafeteria. Drop in any time.", "expected": [{"title": "Open House", "date": "2026-09-08", "time": "18:00", "endTime": "20:30", "kind": "event", "location": "cafeteria", "notes": "Drop in any time."}]},
+    {"id": "nothing-to-extract", "today": "2026-08-20", "source": "Thank you to everyone who helped at last week's fun run! We raised more than expected and the kids had a wonderful time. Photos are on the school website. Have a great weekend.", "expected": []},
+    {"id": "weekday-and-date-disagree", "today": "2026-08-20", "source": "Band practice moves to Wenesday 9/2 at 3:30 in the band room. Bring your folder.", "expected": [{"title": "Band practice", "date": "2026-09-02", "time": "15:30", "kind": "event", "location": "band room", "notes": "Bring your folder."}]},
+    {"id": "two-deadlines-one-day", "today": "2026-08-20", "source": "Reminders for Friday, August 28: yearbook orders close at midnight, and spirit-wear payment is due to the office by 3 PM.", "expected": [{"title": "Yearbook orders close", "date": "2026-08-28", "kind": "deadline", "notes": "Orders close at midnight."}, {"title": "Spirit-wear payment due", "date": "2026-08-28", "kind": "deadline", "notes": "Payment due to the office by 3 PM."}]}
+  ],
+};
+
 // ---------- State & storage ----------
 const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA'];
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -3064,10 +3255,55 @@ function benchMeta(){
            isDestructive: (id) => !!(intentById(id) || {}).destructive };
 }
 
+// Reading a flyer is what this app is FOR, and until v9.19 it had never been
+// measured -- the harness existed from v9.6 and could never be run, because
+// the key is here rather than on the desktop.
+//
+// Same safety property as the routing benchmark: this extracts and scores. It
+// never touches pendingEvents, never opens the review screen, never saves. A
+// benchmark that could write would be a benchmark nobody dares run.
+async function runExtractionBench(){
+  if(benchState && benchState.running) return;
+  benchState = { kind:'extraction', running:true, done:false, i:0,
+                 total:EXTRACT_BENCH.cases.length, results:[], cancelled:false,
+                 provider:aiProvider(), model:aiModelName(),
+                 startedAt:Date.now(), ms:0, error:'' };
+  sub('bench');
+  try{
+    for(const c of EXTRACT_BENCH.cases){
+      if(benchState.cancelled) break;
+      benchState.i++;
+      render();
+      await new Promise(r => setTimeout(r, 0));
+      let events = [];
+      let transportError = null;
+      try{
+        // The SHIPPING prompt, and the app's own parser, so this measures the
+        // pipeline rather than a clean-room reimplementation of it.
+        const text = await callAI(
+          [{ type:'text', text:`Today is ${c.today}.\n\n${c.source}` },
+           { type:'text', text: eventPrompt() }],
+          3000, GROUNDING_EVENTS, 'bench.extract');
+        events = parseExtractedEvents(text) || [];
+      }catch(err){
+        transportError = (err && err.message) || String(err);
+      }
+      const r = scoreExtraction(c.expected, events);
+      benchState.results.push(Object.assign({ id:c.id, transportError }, r));
+    }
+  }catch(err){
+    benchState.error = (err && err.message) || String(err);
+  }
+  benchState.running = false;
+  benchState.done = true;
+  benchState.ms = Date.now() - benchState.startedAt;
+  render();
+}
+
 async function runRoutingBench(){
   if(benchState && benchState.running) return;
-  benchState = { running:true, done:false, i:0, total:BENCH.cases.length, results:[],
-                 cancelled:false, provider:aiProvider(), model:aiModelName(),
+  benchState = { kind:'routing', running:true, done:false, i:0, total:BENCH.cases.length,
+                 results:[], cancelled:false, provider:aiProvider(), model:aiModelName(),
                  startedAt:Date.now(), ms:0, error:'' };
   sub('bench');
   const system = buildRouterPrompt();
@@ -3111,7 +3347,10 @@ function cancelRoutingBench(){
 }
 
 function benchSummary(){
-  return benchState ? summarise(benchState.results) : null;
+  if(!benchState) return null;
+  return benchState.kind === 'extraction'
+    ? aggregateExtraction(benchState.results)
+    : summarise(benchState.results);
 }
 
 // The file that goes back to the desktop. Sentences and labels only -- they
@@ -3120,6 +3359,7 @@ function benchSummary(){
 // diagnostics export.
 function exportBenchmark(){
   if(!benchState || !benchState.results.length){ toast('Nothing to export yet'); return; }
+  if(benchState.kind === 'extraction') return exportExtractionBenchmark();
   try{
     const s = benchSummary();
     const payload = {
@@ -3266,8 +3506,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.18';
-const APP_TAGLINE = 'one matching rule';
+const APP_VERSION = 'v9.19';
+const APP_TAGLINE = 'reading benchmark';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
@@ -6980,6 +7220,13 @@ function renderSettings(m){
       Last run: ${benchSummary().passed}/${benchSummary().cases} passed.
       <button class="linkbtn" onclick="sub('bench')">See the results</button></div>` : ''}
 
+    <div class="sect">How well does it read paperwork?</div>
+    <div class="help">Runs ${EXTRACT_BENCH.cases.length} sample flyers and emails through the model
+      selected above and scores what it pulled out — including whether it ever
+      invented an event that was not there. ${EXTRACT_BENCH.cases.length} calls, about a minute.
+      Nothing is added, changed or deleted by any of it.</div>
+    <button class="btn alt" onclick="runExtractionBench()">${ico('flask')}Run the reading benchmark</button>
+
     <div class="sect">Gmail watcher</div>
     <div class="help">${watcherConfigured()
       ? 'Connected. Your Apps Script checks email every 15 minutes and FlyerSnap picks up anything new when you open it.'
@@ -7224,20 +7471,116 @@ function compareColumn(title, events, err){
   </div>`;
 }
 
+// Its own file kind and its own shape -- the two benchmarks measure different
+// things and a reader must not have to guess which one it is holding.
+function exportExtractionBenchmark(){
+  try{
+    const s = benchSummary();
+    const payload = {
+      kind: 'flyersnap-extraction-benchmark',
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      app: { version: APP_VERSION, provider: benchState.provider, model: benchState.model,
+             elapsedMs: benchState.ms },
+      summary: s,
+      cases: benchState.results.map(r => ({
+        id: r.id, precision: r.precision, recall: r.recall,
+        matched: r.matched, missed: r.missed, invented: r.invented,
+        fields: r.fields,
+        transportError: r.transportError ? redact(r.transportError) : undefined,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'flyersnap-extraction-benchmark-' + todayISO() + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`Exported ${payload.cases.length} results`);
+  }catch(e){
+    alert('Could not build the benchmark file: ' + (e && e.message));
+  }
+}
+
+function renderExtractionBench(m, b){
+  const s = benchSummary();
+  const pct = (v) => v === null || v === undefined ? '—' : (v * 100).toFixed(0) + '%';
+  const failures = b.results.filter(r => r.invented.length || r.missed.length
+    || r.precision < 1 || r.recall < 1 || r.transportError);
+  // Invented first and alone. A missed flyer gets noticed; an invented event
+  // quietly gets trusted, which is the failure this whole app exists to stop.
+  const invented = b.results.reduce((n, r) => n + r.invented.length, 0);
+  m.innerHTML = `
+    <div class="card" style="border-left:5px solid var(--${invented ? 'red' : 'accent'}-accent)">
+      <div style="font-weight:800;font-size:17px">${invented
+        ? invented + ' invented event' + (invented === 1 ? '' : 's')
+        : 'Nothing invented'}</div>
+      <div class="meta">An event that was never in the paperwork is the worst
+        thing this can do — a missed one gets noticed, an invented one gets trusted.</div>
+    </div>
+
+    <div class="card">
+      <div class="meta">${s.cases} cases \u00b7 ${s.expected} events expected \u00b7
+        ${s.returned} returned \u00b7 ${(b.ms / 1000).toFixed(0)}s</div>
+      <div class="meta" style="font-size:12px">${esc(b.model)} \u00b7 ${esc(b.provider)}</div>
+      ${b.cancelled ? `<div class="help" style="margin:8px 0 0">Stopped early — a partial run.</div>` : ''}
+      ${b.error ? `<div class="help" style="margin:8px 0 0">${esc(b.error)}</div>` : ''}
+    </div>
+
+    <div class="sect">Did it find the right events?</div>
+    ${[['Precision — of what it returned, how much was real', s.precision],
+       ['Recall — of what was there, how much it found', s.recall],
+       ['F1 — the two together', s.f1]].map(([label, v]) => `
+      <div class="card row" style="padding:12px">
+        <div class="grow" style="font-size:14px">${label}</div>
+        <span style="font-weight:800">${pct(v)}</span>
+      </div>`).join('')}
+    <div class="card row" style="padding:12px">
+      <div class="grow" style="font-size:14px">Missed entirely</div>
+      <span style="font-weight:800;color:var(--${s.missedTotal ? 'amber' : 'accent'}-accent)">${s.missedTotal}</span>
+    </div>
+
+    <div class="sect">Field by field</div>
+    <div class="help">Within events it matched correctly. A wrong time inside a
+      right event is a different failure from missing the event.</div>
+    ${FIELDS.map(f => `<div class="card row" style="padding:12px">
+      <div class="grow" style="font-size:14px">${f}</div>
+      <span class="meta" style="font-size:12px">${s.fields[f].right}/${s.fields[f].seen}</span>
+      <span style="font-weight:700;margin-left:10px">${pct(s.fields[f].rate)}</span>
+    </div>`).join('')}
+
+    ${failures.length ? `<div class="sect">Where it slipped</div>` + failures.map(r => `
+      <div class="card">
+        <div style="font-weight:700;font-size:15px">${esc(r.id)}</div>
+        ${r.transportError ? `<div class="help" style="margin:6px 0 0">Call failed: ${esc(r.transportError)}</div>` : ''}
+        ${r.invented.map(e => `<div class="help" style="margin:6px 0 0;color:var(--red-accent)">
+          invented: ${esc(e.date || 'no date')} ${esc(e.title || '')}</div>`).join('')}
+        ${r.missed.map(e => `<div class="help" style="margin:6px 0 0">
+          missed: ${esc(e.date || 'no date')} ${esc(e.title || '')}</div>`).join('')}
+      </div>`).join('') : ''}
+
+    <button class="btn" style="margin-top:12px" onclick="exportBenchmark()">${ico('download')}Export results for desktop</button>
+    <div class="help">The source text comes from the repo, not from your paperwork.
+      No events, notes or API key, so it is safe to email.</div>
+    <button class="btn alt" onclick="runExtractionBench()">${ico('refresh')}Run it again</button>`;
+}
+
 function renderBench(m){
-  setHeader('Routing benchmark', true);
+  setHeader(benchState && benchState.kind === 'extraction' ? 'Reading benchmark' : 'Routing benchmark', true);
   const b = benchState;
   if(!b){ m.innerHTML = `<div class="empty"><div class="eb">Nothing has been run yet.</div></div>`; return; }
 
   if(b.running){
     m.innerHTML = `<div class="spin" style="padding:24px"><div class="spinner"></div>
       <div style="font-weight:700">${b.i} of ${b.total}</div>
+      <div class="meta">${b.kind === 'extraction' ? 'reading paperwork' : 'understanding sentences'}</div>
       <div class="meta">${esc(b.model)} \u00b7 ${esc(b.provider)}</div>
       <div class="help">Each sentence is classified the same way a typed one is.
         Nothing is added, changed or deleted by any of this.</div></div>
       <button class="btn alt" onclick="cancelRoutingBench()">Stop</button>`;
     return;
   }
+
+  if(b.kind === 'extraction') return renderExtractionBench(m, b);
 
   const s = benchSummary();
   const v = verdict(s);

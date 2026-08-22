@@ -172,6 +172,12 @@ having checked it.
   `js/bench-cases.js` is GENERATED from `eval/router-cases.json` by
   `tools/build-bench-corpus.py`; edit the corpus, then regenerate, or the
   drift test fails.
+- **Settings → "How well does it read paperwork?"** — the EXTRACTION benchmark
+  run IN THE APP (v9.19). Same reason as the routing one: the key is on the
+  phone. It must extract and score and **never save** — no `pendingEvents`, no
+  review screen, no writes; a test enforces it. `js/extract-cases.js` is
+  GENERATED from `eval/cases.json` by `tools/build-extract-corpus.py`.
+  Both benchmarks share the runner and `benchState.kind` picks the scorer.
 - `node tools/eval-router.js` — ROUTING accuracy against `eval/router-cases.json`.
   Three tiers: `--dry` (scorer self-check), `--offline` (the properties that
   need no model — this tier also runs inside `node tests.js`), and the default
