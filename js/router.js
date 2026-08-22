@@ -174,6 +174,25 @@ export function describeIntent(route, resolved){
       return `Draft a chore: ${p.title}${p.person ? ' for ' + p.person : ''}`;
     case 'open_screen':
       return `Go to ${p.screen}`;
+    case 'create_list':
+      return `Start a new list called "${p.name}"`;
+    case 'check_list_item':
+      return `Tick off ${p.items.length} item${p.items.length === 1 ? '' : 's'}`
+        + `${resolved && resolved.name ? ' on "' + resolved.name + '"' : ''}: ${p.items.join(', ')}`;
+    case 'complete_chore':
+      return `Mark "${resolved && resolved.title ? resolved.title : p.chore}" done for today`
+        + `${p.person ? ' \u2014 ' + p.person : ''}`;
+    case 'mark_event_handled':
+      return `Mark "${resolved && resolved.title ? resolved.title : p.event}" as handled, so it stops warning you`;
+    case 'edit_event':
+      // The caller passes the real change set; this is the generic wording for
+      // a preview built before the event is resolved.
+      return `Change "${resolved && resolved.title ? resolved.title : p.event}"`;
+    case 'delete_event':
+      return `Delete "${resolved && resolved.title ? resolved.title : p.event}". You can undo it.`;
+    case 'delete_chore':
+      return `Delete the chore "${resolved && resolved.title ? resolved.title : p.chore}". `
+        + `Stars already earned are kept. You can undo it.`;
     default:
       return intentById(route.intent) ? intentById(route.intent).title : '';
   }
@@ -201,7 +220,9 @@ export function quickRoute(text){
 
   // Anything that smells like an instruction to change something goes to the
   // model, so the safety checks in validateRoute still apply to it.
-  if(/\b(add|put|create|make|remove|delete|clear|set|schedule|book|open|go to|take me)\b/.test(low)) return null;
+  // v9.14 widened this. Anything that could change data must reach the model
+  // router, so validateRoute's checks and the confirm step still apply to it.
+  if(/\b(add|put|create|make|start|remove|delete|del|get rid|clear|set|schedule|book|open|go to|take me|tick|check off|cross off|mark|done|finish|finished|did|move|reschedule|rename|change|update|edit)\b/.test(low)) return null;
 
   // "whats on the list" has no apostrophe and no question mark, and is still
   // obviously a question. The optional 's covers what's/whats/wheres.

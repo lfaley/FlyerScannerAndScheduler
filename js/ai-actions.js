@@ -12,15 +12,16 @@
  *
  *  - Microsoft HAX G1/G2: make clear what the system can do, and how well.
  *    Hence `can` and `cannot` are required fields, not documentation.
- *  - HAX G16 + Stanford HAI human agency: nothing writes without review, so
- *    there is deliberately NO risk class meaning "acts on its own". A future
- *    contributor cannot add one without editing this file and its test.
+ *  - HAX G16 + Stanford HAI human agency: nothing writes without the user
+ *    saying yes, so there is deliberately NO risk class meaning "acts on its
+ *    own". A future contributor cannot add one without editing this file and
+ *    its test.
  *  - Google PAIR: always provide a non-AI fallback. Every action names the
  *    manual path that does the same job, and a test checks it is filled in.
  */
 
-// The only three classes an AI capability may have. Adding a fourth is a
-// deliberate act with a test to update, which is the point.
+// The only classes an AI capability may have. Adding one is a deliberate act
+// with a test to update, which is the point.
 export const RISK = {
   // Reads data and answers. Changes nothing. Worst case: a wrong answer the
   // user can check, because answers cite what they were based on.
@@ -28,6 +29,11 @@ export const RISK = {
   // Produces a DRAFT. It reaches the user's data only after they review and
   // accept it in the existing review screen. Worst case: wasted taps.
   PROPOSE: 'propose',
+  // Changes data -- but only after showing the user exactly what it is about
+  // to do and getting an explicit yes, and every change is undoable. Added in
+  // v9.14, when the assistant gained the ability to tick things off, edit and
+  // delete. It is NOT "acts on its own": the consent is the whole class.
+  CONFIRM: 'confirm',
   // No model involved at all -- plain, deterministic code. Listed here so the
   // app can be honest that it is NOT AI, which is its own kind of
   // transparency, and so the capability list is complete.
@@ -50,7 +56,7 @@ export const AI_ACTIONS = [
     label: 'Ask about your schedule',
     risk: RISK.READ,
     can: 'Answers questions about the events already in the app — what is coming up, what a particular person has on, when something is due.',
-    cannot: 'It only sees the events shown to it, never your whole history, and it cannot look anything up on the internet or change anything. Every answer lists the events it used so you can check it.',
+    cannot: 'It only sees the events shown to it, never your whole history, and it cannot look anything up on the internet. Every answer lists the events it used so you can check it.',
     fallback: 'Search and the person filters on the Events screen.',
   },
   {
@@ -60,6 +66,14 @@ export const AI_ACTIONS = [
     can: 'Turns a sentence like "dentist for Braelyn next Tuesday at 3" into a draft event, or a line like "milk, eggs, bread" into list items.',
     cannot: 'It will not guess a date you did not give it. Anything unclear comes back blank for you to fill in, and nothing is saved until you accept it.',
     fallback: 'The normal add form, which is always available.',
+  },
+  {
+    id: 'act',
+    label: 'Do things you ask for',
+    risk: RISK.CONFIRM,
+    can: 'Adds items to a list, starts a new list, ticks things off, marks a chore done or a deadline handled, moves an event, and deletes an event or chore — from a sentence typed into the chat box.',
+    cannot: 'It never acts on its own. It shows you exactly what it is about to do and waits for you to say yes, it refuses to guess when two things could be meant, and every change it makes can be undone.',
+    fallback: 'Every one of these is a tap on the screen it belongs to.',
   },
   {
     id: 'clashes',

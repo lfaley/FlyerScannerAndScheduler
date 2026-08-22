@@ -27,7 +27,8 @@ synced copies, and **tests fail the build if they drift**:
 
 - `js/format.js`, `js/matching.js`, `js/prompts.js`, `js/migrate.js`,
   `js/icons.js`, `js/conflicts.js`, `js/intents.js`, `js/router.js`,
-  `js/conversation.js`, `js/theme.js`, `js/ailog.js` — pure logic modules,
+  `js/assistant-actions.js`, `js/ai-actions.js`, `js/conversation.js`,
+  `js/theme.js`, `js/ailog.js` — pure logic modules,
   individually tested. Inlined by hand
   into index.html's script (guard: "the inlined copies match js/ exactly").
 - `css/tokens.css` (all design tokens, light + dark), `css/components.css` —
@@ -134,7 +135,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 394 tests: data safety, migrations, inline-handler
+- `node tests.js` — 422 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -152,6 +153,37 @@ having checked it.
   `--dry` self-checks the scorer for free.
 - `node tools/diagnostics.js <file>` — read a diagnostics export off Logan's
   phone (see AI CALL LOGGING below). `--errors`, `--all`, `--json`.
+
+THE ASSISTANT CAN ACT (v9.14, `js/assistant-actions.js`). Gordon does not
+only answer. Ten intents in `js/intents.js` change something; five only read.
+The safety properties below are each enforced by a test, and none of them is
+optional:
+
+  - `performRoute()` NEVER writes. It resolves an entity and proposes.
+    `confirmPendingAction()` is the ONLY path in the app that turns an
+    assistant sentence into a change.
+  - Resolution refuses rather than guesses. `resolveEntity()` returns
+    `ok | none | ambiguous`; two candidates means ASK, never pick.
+  - Every write is undoable — an explicit Undo toast, or one of the app's own
+    helpers (`softDelete`, `markHandled`, `completeChore`) which carry theirs.
+  - Call the app's own functions; do not reimplement a write. `toggleChore`
+    exists because a chore belonging to nobody needs the "who did it?" sheet.
+  - Undo by id, never by text. Undoing an assistant add must not delete an
+    identically-named row the user added.
+  - `quickRoute()` short-circuits ONLY to read-only intents. Its change-verb
+    guard is a safety mechanism: widen it when adding a verb, never narrow it.
+
+`destructive: true` on an intent is a flag, not a fifth consequence class.
+The consequence set (answer / navigate / draft / confirm) is closed and
+tested. The flag gives the confirm button a red treatment and an action name
+("Delete Recital"), per Apple App Intents' `actionName`.
+
+If you add an acting capability: declare it in `js/intents.js` with a non-AI
+`fallback`, give it a `performRoute` branch that resolves-then-proposes, give
+it a `confirmPendingAction` case with an undo, and add its example to the
+registry so the chips can find it. `js/ai-actions.js` is the user-facing
+disclosure list and must be updated too — it exists so the promise a user
+reads cannot drift from what the code does, and it HAS drifted before.
 
 AI CALL LOGGING (v9.13, `js/ailog.js`): every AI call is recorded in
 `S.aiLog`, rolling 200 entries, both providers, success and failure. Field

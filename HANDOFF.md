@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.13 · **Tests:** 394 passing
+**Updated:** August 22, 2026 · **Live version:** v9.14 · **Tests:** 422 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -74,6 +74,7 @@ a per-version progress log.
 | v9.11 | Ask screen reworked: pinned composer, honest busy state |
 | v9.12 | Edit Event rebuilt against form-usability research (FORM-UI-REVIEW.md) |
 | v9.13 | AI call logging + desktop diagnostics reader (`tools/diagnostics.js`) |
+| v9.14 | Gordon can act: ten intents, named confirm buttons, discoverable chips |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -125,6 +126,78 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.14 — Gordon can act.** Full written plan in **ASSISTANT-ACTIONS-PLAN.md**.
+
+Logan's report was *"I should be able to have it add events, chores, etc."*
+The surprise: **it already could, and had since v9.8.** Four defects made that
+invisible or disappointing, and none of them was a missing feature:
+
+1. The Ask screen's own intro said *"It cannot change anything on its own."*
+2. `assistantCapabilityChips()` took the first four intents in registry order
+   — four *questions*. None of the three add capabilities was ever advertised.
+3. `add_event` declared a `person` parameter and then set `personIds: []`.
+   `add_chore` did the same with `kidId`. The name was parsed and binned.
+4. `add_event` hardcoded `kind:'event'`, so "permission slip due Friday"
+   became an ordinary event — and only a *deadline* can be missed, so nothing
+   ever warned about it.
+
+NN/g's chatbot research is the diagnosis almost word for word: most in-app
+bots "do a poor job of communicating what they can actually help with", and
+**"the burden of figuring out what the bot can and can't do fell on the
+user"**. Their prompt-control study names discoverability and education as the
+first two jobs of suggestion chips. So `capabilityChips()` now guarantees one
+example per consequence class — ask, draft, confirm, navigate — and a test
+fails the build if the chips are all one kind again.
+
+**Seven new intents**, all CONFIRM: `create_list`, `check_list_item`,
+`complete_chore`, `mark_event_handled`, `edit_event`, `delete_event`,
+`delete_chore`. Registry total is ten acting capabilities plus five reading
+ones.
+
+**The rules that make that safe, each with a guard test:**
+
+- **`performRoute()` never writes.** It resolves and proposes;
+  `confirmPendingAction()` is the only path in the app that turns an assistant
+  sentence into a change. A test greps `performRoute` for `S.*.push`,
+  `softDelete`, `completeChore` and `markHandled` and fails if any appear.
+- **Resolution refuses rather than guesses.** `resolveEntity()` returns
+  `ok | none | ambiguous`; two candidates means the user is asked which (HAX
+  G10). Deleting the wrong "Recital" because two matched is the failure that
+  must not happen.
+- **Every write is undoable**, either through an explicit Undo toast or
+  through the app's own `softDelete` / `markHandled` / `completeChore`. A test
+  walks every `case` in `confirmPendingAction` and requires one or the other.
+- **The assistant calls the app's own functions.** `completeChore` for a chore
+  with an owner, `toggleChore` for one that belongs to nobody — the latter
+  carries the "who did it?" sheet, and skipping it would drop the stars.
+- **Undo removes items by id, not by text**, so undoing an assistant add
+  cannot delete an identically-named item the user added themselves.
+
+**The confirm button now says what it will do.** Apple's App Intents
+confirmation API takes an `actionName` — "the name to use in the button that
+confirms the action" — and every CONFIRM intent had been sharing one button
+reading "Yes, do it". It is now "Add 3 items", "Create Costco", "Mark Bins
+done", and for a `destructive` intent a red **"Delete Recital"** with the card
+reading *"Nothing has been deleted yet. You will be able to undo it."*
+`destructive` is a flag on the registry, not a fifth consequence class; the
+closed set of four stays closed and stays tested.
+
+**`js/ai-actions.js` gained a fourth RISK class, `confirm`.** That file exists
+so the promise a user reads cannot drift from what the code does — and it had
+drifted, still telling users the assistant "cannot ... change anything".
+Widening the closed set was deliberate and required updating its test, which
+is exactly the friction that class is designed to create.
+
+Found in the browser rather than by a test: an older turn keeps `confirm:true`
+forever, so a later pending action re-showed a finished action's buttons and
+offered to redo it. The card now renders only on the newest turn.
+
+One honest cost: `quickRoute`'s change-verb guard widened (`tick`, `mark`,
+`done`, `did`, `move`, `rename`, `start`…), so a question like "what did
+Olivia do today?" now takes the model round-trip instead of answering for
+free. That is the correct side to err on, but it is a small speed regression
+on a few phrasings.
 
 **v9.13 — AI call logging.** Every AI call is now recorded, on both providers
 and in both outcomes, and the record can be read on the desktop.
@@ -409,7 +482,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 394 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 422 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.

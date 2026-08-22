@@ -99,12 +99,18 @@ export const INTENTS = [
   {
     id: 'add_event',
     consequence: CONSEQUENCE.DRAFT,
-    title: 'Draft an event',
+    title: 'Draft an event or a deadline',
     examples: ['Dentist for Braelyn next Tuesday at 3'],
-    params: { title:  { type:'string', required:true },
-              date:   { type:'date',   required:false },
-              time:   { type:'time',   required:false },
-              person: { type:'string', required:false } },
+    // `kind` matters: only a DEADLINE can be missed, and the warnings on the
+    // Events screen key off exactly that. "Permission slip due Friday" became
+    // an ordinary event until v9.14, so nothing ever warned about it.
+    params: { title:    { type:'string', required:true },
+              date:     { type:'date',   required:false },
+              time:     { type:'time',   required:false },
+              person:   { type:'string', required:false },
+              kind:     { type:'enum',   required:false, values:['event','deadline'] },
+              location: { type:'string', required:false },
+              notes:    { type:'string', required:false } },
     fallback: '＋ Add paperwork → type it in.',
   },
   {
@@ -115,8 +121,79 @@ export const INTENTS = [
     params: { title:     { type:'string', required:true },
               person:    { type:'string', required:false },
               frequency: { type:'enum',   required:false, values:['daily','weekly'] },
+              days:      { type:'string[]', required:false },
               stars:     { type:'number', required:false } },
     fallback: '＋ Add chore on the Chores tab.',
+  },
+
+  // -------------------------------------------------------------------------
+  // v9.14 -- acting, not just drafting. Every one of these is CONFIRM: it
+  // previews what it would do and waits for an explicit yes. None of them
+  // writes from performRoute(); confirmPendingAction() is the only path that
+  // touches data, and every write it makes is undoable.
+  // -------------------------------------------------------------------------
+  {
+    id: 'create_list',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Start a new list',
+    examples: ['Start a Costco list'],
+    params: { name: { type:'string', required:true } },
+    fallback: 'The Add box at the top of the Lists tab.',
+  },
+  {
+    id: 'check_list_item',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Tick items off a list',
+    examples: ['Tick milk off the shopping list'],
+    params: { list:  { type:'string',   required:false },
+              items: { type:'string[]', required:true } },
+    fallback: 'Tap the item on the Lists tab.',
+  },
+  {
+    id: 'complete_chore',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Mark a chore done',
+    examples: ['Olivia did the bins'],
+    params: { chore:  { type:'string', required:true },
+              person: { type:'string', required:false } },
+    fallback: 'Tap the chore on the Chores tab.',
+  },
+  {
+    id: 'mark_event_handled',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Mark a deadline as handled',
+    examples: ['I sent the ice cream signup'],
+    params: { event: { type:'string', required:true } },
+    fallback: 'The "Mark as handled" button on the warning itself.',
+  },
+  {
+    id: 'edit_event',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Change an event\u2019s date, time or title',
+    examples: ['Move the recital to the 12th'],
+    params: { event: { type:'string', required:true },
+              date:  { type:'date',   required:false },
+              time:  { type:'time',   required:false },
+              title: { type:'string', required:false } },
+    fallback: 'Tap the event, then Edit.',
+  },
+  {
+    id: 'delete_event',
+    consequence: CONSEQUENCE.CONFIRM,
+    destructive: true,
+    title: 'Delete an event',
+    examples: ['Delete the dentist appointment'],
+    params: { event: { type:'string', required:true } },
+    fallback: 'Tap the event, then Delete.',
+  },
+  {
+    id: 'delete_chore',
+    consequence: CONSEQUENCE.CONFIRM,
+    destructive: true,
+    title: 'Delete a chore',
+    examples: ['Get rid of the bins chore'],
+    params: { chore: { type:'string', required:true } },
+    fallback: 'Long-press the chore on the Chores tab.',
   },
 ];
 
@@ -144,6 +221,11 @@ export function intentRegistryProblems(){
       // is undiscoverable, which is the exact NN/g failure this design is
       // meant to avoid.
       if(i.id !== 'what_needs_doing') out.push(`${i.id}: no examples to show the user`);
+    }
+    // A destructive intent that is not CONFIRM could run without the user
+    // agreeing. There is no legitimate reason for that combination to exist.
+    if(i.destructive && i.consequence !== CONSEQUENCE.CONFIRM){
+      out.push(`${i.id}: destructive but not a CONFIRM intent`);
     }
     for(const [name, spec] of Object.entries(i.params || {})){
       if(!TYPES.has(spec.type)) out.push(`${i.id}.${name}: unknown type "${spec.type}"`);

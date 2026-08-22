@@ -297,10 +297,31 @@ module.exports = async function runModuleTests(test){
     assert.deepStrictEqual(reg.registryProblems(), []);
   });
 
-  test('there is no risk class that lets AI write without review', () => {
-    // HAX G16 + human agency. The absence of a fourth class is the guarantee;
-    // this test is what makes adding one a deliberate act.
-    assert.deepStrictEqual(Object.values(reg.RISK).sort(), ['derive', 'propose', 'read']);
+  test('there is no risk class that lets AI write without the user saying yes', () => {
+    // HAX G16 + human agency. The closed set is the guarantee; this test is
+    // what makes widening it a deliberate act. v9.14 added `confirm` -- which
+    // writes, but only after a preview and an explicit yes, and undoably.
+    assert.deepStrictEqual(Object.values(reg.RISK).sort(), ['confirm', 'derive', 'propose', 'read']);
+  });
+
+  test('every risk class has its own label on screen', () => {
+    // The final ternary branch is a catch-all. A new class that forgets a
+    // branch renders as "Suggests only" and mislabels itself to the user.
+    const fn = script.split('function aiCapabilitySection(')[1].split('\n}')[0];
+    Object.keys(reg.RISK).forEach(k => {
+      if(k === 'PROPOSE') return;                 // the catch-all branch
+      assert.ok(fn.includes('RISK.' + k), 'no label branch for RISK.' + k);
+    });
+  });
+
+  test('the capability list does not still claim the assistant cannot change anything', () => {
+    // This file exists so the promise a user reads cannot drift from what the
+    // code does. It drifted between v9.8 and v9.13; that must not recur.
+    const asked = reg.aiAction('ask');
+    assert.ok(!/change anything/.test(asked.cannot), asked.cannot);
+    const acts = reg.AI_ACTIONS.filter(a => a.risk === reg.RISK.CONFIRM);
+    assert.ok(acts.length >= 1, 'nothing in the list tells the user it can act');
+    acts.forEach(a => assert.ok(/undo/i.test(a.cannot), a.id + ' does not mention undo'));
   });
 
   test('turning AI off leaves only the non-model capability', () => {
@@ -1219,6 +1240,229 @@ module.exports = async function runModuleTests(test){
     assert.strictEqual(conv.firstTurnOfToday(turns, '2026-09-01'), 2);
     assert.strictEqual(conv.firstTurnOfToday(turns, '2026-09-09'), -1, 'nothing from today');
     assert.strictEqual(conv.firstTurnOfToday([], '2026-09-01'), -1);
+  });
+
+  console.log('\nGordon can act (v9.14)');
+
+  const act = await import('./js/assistant-actions.js');
+  const reg914 = await import('./js/intents.js');
+
+  const PEOPLE = [{ id:'k1', name:'Braelyn', type:'kid' }, { id:'k2', name:'Olivia', type:'kid' }];
+
+  test('the chips advertise acting, not just asking', () => {
+    // v9.13 shipped four QUESTIONS, so nothing on the screen ever suggested
+    // Gordon could do anything. NN/g: "the burden of figuring out what the bot
+    // can and can't do fell on the user."
+    const chips = act.capabilityChips(4);
+    assert.strictEqual(chips.length, 4);
+    const classes = new Set(chips.map(c => {
+      const i = reg914.INTENTS.find(x => (x.examples || [])[0] === c);
+      assert.ok(i, 'a chip that matches no intent: ' + c);
+      return i.consequence;
+    }));
+    assert.ok(classes.size >= 3, 'chips are all the same kind of thing: ' + [...classes]);
+    assert.ok(classes.has(reg914.CONSEQUENCE.DRAFT), 'nothing offers to create something');
+    assert.ok(classes.has(reg914.CONSEQUENCE.CONFIRM), 'nothing offers to change something');
+  });
+
+  test('the first thing offered is never a deletion', () => {
+    const chips = act.capabilityChips(8);
+    const destructive = reg914.INTENTS.filter(i => i.destructive).map(i => (i.examples||[])[0]);
+    chips.forEach(c => assert.ok(!destructive.includes(c), 'a delete was offered as a suggestion: ' + c));
+  });
+
+  test('a person named in the sentence survives into the event draft', () => {
+    // add_event declared a `person` parameter and then set personIds: [].
+    const d = act.buildEventDraft({ title:'Dentist', date:'2026-09-01', person:'braelyn' }, PEOPLE, 'm');
+    assert.deepStrictEqual(d.personIds, ['k1']);
+    assert.strictEqual(d.title, 'Dentist');
+  });
+
+  test('an unrecognised or ambiguous name tags nobody rather than the wrong child', () => {
+    // Tagging the WRONG child is worse than tagging none: it looks correct.
+    assert.deepStrictEqual(act.buildEventDraft({ title:'x', person:'Nobody' }, PEOPLE).personIds, []);
+    const twins = [{ id:'a', name:'Sam Jones' }, { id:'b', name:'Sam Ray' }];
+    assert.strictEqual(act.resolvePersonId('Sam', twins), null, 'two Sams must not resolve');
+    assert.strictEqual(act.resolvePersonId(undefined, PEOPLE), null);
+  });
+
+  test('"due Friday" can draft a deadline, not an event', () => {
+    // Only a DEADLINE can be missed, and the warnings key off exactly that.
+    assert.strictEqual(act.buildEventDraft({ title:'Slip', kind:'deadline' }, PEOPLE).kind, 'deadline');
+    assert.strictEqual(act.buildEventDraft({ title:'Slip' }, PEOPLE).kind, 'event', 'event is the default');
+    assert.strictEqual(act.buildEventDraft({ title:'Slip', kind:'nonsense' }, PEOPLE).kind, 'event',
+      'an unknown kind falls back rather than being trusted');
+  });
+
+  test('the event draft has the same shape the review screen already expects', () => {
+    const d = act.buildEventDraft({ title:'x' }, PEOPLE);
+    ['title','date','time','endTime','kind','location','notes','selected','dup','personIds','kidId','aiSource']
+      .forEach(k => assert.ok(k in d, 'missing field: ' + k));
+  });
+
+  test('a chore draft carries the child and the days', () => {
+    const c = act.buildChoreDraft({ title:'Bins', person:'Olivia', frequency:'weekly',
+      days:['Monday','thu'], stars:2 }, PEOPLE);
+    assert.strictEqual(c.kidId, 'k2');
+    assert.deepStrictEqual(c.days, ['mon','thu']);
+    assert.strictEqual(c.frequency, 'weekly');
+    assert.strictEqual(c.stars, 2);
+  });
+
+  test('a weekly chore with no days falls back to daily rather than failing to save', () => {
+    // saveChoreForm() rejects weekly-with-no-days, which would read as the
+    // assistant producing something broken.
+    const c = act.buildChoreDraft({ title:'Bins', frequency:'weekly' }, PEOPLE);
+    assert.strictEqual(c.frequency, 'daily');
+    assert.deepStrictEqual(c.days, []);
+  });
+
+  test('a nonsense star count cannot reach the save file', () => {
+    assert.strictEqual(act.buildChoreDraft({ title:'x', stars: -5 }, PEOPLE).stars, 0);
+    assert.strictEqual(act.buildChoreDraft({ title:'x', stars: 9999 }, PEOPLE).stars, 20);
+    assert.strictEqual(act.buildChoreDraft({ title:'x', stars: 'lots' }, PEOPLE).stars, 1);
+    assert.strictEqual(act.buildChoreDraft({ title:'x' }, PEOPLE).stars, 1);
+  });
+
+  test('the confirm button is named for the act, not "Yes, do it"', () => {
+    // Apple App Intents: actionName is "the name to use in the button that
+    // confirms the action". "Delete Recital" and "Add 3 items" are different
+    // promises and must not share a label.
+    const R = (intent, params) => ({ ok:true, intent, params });
+    assert.strictEqual(act.actionName(R('add_list_item', { items:['a','b'] })), 'Add 2 items');
+    assert.strictEqual(act.actionName(R('add_list_item', { items:['a'] })), 'Add 1 item');
+    assert.strictEqual(act.actionName(R('create_list', { name:'Costco' })), 'Create Costco');
+    assert.strictEqual(act.actionName(R('delete_event', {}), { title:'Recital' }), 'Delete Recital');
+    assert.strictEqual(act.actionName(R('complete_chore', {}), { title:'Bins' }), 'Mark Bins done');
+    assert.strictEqual(act.actionName(R('mark_event_handled', {})), 'Mark as handled');
+  });
+
+  test('a very long title cannot blow the button out of the screen', () => {
+    const label = act.actionName({ ok:true, intent:'delete_event', params:{} },
+      { title:'The Annual Spring Concert And Bake Sale Fundraiser Evening' });
+    assert.ok(label.length <= 32, label);
+    assert.ok(label.startsWith('Delete '), label);
+  });
+
+  test('only intents flagged destructive get the red treatment', () => {
+    assert.strictEqual(act.isDestructive({ ok:true, intent:'delete_event' }), true);
+    assert.strictEqual(act.isDestructive({ ok:true, intent:'add_list_item' }), false);
+    assert.strictEqual(act.isDestructive(null), false);
+  });
+
+  test('a destructive intent must be a CONFIRM intent', () => {
+    // Anything else could run without the user agreeing.
+    reg914.INTENTS.filter(i => i.destructive).forEach(i =>
+      assert.strictEqual(i.consequence, reg914.CONSEQUENCE.CONFIRM, i.id));
+    assert.ok(reg914.INTENTS.some(i => i.destructive), 'nothing is flagged, so this guard is vacuous');
+  });
+
+  test('an edit that changes nothing is reported as such, not written', () => {
+    const e = { title:'Recital', date:'2026-12-01', time:'18:00' };
+    assert.deepStrictEqual(act.eventEditChanges({ date:'2026-12-01' }, e), {}, 'same date is a no-op');
+    assert.deepStrictEqual(act.eventEditChanges({ date:'2026-12-12' }, e), { date:'2026-12-12' });
+    assert.deepStrictEqual(act.eventEditChanges({ title:'  Recital  ' }, e), {}, 'whitespace is not a change');
+    assert.ok(/Nothing about that would change/.test(act.describeEdit({}, e)));
+  });
+
+  test('the edit preview says what will change, in plain words', () => {
+    const e = { title:'Recital', date:'2026-12-01' };
+    const said = act.describeEdit({ date:'2026-12-12', time:'19:00' }, e);
+    assert.ok(said.includes('Recital'), said);
+    assert.ok(said.includes('2026-12-12') && said.includes('19:00'), said);
+  });
+
+  test('ticking off says what it could not find instead of silently half-doing it', () => {
+    const items = [{ id:'i1', text:'milk' }, { id:'i2', text:'bread' }];
+    const r = act.matchListItems(['milk', 'bananas'], items);
+    assert.deepStrictEqual(r.matched.map(m => m.id), ['i1']);
+    assert.deepStrictEqual(r.missing, ['bananas']);
+  });
+
+  test('a deleted item is never matched', () => {
+    const r = act.matchListItems(['milk'], [{ id:'i1', text:'milk', deleted:true }]);
+    assert.deepStrictEqual(r.matched, []);
+    assert.deepStrictEqual(r.missing, ['milk']);
+  });
+
+  test('the same word twice ticks one item, not the same item twice', () => {
+    const r = act.matchListItems(['milk', 'milk'], [{ id:'i1', text:'milk' }]);
+    assert.strictEqual(r.matched.length, 1);
+  });
+
+  console.log('\nActing is actually wired in, and cannot write without a yes');
+
+  test('performRoute never writes; confirmPendingAction is the only path that does', () => {
+    const pr = script.split('async function performRoute(')[1]
+                     .split('function confirmPendingAction(')[0];
+    // A write here would bypass the confirm step entirely.
+    [/S\.lists\.push/, /S\.listItems\.push/, /S\.chores\.push/, /S\.events\.push/,
+     /softDelete\(/, /completeChore\(/, /markHandled\(/]
+      .forEach(re => assert.ok(!re.test(pr), 'performRoute writes: ' + re));
+    assert.ok(/pendingAction = /.test(pr), 'and it must still propose something');
+  });
+
+  test('every CONFIRM intent has a branch that resolves before it proposes', () => {
+    const pr = script.split('async function performRoute(')[1]
+                     .split('function confirmPendingAction(')[0];
+    const confirms = reg914.INTENTS.filter(i => i.consequence === reg914.CONSEQUENCE.CONFIRM);
+    assert.ok(confirms.length >= 7, 'expected the v9.14 intents, found ' + confirms.length);
+    const unhandled = confirms.map(i => i.id).filter(id => !pr.includes(`'${id}'`));
+    assert.deepStrictEqual(unhandled, [], 'CONFIRM intents with no branch: ' + unhandled.join(', '));
+  });
+
+  test('every write the assistant makes is undoable', () => {
+    const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
+    // Either an explicit Undo toast, or one of the app's own helpers which
+    // carry their own (softDelete, markHandled, completeChore/toggleChore).
+    const branches = fn.split('case ').slice(1);
+    assert.ok(branches.length >= 8, 'expected a branch per writing intent, found ' + branches.length);
+    branches.forEach(b => {
+      const name = b.slice(0, b.indexOf(':'));
+      assert.ok(/label:'Undo'/.test(b) || /softDelete\(|markHandled\(|completeChore\(|toggleChore\(/.test(b),
+        'no undo path for ' + name);
+    });
+  });
+
+  test('undo removes the items it added, by id, not by text', () => {
+    // Undoing by text would delete an identically-named item the user added.
+    const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
+    const branch = fn.split("case 'add_list_item':")[1].split('case ')[0];
+    assert.ok(/added\.includes\(i\.id\)/.test(branch), branch.slice(0, 300));
+  });
+
+  test('the assistant calls the app’s own functions rather than reimplementing writes', () => {
+    const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
+    ['softDelete(', 'markHandled(', 'completeChore('].forEach(f =>
+      assert.ok(fn.includes(f), 'reimplemented instead of calling ' + f));
+    // toggleChore carries the "who did it?" sheet for a chore that belongs to
+    // nobody; skipping it would drop the stars on the floor.
+    assert.ok(fn.includes('toggleChore('), 'the anyone-chore star sheet is bypassed');
+  });
+
+  test('the confirm card only ever appears on the newest turn', () => {
+    // An older turn keeps confirm:true forever; without this the buttons for a
+    // finished action reappear and offer to redo it.
+    const ask = script.split('function renderAsk(')[1].split('\nfunction ')[0];
+    assert.ok(/t\.confirm && pendingAction && i === a\.turns\.length - 1/.test(ask), ask.slice(0, 200));
+    assert.ok(/t\.choices && pendingAction && i === a\.turns\.length - 1/.test(ask));
+  });
+
+  test('the Ask screen no longer claims it cannot change anything', () => {
+    const ask = script.split('function renderAsk(')[1].split('\nfunction ')[0];
+    assert.ok(!/cannot change anything/.test(ask), 'the intro still says it is read-only');
+    assert.ok(/add an event|tick something off/.test(ask), 'the intro does not say it can act');
+  });
+
+  const rtr = await import('./js/router.js');
+
+  test('quickRoute still refuses to short-circuit anything that could write', () => {
+    ['add milk to the list', 'delete the recital', 'tick milk off', 'Olivia did the bins',
+     'move the recital to the 12th', 'start a Costco list', 'mark the signup handled',
+     'get rid of the bins chore', 'rename the recital']
+      .forEach(s => assert.strictEqual(rtr.quickRoute(s), null, 'short-circuited a write: ' + s));
+    // ...and still answers the obvious questions for free.
+    assert.strictEqual((rtr.quickRoute('What is on this week?') || {}).intent, 'ask_schedule');
   });
 
   console.log('\nAI call logging');

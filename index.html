@@ -811,6 +811,30 @@ function startsOnSomethingElse(el){
 
 // The only three classes an AI capability may have. Adding a fourth is a
 // deliberate act with a test to update, which is the point.
+/**
+ * The AI capability registry.
+ *
+ * Every AI-touched capability in the app is declared here, with what it can
+ * do, what it cannot, and — most importantly — its RISK CLASS. Settings and
+ * the in-context disclosures both render from this list, so the promise a user
+ * reads can never drift from what the code actually does. Same discipline the
+ * design tokens and the icon sprite already use.
+ *
+ * Grounded in published guidance rather than intuition (see
+ * AI-INTEGRATION-PLAN.md for sources):
+ *
+ *  - Microsoft HAX G1/G2: make clear what the system can do, and how well.
+ *    Hence `can` and `cannot` are required fields, not documentation.
+ *  - HAX G16 + Stanford HAI human agency: nothing writes without the user
+ *    saying yes, so there is deliberately NO risk class meaning "acts on its
+ *    own". A future contributor cannot add one without editing this file and
+ *    its test.
+ *  - Google PAIR: always provide a non-AI fallback. Every action names the
+ *    manual path that does the same job, and a test checks it is filled in.
+ */
+
+// The only classes an AI capability may have. Adding one is a deliberate act
+// with a test to update, which is the point.
 const RISK = {
   // Reads data and answers. Changes nothing. Worst case: a wrong answer the
   // user can check, because answers cite what they were based on.
@@ -818,6 +842,11 @@ const RISK = {
   // Produces a DRAFT. It reaches the user's data only after they review and
   // accept it in the existing review screen. Worst case: wasted taps.
   PROPOSE: 'propose',
+  // Changes data -- but only after showing the user exactly what it is about
+  // to do and getting an explicit yes, and every change is undoable. Added in
+  // v9.14, when the assistant gained the ability to tick things off, edit and
+  // delete. It is NOT "acts on its own": the consent is the whole class.
+  CONFIRM: 'confirm',
   // No model involved at all -- plain, deterministic code. Listed here so the
   // app can be honest that it is NOT AI, which is its own kind of
   // transparency, and so the capability list is complete.
@@ -840,7 +869,7 @@ const AI_ACTIONS = [
     label: 'Ask about your schedule',
     risk: RISK.READ,
     can: 'Answers questions about the events already in the app — what is coming up, what a particular person has on, when something is due.',
-    cannot: 'It only sees the events shown to it, never your whole history, and it cannot look anything up on the internet or change anything. Every answer lists the events it used so you can check it.',
+    cannot: 'It only sees the events shown to it, never your whole history, and it cannot look anything up on the internet. Every answer lists the events it used so you can check it.',
     fallback: 'Search and the person filters on the Events screen.',
   },
   {
@@ -850,6 +879,14 @@ const AI_ACTIONS = [
     can: 'Turns a sentence like "dentist for Braelyn next Tuesday at 3" into a draft event, or a line like "milk, eggs, bread" into list items.',
     cannot: 'It will not guess a date you did not give it. Anything unclear comes back blank for you to fill in, and nothing is saved until you accept it.',
     fallback: 'The normal add form, which is always available.',
+  },
+  {
+    id: 'act',
+    label: 'Do things you ask for',
+    risk: RISK.CONFIRM,
+    can: 'Adds items to a list, starts a new list, ticks things off, marks a chore done or a deadline handled, moves an event, and deletes an event or chore — from a sentence typed into the chat box.',
+    cannot: 'It never acts on its own. It shows you exactly what it is about to do and waits for you to say yes, it refuses to guess when two things could be meant, and every change it makes can be undone.',
+    fallback: 'Every one of these is a tap on the screen it belongs to.',
   },
   {
     id: 'clashes',
@@ -1299,6 +1336,27 @@ function citedEvents(answer, refs){
  */
 
 // The closed set. Adding a fifth is an edit here plus an edit to its test.
+/**
+ * The intent registry — what the assistant is able to do.
+ *
+ * Modelled on Apple App Intents / Google App Actions, which is how the
+ * platform teams actually solve "assistant inside an app": the app DECLARES
+ * its capabilities as typed intents, and the assistant invokes them. It is
+ * not a chatbot rummaging around in the data model. See ASSISTANT-PLAN.md.
+ *
+ * Three rules carried over from that prior art:
+ *
+ *  1. ONE INTENT PER ACTION, variants via parameters. Not one per phrasing.
+ *  2. ONLY EXPOSE WHAT THE USER ALREADY SEES. Apple: expose "only the data
+ *     types users see and touch, not your entire data model". So the entities
+ *     here are events, chores, lists and people -- not settings, not the
+ *     watcher queue, not the problem log.
+ *  3. CONSEQUENCE IS DECLARED, NOT IMPLIED. Every intent states what happens
+ *     when it runs, and the classes are a closed set. There is deliberately
+ *     no class that changes data without the user saying yes.
+ */
+
+// The closed set. Adding a fifth is an edit here plus an edit to its test.
 const CONSEQUENCE = {
   ANSWER:   'answer',    // reads and replies; cites what it used
   NAVIGATE: 'navigate',  // moves the user; trivially reversible
@@ -1379,12 +1437,18 @@ const INTENTS = [
   {
     id: 'add_event',
     consequence: CONSEQUENCE.DRAFT,
-    title: 'Draft an event',
+    title: 'Draft an event or a deadline',
     examples: ['Dentist for Braelyn next Tuesday at 3'],
-    params: { title:  { type:'string', required:true },
-              date:   { type:'date',   required:false },
-              time:   { type:'time',   required:false },
-              person: { type:'string', required:false } },
+    // `kind` matters: only a DEADLINE can be missed, and the warnings on the
+    // Events screen key off exactly that. "Permission slip due Friday" became
+    // an ordinary event until v9.14, so nothing ever warned about it.
+    params: { title:    { type:'string', required:true },
+              date:     { type:'date',   required:false },
+              time:     { type:'time',   required:false },
+              person:   { type:'string', required:false },
+              kind:     { type:'enum',   required:false, values:['event','deadline'] },
+              location: { type:'string', required:false },
+              notes:    { type:'string', required:false } },
     fallback: '＋ Add paperwork → type it in.',
   },
   {
@@ -1395,8 +1459,79 @@ const INTENTS = [
     params: { title:     { type:'string', required:true },
               person:    { type:'string', required:false },
               frequency: { type:'enum',   required:false, values:['daily','weekly'] },
+              days:      { type:'string[]', required:false },
               stars:     { type:'number', required:false } },
     fallback: '＋ Add chore on the Chores tab.',
+  },
+
+  // -------------------------------------------------------------------------
+  // v9.14 -- acting, not just drafting. Every one of these is CONFIRM: it
+  // previews what it would do and waits for an explicit yes. None of them
+  // writes from performRoute(); confirmPendingAction() is the only path that
+  // touches data, and every write it makes is undoable.
+  // -------------------------------------------------------------------------
+  {
+    id: 'create_list',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Start a new list',
+    examples: ['Start a Costco list'],
+    params: { name: { type:'string', required:true } },
+    fallback: 'The Add box at the top of the Lists tab.',
+  },
+  {
+    id: 'check_list_item',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Tick items off a list',
+    examples: ['Tick milk off the shopping list'],
+    params: { list:  { type:'string',   required:false },
+              items: { type:'string[]', required:true } },
+    fallback: 'Tap the item on the Lists tab.',
+  },
+  {
+    id: 'complete_chore',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Mark a chore done',
+    examples: ['Olivia did the bins'],
+    params: { chore:  { type:'string', required:true },
+              person: { type:'string', required:false } },
+    fallback: 'Tap the chore on the Chores tab.',
+  },
+  {
+    id: 'mark_event_handled',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Mark a deadline as handled',
+    examples: ['I sent the ice cream signup'],
+    params: { event: { type:'string', required:true } },
+    fallback: 'The "Mark as handled" button on the warning itself.',
+  },
+  {
+    id: 'edit_event',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Change an event\u2019s date, time or title',
+    examples: ['Move the recital to the 12th'],
+    params: { event: { type:'string', required:true },
+              date:  { type:'date',   required:false },
+              time:  { type:'time',   required:false },
+              title: { type:'string', required:false } },
+    fallback: 'Tap the event, then Edit.',
+  },
+  {
+    id: 'delete_event',
+    consequence: CONSEQUENCE.CONFIRM,
+    destructive: true,
+    title: 'Delete an event',
+    examples: ['Delete the dentist appointment'],
+    params: { event: { type:'string', required:true } },
+    fallback: 'Tap the event, then Delete.',
+  },
+  {
+    id: 'delete_chore',
+    consequence: CONSEQUENCE.CONFIRM,
+    destructive: true,
+    title: 'Delete a chore',
+    examples: ['Get rid of the bins chore'],
+    params: { chore: { type:'string', required:true } },
+    fallback: 'Long-press the chore on the Chores tab.',
   },
 ];
 
@@ -1424,6 +1559,11 @@ function intentRegistryProblems(){
       // is undiscoverable, which is the exact NN/g failure this design is
       // meant to avoid.
       if(i.id !== 'what_needs_doing') out.push(`${i.id}: no examples to show the user`);
+    }
+    // A destructive intent that is not CONFIRM could run without the user
+    // agreeing. There is no legitimate reason for that combination to exist.
+    if(i.destructive && i.consequence !== CONSEQUENCE.CONFIRM){
+      out.push(`${i.id}: destructive but not a CONFIRM intent`);
     }
     for(const [name, spec] of Object.entries(i.params || {})){
       if(!TYPES.has(spec.type)) out.push(`${i.id}.${name}: unknown type "${spec.type}"`);
@@ -1469,6 +1609,29 @@ function resolveEntity(spoken, candidates, nameKey){
   return { status:'none' };
 }
 
+/**
+ * The router. One model call, then code takes over.
+ *
+ * This is Anthropic's ROUTING workflow, not an agent, and the choice is
+ * deliberate. Their own criteria for when an agent is the wrong tool all
+ * apply here: the task is high-frequency and low-complexity, the output must
+ * be verifiable, and every extra model call compounds error. The line they
+ * draw is "control flow is predefined in code, not produced by the LLM" --
+ * so the model's entire job is to turn one sentence into
+ * {intent, params, confidence} and then stop. It never decides what happens
+ * next, never calls a tool, never loops.
+ *
+ * Everything below the model call is pure and hostile to what comes back.
+ * A model reply is UNTRUSTED INPUT: it can be prose, fenced, truncated,
+ * the wrong shape, name an intent that does not exist, or carry a parameter
+ * of the wrong type. Every one of those has a test.
+ */
+
+
+// Below this, we do not act on the classification -- we show the user what
+// the assistant can do instead. Chosen to fail towards disclosure rather than
+// towards a wrong action, which is the asymmetry that matters: a wrong answer
+// wastes a tap, a wrong ACTION touches their data.
 /**
  * The router. One model call, then code takes over.
  *
@@ -1644,6 +1807,25 @@ function describeIntent(route, resolved){
       return `Draft a chore: ${p.title}${p.person ? ' for ' + p.person : ''}`;
     case 'open_screen':
       return `Go to ${p.screen}`;
+    case 'create_list':
+      return `Start a new list called "${p.name}"`;
+    case 'check_list_item':
+      return `Tick off ${p.items.length} item${p.items.length === 1 ? '' : 's'}`
+        + `${resolved && resolved.name ? ' on "' + resolved.name + '"' : ''}: ${p.items.join(', ')}`;
+    case 'complete_chore':
+      return `Mark "${resolved && resolved.title ? resolved.title : p.chore}" done for today`
+        + `${p.person ? ' \u2014 ' + p.person : ''}`;
+    case 'mark_event_handled':
+      return `Mark "${resolved && resolved.title ? resolved.title : p.event}" as handled, so it stops warning you`;
+    case 'edit_event':
+      // The caller passes the real change set; this is the generic wording for
+      // a preview built before the event is resolved.
+      return `Change "${resolved && resolved.title ? resolved.title : p.event}"`;
+    case 'delete_event':
+      return `Delete "${resolved && resolved.title ? resolved.title : p.event}". You can undo it.`;
+    case 'delete_chore':
+      return `Delete the chore "${resolved && resolved.title ? resolved.title : p.chore}". `
+        + `Stars already earned are kept. You can undo it.`;
     default:
       return intentById(route.intent) ? intentById(route.intent).title : '';
   }
@@ -1671,7 +1853,9 @@ function quickRoute(text){
 
   // Anything that smells like an instruction to change something goes to the
   // model, so the safety checks in validateRoute still apply to it.
-  if(/\b(add|put|create|make|remove|delete|clear|set|schedule|book|open|go to|take me)\b/.test(low)) return null;
+  // v9.14 widened this. Anything that could change data must reach the model
+  // router, so validateRoute's checks and the confirm step still apply to it.
+  if(/\b(add|put|create|make|start|remove|delete|del|get rid|clear|set|schedule|book|open|go to|take me|tick|check off|cross off|mark|done|finish|finished|did|move|reschedule|rename|change|update|edit)\b/.test(low)) return null;
 
   // "whats on the list" has no apostrophe and no question mark, and is still
   // obviously a question. The optional 's covers what's/whats/wheres.
@@ -1690,6 +1874,242 @@ function quickRoute(text){
   // Routed through the same validator as a model answer, so a short-circuit
   // can never bypass a check the slow path applies.
   return validateRoute({ intent, params, confidence: 0.95 });
+}
+
+/**
+ * Turning a routed sentence into something the app can act on.
+ *
+ * The router (js/router.js) decides WHAT was meant. This decides what the app
+ * should be handed. Between them there is deliberately no model: the router's
+ * output is untrusted, and everything below is pure code that either produces
+ * a well-formed draft or refuses.
+ *
+ * Three jobs:
+ *
+ *  1. CHIP SELECTION. NN/g's chatbot research found "the burden of figuring
+ *     out what the bot can and can't do fell on the user", and their prompt-
+ *     control study names discoverability and education as the first two uses
+ *     of suggestion chips. Taking the first four intents in file order gave
+ *     four questions and advertised none of the things Gordon can DO, so the
+ *     chips are now chosen to cover every consequence class.
+ *
+ *  2. ACTION NAMES. Apple's App Intents confirmation API takes an
+ *     `actionName` -- "the name to use in the button that confirms the
+ *     action". "Delete Recital" and "Add 3 items" are different promises and
+ *     must not share a button reading "Yes, do it".
+ *
+ *  3. DRAFT SHAPING. A person named in the sentence must survive into the
+ *     draft. It previously did not: add_event declared a `person` parameter
+ *     and then set `personIds: []`.
+ *
+ * Pure: no DOM, no app state, no clock of its own.
+ */
+
+
+
+// ---------------------------------------------------------------------------
+// 1. Chips
+// ---------------------------------------------------------------------------
+
+/**
+ * The examples shown under "Try one of these".
+ *
+ * Guarantees at least one example from each consequence class the registry
+ * actually has, then fills the remaining slots in registry order. A test
+ * fails the build if the result is all one class, because that is the exact
+ * state v9.13 shipped in: four questions, and no hint that it can act.
+ */
+function capabilityChips(limit){
+  const n = typeof limit === 'number' && limit > 0 ? limit : 4;
+  const withExamples = INTENTS.filter(i => (i.examples || []).length);
+
+  // One per class, in the order a user meets them: ask, then act.
+  const ORDER = [CONSEQUENCE.ANSWER, CONSEQUENCE.DRAFT, CONSEQUENCE.CONFIRM, CONSEQUENCE.NAVIGATE];
+  const picked = [];
+  const used = new Set();
+  for(const cls of ORDER){
+    if(picked.length >= n) break;
+    // Prefer a non-destructive example: the first thing a user is invited to
+    // try must not be a deletion.
+    const i = withExamples.find(x => x.consequence === cls && !x.destructive && !used.has(x.id));
+    if(i){ picked.push(i); used.add(i.id); }
+  }
+  for(const i of withExamples){
+    if(picked.length >= n) break;
+    if(!used.has(i.id) && !i.destructive){ picked.push(i); used.add(i.id); }
+  }
+  return picked.slice(0, n).map(i => i.examples[0]);
+}
+
+// ---------------------------------------------------------------------------
+// 2. Action names for the confirm button
+// ---------------------------------------------------------------------------
+
+/**
+ * What the confirming button should say. Named for the act, per App Intents.
+ * `target` is the resolved entity, so the button can name the actual thing.
+ */
+function actionName(route, target){
+  if(!route || !route.ok) return 'Do it';
+  const p = route.params || {};
+  const name = target && (target.name || target.title);
+  const short = (s) => {
+    const t = String(s == null ? '' : s).trim();
+    return t.length > 24 ? t.slice(0, 23).trimEnd() + '…' : t;
+  };
+  switch(route.intent){
+    case 'add_list_item':
+      return `Add ${p.items.length} item${p.items.length === 1 ? '' : 's'}`;
+    case 'create_list':      return `Create ${short(p.name)}`;
+    case 'check_list_item':
+      return `Tick off ${p.items.length} item${p.items.length === 1 ? '' : 's'}`;
+    case 'complete_chore':   return name ? `Mark ${short(name)} done` : 'Mark it done';
+    case 'mark_event_handled': return 'Mark as handled';
+    case 'edit_event':       return name ? `Update ${short(name)}` : 'Update it';
+    case 'delete_event':
+    case 'delete_chore':     return name ? `Delete ${short(name)}` : 'Delete it';
+    default:                 return 'Do it';
+  }
+}
+
+/** Destructive intents get a red button and a blunter preview. */
+function isDestructive(route){
+  const i = route && route.ok ? intentById(route.intent) : null;
+  return !!(i && i.destructive);
+}
+
+// ---------------------------------------------------------------------------
+// 3. Draft shaping
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a spoken person name against the people in Settings.
+ *
+ * Returns the id, or null. Deliberately NEVER guesses: an ambiguous or
+ * unknown name yields null and the draft is simply untagged, which the user
+ * fixes in one tap on a screen that is already open. Tagging the WRONG child
+ * is worse than tagging none, because it looks correct.
+ */
+function resolvePersonId(spoken, people){
+  if(!spoken) return null;
+  const res = resolveEntity(spoken, people, 'name');
+  return res.status === 'ok' ? res.match.id : null;
+}
+
+const DAY_KEYS = ['sun','mon','tue','wed','thu','fri','sat'];
+
+/** Normalise whatever the model said about days into the app's own keys. */
+function normaliseDays(days){
+  const out = [];
+  for(const d of (Array.isArray(days) ? days : [])){
+    const k = String(d || '').toLowerCase().slice(0, 3);
+    if(DAY_KEYS.includes(k) && !out.includes(k)) out.push(k);
+  }
+  return out;
+}
+
+/**
+ * The row handed to the review screen.
+ *
+ * Shape copied from what the extraction path produces, so the review screen
+ * cannot tell an assistant draft from a scanned flyer -- one review screen,
+ * one set of bugs.
+ */
+function buildEventDraft(params, people, modelName){
+  const p = params || {};
+  // A deadline and an event look identical on a flyer but behave differently:
+  // only a deadline can be "missed", which is what the warnings key off.
+  const kind = p.kind === 'deadline' ? 'deadline' : 'event';
+  const personId = resolvePersonId(p.person, people);
+  return {
+    title: String(p.title || '').trim(),
+    date: p.date || '',
+    time: p.time || '',
+    endTime: null,
+    kind,
+    location: p.location ? String(p.location) : null,
+    notes: p.notes ? String(p.notes) : null,
+    selected: true,
+    dup: false,
+    personIds: personId ? [personId] : [],
+    kidId: null,
+    aiSource: modelName || null,
+  };
+}
+
+/**
+ * The pre-filled chore form. Field shape copied from newChoreForm() so the
+ * form renders identically; note it is SET, never produced by calling
+ * newChoreForm(), which takes no arguments and resets the form -- calling it
+ * here would silently discard the draft.
+ */
+function buildChoreDraft(params, people){
+  const p = params || {};
+  const days = normaliseDays(p.days);
+  // Weekly with no days named would fail the form's own validation on save,
+  // which reads as the assistant producing something broken. Fall back to
+  // daily and let the user pick days if that is what they meant.
+  const frequency = p.frequency === 'weekly' && days.length ? 'weekly' : 'daily';
+  return {
+    title: String(p.title || '').trim(),
+    kidId: resolvePersonId(p.person, people),
+    frequency,
+    days: frequency === 'weekly' ? days : [],
+    stars: typeof p.stars === 'number' && isFinite(p.stars)
+      ? Math.max(0, Math.min(20, Math.round(p.stars))) : 1,
+  };
+}
+
+/**
+ * Which fields an edit_event actually changes, dropping anything that would
+ * be a no-op. An empty result means "nothing to do" and the caller says so
+ * rather than writing an identical row and claiming success.
+ */
+function eventEditChanges(params, event){
+  const p = params || {};
+  const e = event || {};
+  const out = {};
+  if(p.date && p.date !== e.date) out.date = p.date;
+  if(p.time && p.time !== (e.time || '')) out.time = p.time;
+  if(p.title && String(p.title).trim() && String(p.title).trim() !== e.title) out.title = String(p.title).trim();
+  return out;
+}
+
+/** Plain English for what an edit will do, before it happens (HAX G16). */
+function describeEdit(changes, event){
+  const c = changes || {};
+  const bits = [];
+  if(c.title) bits.push(`rename it to "${c.title}"`);
+  if(c.date)  bits.push(`move it to ${c.date}`);
+  if(c.time)  bits.push(`set the time to ${c.time}`);
+  if(!bits.length) return 'Nothing about that would change.';
+  const name = (event && event.title) || 'that event';
+  return `Change "${name}": ` + bits.join(', ') + '.';
+}
+
+/**
+ * Match spoken item texts against the items actually on a list.
+ *
+ * Returns the matched rows and the words that matched nothing, so the caller
+ * can say "ticked off milk; there is no bread on that list" instead of
+ * silently doing half the job.
+ */
+function matchListItems(spoken, items){
+  const live = (items || []).filter(i => i && !i.deleted);
+  const matched = [];
+  const missing = [];
+  for(const word of (Array.isArray(spoken) ? spoken : [])){
+    const res = resolveEntity(word, live, 'text');
+    if(res.status === 'ok' && !matched.some(m => m.id === res.match.id)) matched.push(res.match);
+    else if(res.status === 'ambiguous'){
+      // Two items reading the same thing: ticking either satisfies the
+      // request, and refusing here would be pedantic rather than safe.
+      const first = res.matches.find(m => !matched.some(x => x.id === m.id));
+      if(first) matched.push(first); else missing.push(String(word));
+    }
+    else missing.push(String(word));
+  }
+  return { matched, missing };
 }
 
 /**
@@ -2332,6 +2752,7 @@ function aiCapabilitySection(){
   const riskLine = (a) => a.risk === RISK.DERIVE
     ? 'Not AI — plain calculation, always on'
     : a.risk === RISK.READ ? 'Reads only — changes nothing'
+    : a.risk === RISK.CONFIRM ? 'Asks first — shows you what it will do, and it can be undone'
     : 'Suggests only — you review before anything is saved';
   return `<div class="sect">What ${aiName()} can and cannot do</div>
     <div class="help">Every AI feature in the app, what it is for, and where it
@@ -2417,8 +2838,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.13';
-const APP_TAGLINE = 'AI call logging';
+const APP_VERSION = 'v9.14';
+const APP_TAGLINE = 'Gordon can act';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
@@ -3504,7 +3925,7 @@ function dismissConflict(key){
   save(); render();
 }
 
-// ---------- Ask (read-only -- see js/ask.js) ----------
+// ---------- Ask (see js/ask.js, js/router.js, js/assistant-actions.js) ----------
 // A conversation, not a single shot. Turns are kept so a follow-up can say
 // "and Braelyn?" -- HAX G12, remember recent interactions. Only the last
 // couple are ever SENT (see HISTORY_TURNS); the rest stay on the phone.
@@ -3533,8 +3954,9 @@ function renderAsk(m){
   const suggestions = assistantCapabilityChips();
   m.innerHTML = `
     ${!a.turns.length ? `<div class="help" style="margin-top:0">
-      Answers from what is already in this app — never the internet — and shows
-      what each answer was based on. It cannot change anything on its own.
+      Ask about what is in this app — never the internet — or tell ${esc(aiName())} to
+      add an event, start a chore or tick something off. He shows you what he is
+      about to do and waits for you to say yes; nothing is saved before that.
     </div>` : ''}
 
     ${(() => { const i = firstTurnOfToday(a.turns, todayISO());
@@ -3551,13 +3973,20 @@ function renderAsk(m){
         <div class="meta" style="font-size:12px;margin-top:10px">
           ${esc(t.sourceNote)}</div>
       </div>
-      ${t.confirm && pendingAction ? `<div class="card" style="border-left:5px solid var(--amber-accent)">
-        <div class="meta" style="font-size:12px;margin-bottom:8px">Nothing has been saved yet.</div>
+      ${/* Only ever on the LAST turn. An earlier turn keeps confirm:true forever,
+            and a later pendingAction would otherwise re-show its stale buttons
+            -- offering to redo something already done. */
+        t.confirm && pendingAction && i === a.turns.length - 1
+        ? `<div class="card" style="border-left:5px solid var(--${t.destructive ? 'red' : 'amber'}-accent)">
+        <div class="meta" style="font-size:12px;margin-bottom:8px">${t.destructive
+          ? 'Nothing has been deleted yet. You will be able to undo it.'
+          : 'Nothing has been saved yet.'}</div>
         <div class="actionrow" style="margin-bottom:0">
-          <button class="btn" onclick="confirmPendingAction()">Yes, do it</button>
-          <button class="btn alt" onclick="cancelPendingAction()">No</button>
+          <button class="btn${t.destructive ? ' danger' : ''}" onclick="confirmPendingAction()">${esc(t.actionName || 'Do it')}</button>
+          <button class="btn alt" onclick="cancelPendingAction()">Cancel</button>
         </div></div>` : ''}
-      ${t.choices ? t.choices.map(c => `<button class="btn alt" style="margin-bottom:8px"
+      ${t.choices && pendingAction && i === a.turns.length - 1
+        ? t.choices.map(c => `<button class="btn alt" style="margin-bottom:8px"
           onclick="confirmPendingAction('${esc(c.id)}')">${esc(c.name)}</button>`).join('')
           + `<div style="text-align:center"><button class="linkbtn" onclick="cancelPendingAction()">Neither</button></div>` : ''}
       ${t.cited.length ? t.cited.map(c => askSourceCard(t.domain, c)).join('')
@@ -3579,13 +4008,13 @@ function renderAsk(m){
         Events list, its search, and the person filters are all unaffected.</div>
     </div>` : ''}
 
-    ${!a.turns.length && !a.busy ? `<div class="label">Try one of these</div>
+    ${!a.turns.length && !a.busy ? `<div class="label">Ask, or tell me to do one of these</div>
       <div class="suggest">${suggestions.map(s => `<span class="chip" role="button" tabindex="0"
         onclick="askThis('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join('')}</div>` : ''}
 
     <div class="composer">
       <input type="text" id="askQ" aria-label="Your question"
-        placeholder="${a.turns.length ? 'Ask a follow-up…' : 'Ask about events, chores or lists…'}"
+        placeholder="${a.turns.length ? 'Ask a follow-up…' : 'Ask, or tell me to add something…'}"
         value="${esc(a.draft)}" oninput="askState.draft=this.value"
         onkeydown="if(event.key==='Enter')runAsk()">
       <button class="btn sm" onclick="runAsk()" ${a.busy?'disabled':''}>Ask</button>
@@ -3656,6 +4085,7 @@ async function runAsk(explicit){
       askState.turns.push({ q, a: out.answer, domain: out.domain, day: todayISO(),
         cited: out.cited || [], sourceNote: out.sourceNote || '',
         confirm: !!out.confirm, choices: out.choices || null,
+        actionName: out.actionName || '', destructive: !!out.destructive,
         intentTitle: (intentById(route.intent) || {}).title || '' });
     }
     askState.busy = false;
@@ -3680,15 +4110,9 @@ async function runAsk(explicit){
 // so a re-render cannot lose it.
 let pendingAction = null;
 
-function assistantCapabilityChips(){
-  // NN/g: a conversational surface "places the burden of discovering an app's
-  // capabilities upon the user". These chips remove that burden -- recognition
-  // instead of recall -- and they are generated from the registry, so they
-  // cannot advertise something the app cannot do.
-  return INTENTS.filter(i => (i.examples || []).length)
-    .map(i => i.examples[0])
-    .slice(0, 4);   // four is enough to teach the shape; six is a wall
-}
+// Kept as a thin wrapper so every call site stays put; the selection itself
+// lives in js/assistant-actions.js where it is testable.
+function assistantCapabilityChips(){ return capabilityChips(4); }
 
 /** Turn a validated route into something that happened. */
 async function performRoute(route, question){
@@ -3733,72 +4157,268 @@ async function performRoute(route, question){
   // ---- DRAFT: hand to the screen the user already knows ------------------
   if(route.consequence === CONSEQUENCE.DRAFT){
     if(route.intent === 'add_event'){
-      pendingEvents = [{
-        title: route.params.title,
-        date: route.params.date || '',
-        time: route.params.time || '',
-        endTime: null, kind:'event', location:null, notes:null,
-        selected: true, dup:false, personIds:[], kidId:null,
-        aiSource: aiModelName(),
-      }];
+      const draft = buildEventDraft(route.params, allPeople(), aiModelName());
+      pendingEvents = [draft];
       pendingSource = 'assistant';
       setTimeout(() => sub('review'), 350);
-      return { answer:'Drafted it — check the details before saving.', cited:[],
-        domain:'events', sourceNote:'Nothing is saved until you tap through the review screen.' };
+      // Say what was NOT understood as well as what was. A name that matched
+      // nobody must not silently vanish -- the user needs to know to tag it.
+      const who = draft.personIds.length ? personById(draft.personIds[0]) : null;
+      const notes = [];
+      if(route.params.person && !who) notes.push(`I did not recognise "${route.params.person}" — tag it yourself on the review screen.`);
+      if(!draft.date) notes.push('No date was given, so you will need to pick one.');
+      return { answer:`Drafted ${draft.kind === 'deadline' ? 'a deadline' : 'an event'}`
+          + `${who ? ' for ' + who.name : ''} — check the details before saving.`
+          + (notes.length ? '\n\n' + notes.join('\n') : ''),
+        cited:[], domain:'events',
+        sourceNote:'Nothing is saved until you tap through the review screen.' };
     }
     // add_chore: open the chore form PRE-FILLED. Set the form state directly
     // rather than calling newChoreForm(), which takes no arguments and resets
-    // it -- calling that here would silently throw the draft away. Field
-    // shape copied from newChoreForm so the form renders identically.
-    choreForm = { title: route.params.title, kidId: null,
-      frequency: route.params.frequency || 'daily', days: [],
-      stars: typeof route.params.stars === 'number' ? route.params.stars : 1 };
+    // it -- calling that here would silently throw the draft away.
+    choreForm = buildChoreDraft(route.params, justKids());
     setTimeout(() => nav('chores'), 350);
-    return { answer:'Filled in a chore for you — check it and save.', cited:[],
-      domain:'chores', sourceNote:'Nothing is saved until you tap Save.' };
+    const kid = choreForm.kidId ? personById(choreForm.kidId) : null;
+    return { answer:`Filled in a chore${kid ? ' for ' + kid.name : ''} — check it and save.`
+        + (route.params.person && !kid ? `\n\nI did not recognise "${route.params.person}", so it is set to anyone.` : ''),
+      cited:[], domain:'chores', sourceNote:'Nothing is saved until you tap Save.' };
   }
 
   // ---- CONFIRM: never acts here; only proposes --------------------------
+  //
+  // Every branch below resolves the entity FIRST and refuses when two things
+  // could be meant (HAX G10, "scope services when in doubt"). Not one of them
+  // writes: confirmPendingAction() is the only path in the app that turns an
+  // assistant sentence into a change, and everything it does is undoable.
+  //
+  // Apple's App Intents confirmation carries an `actionName` -- "the name to
+  // use in the button that confirms the action" -- so the button says what it
+  // will do rather than "Yes, do it".
+  const propose = (domain, target, answer, extra) => {
+    pendingAction = Object.assign({ route, target, collection: null }, extra || {});
+    return { answer: answer || describeIntent(route, target), cited:[], domain,
+      sourceNote:'', confirm:true,
+      actionName: actionName(route, target), destructive: isDestructive(route) };
+  };
+  // "Which one did you mean?" -- the app asks instead of picking. `collection`
+  // tells confirmPendingAction where to look the chosen id back up.
+  const askWhich = (domain, matches, collection, nameKey) => {
+    pendingAction = { route, target:null, collection };
+    return { answer:'Which one did you mean?', cited:[], domain, sourceNote:'',
+      choices: matches.map(m => ({ id:m.id, name:m[nameKey || 'name'] })) };
+  };
+  const nothing = (domain, answer) => ({ answer, cited:[], domain, sourceNote:'' });
+
+  const liveLists  = () => S.lists.filter(l => !l.deleted);
+  const liveChores = () => S.chores.filter(c => !c.deleted);
+  const liveEvents = () => S.events.filter(e => !e.deleted);
+  const nameList = (rows, key) => rows.map(r => r[key]).join(', ') || 'none yet';
+
+  if(route.intent === 'create_list'){
+    const wanted = String(route.params.name || '').trim();
+    const clash = resolveEntity(wanted, S.lists, 'name');
+    if(clash.status === 'ok'){
+      return nothing('lists', `You already have a list called "${clash.match.name}".`);
+    }
+    return propose('lists', null, `Start a new list called "${wanted}".`);
+  }
+
   if(route.intent === 'add_list_item'){
     const res = resolveEntity(route.params.list, S.lists);
     if(res.status === 'none'){
-      return { answer:`There is no list called "${route.params.list}". Your lists are: `
-        + (S.lists.filter(l=>!l.deleted).map(l=>l.name).join(', ') || 'none yet') + '.',
-        cited:[], domain:'lists', sourceNote:'' };
+      return nothing('lists', `There is no list called "${route.params.list}". `
+        + `Your lists are: ${nameList(liveLists(), 'name')}.`);
     }
-    if(res.status === 'ambiguous'){
-      pendingAction = { route, choices: res.matches };
-      return { answer:'Which list did you mean?', cited:[], domain:'lists',
-        sourceNote:'', choices: res.matches.map(m => ({ id:m.id, name:m.name })) };
-    }
-    pendingAction = { route, target: res.match };
-    return { answer: describeIntent(route, res.match), cited:[], domain:'lists',
-      sourceNote:'', confirm:true };
+    if(res.status === 'ambiguous') return askWhich('lists', res.matches, 'lists');
+    return propose('lists', res.match);
   }
+
+  if(route.intent === 'check_list_item'){
+    // The list is optional: with one list there is nothing to disambiguate.
+    let list = null;
+    if(route.params.list){
+      const res = resolveEntity(route.params.list, S.lists);
+      if(res.status === 'none'){
+        return nothing('lists', `There is no list called "${route.params.list}". `
+          + `Your lists are: ${nameList(liveLists(), 'name')}.`);
+      }
+      if(res.status === 'ambiguous') return askWhich('lists', res.matches, 'lists');
+      list = res.match;
+    } else if(liveLists().length === 1){
+      list = liveLists()[0];
+    } else {
+      return askWhich('lists', liveLists(), 'lists');
+    }
+    const items = S.listItems.filter(i => i.listId === list.id && !i.deleted && !i.checked);
+    const { matched, missing } = matchListItems(route.params.items, items);
+    if(!matched.length){
+      return nothing('lists', `Nothing on "${list.name}" matches ${route.params.items.join(', ')}.`);
+    }
+    const note = missing.length ? `\n\nNot on that list: ${missing.join(', ')}.` : '';
+    return propose('lists', list,
+      `Tick off ${matched.map(m => '"' + m.text + '"').join(', ')} on "${list.name}".` + note,
+      { itemIds: matched.map(m => m.id) });
+  }
+
+  if(route.intent === 'complete_chore'){
+    const res = resolveEntity(route.params.chore, S.chores, 'title');
+    if(res.status === 'none'){
+      return nothing('chores', `There is no chore called "${route.params.chore}". `
+        + `Your chores are: ${nameList(liveChores(), 'title')}.`);
+    }
+    if(res.status === 'ambiguous') return askWhich('chores', res.matches, 'chores', 'title');
+    if(completionFor(res.match.id, todayISO())){
+      return nothing('chores', `"${res.match.title}" is already ticked off for today.`);
+    }
+    // The person is resolved here so the stars land on the right child; an
+    // unrecognised name falls through to the app's own "who did it?" sheet
+    // rather than guessing.
+    const kidId = resolvePersonId(route.params.person, justKids());
+    const kid = kidId ? personById(kidId) : null;
+    return propose('chores', res.match,
+      `Mark "${res.match.title}" done for today${kid ? ' — ' + kid.name : ''}.`
+      + (route.params.person && !kid ? `\n\nI did not recognise "${route.params.person}", so I will ask who did it.` : ''),
+      { kidId });
+  }
+
+  if(route.intent === 'mark_event_handled'){
+    const res = resolveEntity(route.params.event, liveEvents(), 'title');
+    if(res.status === 'none'){
+      return nothing('events', `I cannot find anything called "${route.params.event}".`);
+    }
+    if(res.status === 'ambiguous') return askWhich('events', res.matches, 'events', 'title');
+    if(res.match.handled){
+      return nothing('events', `"${res.match.title}" is already marked as handled.`);
+    }
+    return propose('events', res.match,
+      `Mark "${res.match.title}" as handled, so it stops warning you.`);
+  }
+
+  if(route.intent === 'edit_event'){
+    const res = resolveEntity(route.params.event, liveEvents(), 'title');
+    if(res.status === 'none'){
+      return nothing('events', `I cannot find an event called "${route.params.event}".`);
+    }
+    if(res.status === 'ambiguous') return askWhich('events', res.matches, 'events', 'title');
+    const changes = eventEditChanges(route.params, res.match);
+    if(!Object.keys(changes).length){
+      // Writing an identical row and reporting success is a lie the user
+      // cannot see through.
+      return nothing('events', describeEdit(changes, res.match));
+    }
+    return propose('events', res.match, describeEdit(changes, res.match), { changes });
+  }
+
+  if(route.intent === 'delete_event' || route.intent === 'delete_chore'){
+    const isChore = route.intent === 'delete_chore';
+    const spoken = isChore ? route.params.chore : route.params.event;
+    const res = resolveEntity(spoken, isChore ? S.chores : liveEvents(), 'title');
+    if(res.status === 'none'){
+      return nothing(isChore ? 'chores' : 'events',
+        `I cannot find ${isChore ? 'a chore' : 'an event'} called "${spoken}".`);
+    }
+    // A delete is the one place ambiguity absolutely must not resolve itself.
+    if(res.status === 'ambiguous') return askWhich(isChore ? 'chores' : 'events', res.matches,
+      isChore ? 'chores' : 'events', 'title');
+    return propose(isChore ? 'chores' : 'events', res.match);
+  }
+
   return { answer:'That is not something I can do yet.', cited:[], domain:'events', sourceNote:'' };
 }
 
-/** The explicit yes. This is the only path that writes. */
-function confirmPendingAction(listId){
+/**
+ * The explicit yes. This is the only path in the app that turns an assistant
+ * sentence into a change.
+ *
+ * It calls the app's OWN functions wherever one exists -- softDelete,
+ * markHandled, completeChore -- rather than reimplementing the write. A second
+ * implementation is a second set of bugs, and completeChore in particular
+ * carries behaviour Gordon must not skip (the "who did it?" sheet on a chore
+ * that belongs to nobody). Everything here is undoable.
+ */
+function confirmPendingAction(chosenId){
   if(!pendingAction){ return; }
-  const route = pendingAction.route;
-  const target = listId
-    ? S.lists.find(l => l.id === listId)
-    : pendingAction.target;
+  const pa = pendingAction;
+  const route = pa.route;
+
+  // Coming back from a "which one did you mean?" prompt.
+  let target = pa.target;
+  if(chosenId){
+    const coll = pa.collection && S[pa.collection] ? S[pa.collection] : [];
+    target = coll.find(x => x.id === chosenId) || null;
+  }
   pendingAction = null;
-  if(!target){ toast('That list is gone'); render(); return; }
-  if(route.intent === 'add_list_item'){
-    route.params.items.forEach(text => {
-      S.listItems.push({ id:uid(), listId:target.id, text:String(text), checked:false, deleted:false });
-    });
-    save();
-    const n = route.params.items.length;
-    // Undo, same as every other destructive-ish action in the app.
-    toast(`Added ${n} item${n===1?'':'s'} to ${target.name}`, { label:'Undo', fn:() => {
-      S.listItems = S.listItems.filter(i => !(i.listId === target.id
-        && route.params.items.includes(i.text) && !i.checked));
-      save(); render(); toast('Undone');
-    }});
+
+  const needsTarget = route.intent !== 'create_list';
+  if(needsTarget && !target){ toast('That is gone now'); render(); return; }
+
+  switch(route.intent){
+    case 'create_list': {
+      const name = String(route.params.name || '').trim();
+      if(!name) break;
+      const row = { id:uid(), name, deleted:false };
+      S.lists.push(row); save();
+      toast(`Started "${name}"`, { label:'Undo', fn:() => {
+        S.lists = S.lists.filter(l => l.id !== row.id); save(); render(); toast('Undone');
+      }});
+      break;
+    }
+    case 'add_list_item': {
+      const added = route.params.items.map(text => {
+        const row = { id:uid(), listId:target.id, text:String(text), checked:false, deleted:false };
+        S.listItems.push(row); return row.id;
+      });
+      save();
+      toast(`Added ${added.length} item${added.length===1?'':'s'} to ${target.name}`,
+        { label:'Undo', fn:() => {
+          // By id, not by text: undoing must not remove an identically-named
+          // item the user added themselves.
+          S.listItems = S.listItems.filter(i => !added.includes(i.id));
+          save(); render(); toast('Undone');
+        }});
+      break;
+    }
+    case 'check_list_item': {
+      const ids = pa.itemIds || [];
+      const changed = S.listItems.filter(i => ids.includes(i.id) && !i.checked);
+      changed.forEach(i => { i.checked = true; });
+      save();
+      toast(`Ticked off ${changed.length} item${changed.length===1?'':'s'}`,
+        { label:'Undo', fn:() => {
+          changed.forEach(i => { i.checked = false; });
+          save(); render(); toast('Undone');
+        }});
+      break;
+    }
+    case 'complete_chore': {
+      // completeChore handles stars and the toast; toggleChore handles the
+      // "who did it?" sheet when the chore belongs to nobody. Use whichever
+      // matches what we know, so the assistant path behaves like a tap.
+      const kidId = pa.kidId || target.kidId || null;
+      if(kidId) completeChore(target, kidId); else toggleChore(target.id);
+      break;
+    }
+    case 'mark_event_handled':
+      markHandled(target.id);
+      break;
+    case 'edit_event': {
+      const changes = pa.changes || {};
+      const before = { date: target.date, time: target.time, title: target.title };
+      Object.assign(target, changes);
+      save();
+      toast(`Updated "${target.title}"`, { label:'Undo', fn:() => {
+        Object.assign(target, before); save(); render(); toast('Put back');
+      }});
+      break;
+    }
+    case 'delete_event':
+      softDelete('events', target.id, '"' + target.title + '"');
+      break;
+    case 'delete_chore':
+      // Stars already earned are kept either way -- softDelete only flags the
+      // chore row, and completions are a separate collection.
+      softDelete('chores', target.id, '"' + target.title + '"');
+      break;
   }
   render();
 }
