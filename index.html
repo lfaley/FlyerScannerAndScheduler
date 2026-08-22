@@ -55,6 +55,13 @@
   nav button.on{color:var(--green)}
   nav button .ic{font-size:20px;opacity:.45}
   nav button.on .ic{opacity:1}
+  /* iOS 26 standalone viewport bug: the layout viewport can come up short of
+     the physical screen (WebKit 158055568; improved in 26.1 but still seen in
+     the field), which leaves a strip of page background exposed BELOW a
+     bottom-fixed bar. Extend the nav's white downward to cover any such gap;
+     when the viewport is sized correctly this paints off-screen and is
+     invisible. */
+  nav::after{content:'';position:absolute;top:100%;left:0;right:0;height:120px;background:#ffffff}
   .card{background:var(--card);border-radius:14px;padding:var(--s4);margin-bottom:var(--s3);
     box-shadow:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
     transition:transform .1s ease, box-shadow .1s ease}
@@ -136,7 +143,16 @@
   .spinner{width:36px;height:36px;border:4px solid var(--green-lt);border-top-color:var(--green);
     border-radius:50%;animation:sp 1s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
-  @keyframes screenIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  /* screenIn must NEVER animate transform. main.enter keeps its finished
+     animation applied forever (fill-mode: both), and a filled transform -- even
+     the identity matrix that `transform:none` resolves to -- makes <main> the
+     containing block for every position:fixed descendant (CSS Transforms
+     spec). That pinned the .fab buttons to the CONTENT instead of the screen:
+     mid-page on short tabs (Chores), buried below the list on long ones
+     (Events). Reproduced in headless Chromium; matches on-device screenshots.
+     Opacity is safe -- it creates a stacking context, not a containing block.
+     A test in tests-modules.js guards this. */
+  @keyframes screenIn{from{opacity:0}to{opacity:1}}
   main.enter{animation:screenIn .2s ease both}
   .celebrate{background:var(--green-lt);border-radius:10px;padding:12px;text-align:center;
     font-weight:700;color:var(--green);margin-bottom:12px}
@@ -3769,7 +3785,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.6 · single-file delivery restored</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.7 · floating buttons pinned to the screen again</div>`;
 }
 function manualPrune(){
   const n = pruneData();

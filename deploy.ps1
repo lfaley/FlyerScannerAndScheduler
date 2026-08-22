@@ -19,7 +19,7 @@ param(
 # killed this script twice. PowerShell 7.1 changed this behaviour; 5.1 did not.
 # Every step below checks its own result instead.
 $ErrorActionPreference = "Continue"
-$repo = "C:\Users\Logan\Desktop\Repos\FlyerAndScheduler\flyersnap-pwa"
+$repo = "C:\Users\Logan\Desktop\Repos\FlyerSnap"
 
 Write-Host ""
 Write-Host "FlyerSnap deploy - v$Version" -ForegroundColor Cyan

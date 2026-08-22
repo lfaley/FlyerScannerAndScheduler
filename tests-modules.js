@@ -150,4 +150,47 @@ module.exports = async function runModuleTests(test){
     assert.ok(handlerNames.size > 50,
       'expected many inline handlers, found ' + handlerNames.size);
   });
+
+  // -------------------------------------------------------------------------
+  // Fixed-position safety. The .fab buttons are position:fixed DESCENDANTS of
+  // <main>. Any transform/perspective/filter on <main> (or html/body) -- even
+  // one left behind by a finished animation with fill-mode -- turns it into
+  // their containing block, and the "floating" buttons pin to the content
+  // instead of the screen. That shipped in v8.6: mid-page overlap on Chores,
+  // button invisible on Events. This guard fails the build instead.
+  // -------------------------------------------------------------------------
+  console.log('\nFixed-position safety');
+
+  const css = html.split('<style>')[1].split('</style>')[0];
+
+  // Selectors whose SUBJECT (last compound) is an ancestor of the fab.
+  const isAncestorSubject = sel => sel.split(',').some(s => {
+    const last = s.trim().split(/[\s>+~]+/).pop() || '';
+    return /^(html|body|main)([.:[]|$)/.test(last);
+  });
+
+  test('no animation on an ancestor of .fab animates a containing-block property', () => {
+    const offenders = [];
+    const ruleRe = /([^{}@]+)\{([^{}]*)\}/g;
+    let r;
+    while((r = ruleRe.exec(css)) !== null){
+      const sel = r[1].trim(), body = r[2];
+      if(!isAncestorSubject(sel)) continue;
+      const anim = body.match(/animation(?:-name)?\s*:\s*([A-Za-z_][\w-]*)/);
+      if(anim){
+        const kf = css.match(new RegExp('@keyframes\\s+' + anim[1] + '\\s*\\{[\\s\\S]*?\\}\\s*\\}'));
+        if(kf && /transform|perspective|filter/.test(kf[0]))
+          offenders.push(sel + ' animates ' + anim[1] + ' (touches transform/perspective/filter)');
+      }
+      if(/will-change\s*:[^;]*(transform|perspective|filter)|(?:^|;)\s*(transform|perspective|filter)\s*:(?!\s*none)/.test(body))
+        offenders.push(sel + ' sets a containing-block property directly');
+    }
+    assert.deepStrictEqual(offenders, [],
+      'these make <main>/<body> the containing block for the fixed .fab buttons: ' + offenders.join('; '));
+  });
+
+  test('the fab is still position:fixed, so the guard above is not vacuous', () => {
+    assert.ok(/\.fab\s*\{[^}]*position\s*:\s*fixed/.test(css), '.fab is no longer position:fixed');
+    assert.ok(/main\.enter\s*\{[^}]*animation/.test(css), 'main.enter no longer animates -- update this guard');
+  });
 };

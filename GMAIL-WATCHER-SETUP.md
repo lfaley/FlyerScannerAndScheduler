@@ -31,7 +31,7 @@ You need:
 
 - A Gmail account receiving the flyers
 - Your Anthropic API key (`sk-ant-…`) from console.anthropic.com
-- `gmail-watcher.gs` — it's in your repo folder at `C:\Users\Logan\Desktop\Repos\FlyerAndScheduler\flyersnap-pwa\`
+- `gmail-watcher.gs` — it's in your repo folder at `C:\Users\Logan\Desktop\Repos\FlyerSnap\`
 - FlyerSnap v1.8 or later installed (Settings shows the version at the bottom)
 
 ---
