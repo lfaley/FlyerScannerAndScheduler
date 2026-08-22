@@ -506,7 +506,17 @@ function normTitle(t){
 function titleSimilarity(a, b){
   const A = normTitle(a).split(' ').filter(Boolean);
   const B = normTitle(b).split(' ').filter(Boolean);
-  if(!A.length || !B.length) return 0;
+  // A title made entirely of stop-words normalises to nothing ("The Note",
+  // "A", a single letter). Returning 0 here meant two BYTE-IDENTICAL titles
+  // scored as completely unlike each other -- so looksDuplicate missed them,
+  // which is the one thing it exists to catch. Compare the raw text instead.
+  // (v9.18. The extraction scorer had quietly solved this in a private copy;
+  // consolidating the two is what surfaced it.)
+  if(!A.length || !B.length){
+    const ra = String(a || '').trim().toLowerCase();
+    const rb = String(b || '').trim().toLowerCase();
+    return (ra && ra === rb) ? 1 : 0;
+  }
   const setB = new Set(B);
   const overlap = A.filter(w => setB.has(w)).length;
   return overlap / Math.min(A.length, B.length);
@@ -515,7 +525,8 @@ function titleSimilarity(a, b){
 function looksDuplicate(a, b){
   if(!a || !b || a.date !== b.date) return false;          // same day is required
   const na = normTitle(a.title), nb = normTitle(b.title);
-  if(!na || !nb) return false;
+  // Both normalise to nothing: titleSimilarity compares the raw text.
+  if(!na || !nb) return titleSimilarity(a.title, b.title) === 1;
   if(na === nb) return true;                                // identical after normalizing
   // For anything else, demand a strong match. Short titles (1-2 words) are too
   // easy to collide by chance ("Mini Jazz" vs "Mini M.T."), so for those we
@@ -3255,8 +3266,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.17';
-const APP_TAGLINE = 'benchmark on the phone';
+const APP_VERSION = 'v9.18';
+const APP_TAGLINE = 'one matching rule';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 

@@ -26,31 +26,15 @@
  * trusted. It is reported on its own, not just folded into precision.
  */
 
-// Reused from the app's own duplicate matching so the two cannot diverge.
-function normTitle(t){
-  return String(t || '').toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\b(the|a|an|of|for|to|at|on|in|our|your|please|note)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// The app's OWN matching, imported rather than copied. It used to be a copy
+// with a comment claiming it could not diverge -- and it had diverged: this
+// file handled titles made entirely of stop-words and js/matching.js did not,
+// so the app failed to spot two byte-identical "The Note" events on one day.
+// Consolidating the two is what found it (v9.18).
+import { normTitle, titleSimilarity } from '../js/matching.js';
 
-export function titleMatch(a, b){
-  const A = normTitle(a).split(' ').filter(Boolean);
-  const B = normTitle(b).split(' ').filter(Boolean);
-  // A title made entirely of stop-words normalises to nothing ("The Note",
-  // or a single letter). Falling through would score it 0 against an
-  // identical string, so compare the raw text in that case.
-  if(!A.length || !B.length){
-    const ra = String(a || '').trim().toLowerCase();
-    const rb = String(b || '').trim().toLowerCase();
-    return (ra && ra === rb) ? 1 : 0;
-  }
-  const setB = new Set(B);
-  const overlap = A.filter(w => setB.has(w)).length;
-  return overlap / Math.min(A.length, B.length);
-}
+/** Kept as a name so the scoring code below reads the way it always did. */
+export const titleMatch = titleSimilarity;
 
 // Fields compared inside a matched pair. `soft` fields tolerate wording
 // differences; the rest must be exact, because a time or a date that is

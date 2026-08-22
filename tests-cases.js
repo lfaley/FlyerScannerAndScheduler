@@ -517,7 +517,29 @@ test('short same-day titles sharing one word are NOT merged', () => {
   assert.ok(!looksDuplicate({ title:'Mini Jazz', date:d }, { title:'Mini Musical Theater', date:d }), 'Mini X vs Mini Y');
   assert.ok(!looksDuplicate({ title:'Teen Jazz', date:d }, { title:'Teen Line', date:d }), 'Teen X vs Teen Y');
   assert.ok(!looksDuplicate({ title:'Junior Tap', date:d }, { title:'Junior Line', date:d }), 'Junior X vs Junior Y');
-  assert.ok(!looksDuplicate({ title:'Dinner', date:d }, { title:'Dinner Theater', date:d }) === false || true); // containment case below
+  // "Dinner" is one word, so the containment rule applies and these DO merge.
+  // Asserted rather than hand-waved: the previous line here was
+  // `assert.ok(!x === false || true)`, which can never fail.
+  assert.ok(looksDuplicate({ title:'Dinner', date:d }, { title:'Dinner Theater', date:d }),
+    'a short title fully contained in a longer one is a duplicate');
+});
+
+test('two identical titles made only of stop-words are still duplicates', () => {
+  // v9.18. normTitle strips the/a/an/of/for/to/at/on/in/our/your/please/note,
+  // so "The Note" normalised to nothing and titleSimilarity returned 0 --
+  // meaning two BYTE-IDENTICAL events on one day were not flagged, which is
+  // the single thing this function exists to catch. Found by consolidating
+  // js/matching.js with the extraction scorer, which had solved it in a copy.
+  const d = dayAhead(3);
+  ['The Note', 'A', 'Note', 'the a of'].forEach(t =>
+    assert.ok(looksDuplicate({ title:t, date:d }, { title:t, date:d }), 'identical: ' + t));
+  // ...but stop-word titles must not all collapse into each other.
+  assert.ok(!looksDuplicate({ title:'The Note', date:d }, { title:'A Note', date:d }),
+    'different stop-word titles are not the same event');
+  assert.ok(!looksDuplicate({ title:'', date:d }, { title:'', date:d }),
+    'two untitled events are not duplicates on the evidence of nothing');
+  assert.ok(!looksDuplicate({ title:'The Note', date:d }, { title:'The Note', date: dayAhead(4) }),
+    'same title, different day, still not a duplicate');
 });
 
 test('containment still catches real short-title duplicates', () => {

@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.17 · **Tests:** 449 passing
+**Updated:** August 22, 2026 · **Live version:** v9.18 · **Tests:** 450 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -78,6 +78,7 @@ a per-version progress log.
 | v9.15 | A11y audit extended to all 25 screens; back button was a 24px target |
 | v9.16 | Routing benchmark (`eval/router-cases.json`); quickRoute stopped answering out-of-scope questions |
 | v9.17 | The benchmark runs inside the app, against the provider actually configured |
+| v9.18 | One matching implementation; duplicate detection missed identical stop-word titles |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -129,6 +130,42 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.18 — a duplicate-detection bug, found by removing a copy.**
+
+`eval/score.js` carried its own `normTitle`, under a comment saying it was
+"reused from the app's own duplicate matching so the two cannot diverge". It
+was a copy, and it *had* diverged: the scorer handled titles made entirely of
+stop-words and `js/matching.js` did not.
+
+`normTitle` strips `the|a|an|of|for|to|at|on|in|our|your|please|note`. So
+**"The Note" normalised to nothing, `titleSimilarity` returned 0, and
+`looksDuplicate` reported two BYTE-IDENTICAL same-day events as not
+duplicates** — the single thing that function exists to catch. Verified before
+fixing, not assumed.
+
+Now one implementation: `js/matching.js` exports `normTitle` and
+`titleSimilarity`, the scorer imports them, and the stop-word case is handled
+inside `titleSimilarity` by comparing raw text. `looksDuplicate` gets the fix
+for free. Guarded by a regression test covering "The Note", "A", "Note" and
+"the a of", plus the cases that must NOT collapse ("The Note" vs "A Note", two
+untitled events, same title on different days). Mutation-tested — and the
+mutation was caught by the *extraction scorer's* test, which is the
+consolidation paying for itself immediately.
+
+Also fixed: a second vacuous assertion, `assert.ok(!x === false || true)`, in
+the duplicate-detection block. It could never fail. Replaced with the real
+claim it was gesturing at ("Dinner" is contained in "Dinner Theater", so they
+DO merge). That is the second one of these found; worth a grep for the pattern
+if a third is suspected.
+
+**Security work is ON HOLD** at Logan's request — he is building an admin
+console for allowed users and a Firebase database, and the login design is
+evolving. `SECURITY-PLAN.md` is marked accordingly, and
+**ADMIN-CONSOLE-CONTRACT.md** is new: a walkthrough of what FlyerSnap stores,
+what leaves the device, what it already logs and exports, and the constraints a
+console must not break. Written so the console can be built against what the
+app does rather than an assumption about it.
 
 **v9.17 — the benchmark runs on the phone.** Logan's question: *"the
 application has the key. can we use the application to run these and feed the
@@ -661,7 +698,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 449 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 450 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.
