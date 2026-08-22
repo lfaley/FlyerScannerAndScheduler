@@ -151,6 +151,19 @@ module.exports = async function runModuleTests(test){
       'expected many inline handlers, found ' + handlerNames.size);
   });
 
+  test('the inlined <style> matches css/ exactly', () => {
+    // Same contract as the js/ modules: css/tokens.css + css/components.css
+    // are the source of truth; index.html carries an inlined copy for
+    // single-file delivery. tools/inline.js syncs them; this catches drift.
+    const stripHeader = s => s.replace(/^\/\*[\s\S]*?\*\/\n/, '');
+    const source = ['tokens.css', 'components.css']
+      .map(f => stripHeader(fs.readFileSync('css/' + f, 'utf8')).trim()).join('\n');
+    const inlined = html.split('<style>')[1].split('</style>')[0];
+    const norm = s => s.replace(/\s+/g, ' ').trim();
+    assert.strictEqual(norm(inlined), norm(source),
+      'index.html <style> differs from css/ -- edit css/, then run: node tools/inline.js');
+  });
+
   // -------------------------------------------------------------------------
   // Fixed-position safety. The .fab buttons are position:fixed DESCENDANTS of
   // <main>. Any transform/perspective/filter on <main> (or html/body) -- even
@@ -192,5 +205,80 @@ module.exports = async function runModuleTests(test){
   test('the fab is still position:fixed, so the guard above is not vacuous', () => {
     assert.ok(/\.fab\s*\{[^}]*position\s*:\s*fixed/.test(css), '.fab is no longer position:fixed');
     assert.ok(/main\.enter\s*\{[^}]*animation/.test(css), 'main.enter no longer animates -- update this guard');
+  });
+
+  // -------------------------------------------------------------------------
+  // Design-token contrast. Computes real WCAG 2.x ratios (relative luminance
+  // per the spec formula) for every foreground/background pair the UI uses,
+  // in BOTH themes. A palette tweak that silently drops below AA fails the
+  // build with the exact pair named.
+  // -------------------------------------------------------------------------
+  console.log('\nDesign token contrast (WCAG AA)');
+
+  const lum = (hex) => {
+    const h = hex.length === 4 ? '#' + [...hex.slice(1)].map(c => c + c).join('') : hex;
+    const [r, g, b] = [1, 3, 5].map(i => {
+      const c = parseInt(h.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a, b) => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const parseTokens = (block) => {
+    const t = {};
+    for(const m of block.matchAll(/--([\w-]+)\s*:\s*(#[0-9A-Fa-f]{3,8})\s*[;}]/g)) t[m[1]] = m[2];
+    return t;
+  };
+
+  const rootBlock = css.split(':root{')[1].split('}')[0];
+  const darkBlock = (css.split('prefers-color-scheme: dark')[1] || '').split('@media')[0];
+  const light = parseTokens(rootBlock);
+  const dark  = Object.assign({}, light, parseTokens(darkBlock));
+
+  // [foreground, background, minimum, where it is used]
+  const PAIRS = [
+    ['ink', 'bg', 4.5, 'body text'],
+    ['ink', 'card', 4.5, 'card titles'],
+    ['muted', 'card', 4.5, 'card meta'],
+    ['muted', 'bg', 4.5, 'help text'],
+    ['faint', 'card', 4.5, 'provenance lines'],
+    ['faint', 'bg', 4.5, 'version stamp, captions'],
+    ['accent', 'card', 4.5, 'links on cards'],
+    ['accent', 'bg', 4.5, 'links on page'],
+    ['accent', 'green-lt', 4.5, 'badges, sheet buttons'],
+    ['on-accent', 'green', 4.5, 'button labels, header'],
+    ['on-accent', 'red', 4.5, 'urgent badges'],
+    ['on-accent', 'amber', 4.5, 'NEW flags'],
+    ['red-accent', 'card', 4.5, 'destructive links'],
+    ['red-accent', 'red-lt', 4.5, 'danger sheet buttons'],
+    ['amber-accent', 'card', 4.5, 'unseen chip'],
+    ['amber-accent', 'bg', 4.5, 'problem-log button'],
+    ['bg', 'ink', 4.5, 'toast text'],
+    ['placeholder', 'card', 3.0, "empty checkboxes (non-text UI, WCAG 1.4.11)"],
+  ];
+
+  for(const [theme, tokens] of [['light', light], ['dark', dark]]){
+    test(`${theme} palette meets AA on every used pair`, () => {
+      const bad = [];
+      for(const [fg, bg, min, use] of PAIRS){
+        assert.ok(tokens[fg], `token --${fg} missing in ${theme}`);
+        assert.ok(tokens[bg], `token --${bg} missing in ${theme}`);
+        const r = ratio(tokens[fg], tokens[bg]);
+        if(r < min) bad.push(`--${fg} on --${bg} = ${r.toFixed(2)} (needs ${min}; ${use})`);
+      }
+      assert.deepStrictEqual(bad, [], theme + ' contrast failures: ' + bad.join('; '));
+    });
+  }
+
+  test('no raw colors outside the token blocks (kid palette and tap-highlights excepted)', () => {
+    const body = css.replace(/:root\{[\s\S]*?\}/, '').replace(/@media \(prefers-color-scheme: dark\)\{[\s\S]*?\}\s*\}/, '');
+    const raw = [];
+    for(const m of body.matchAll(/[^{};]*(?:#[0-9A-Fa-f]{3,8}\b|rgba?\([^)]*\))[^;}]*/g)){
+      if(!/tap-highlight/.test(m[0])) raw.push(m[0].trim().slice(0, 60));
+    }
+    assert.deepStrictEqual(raw, [], 'raw colors that must become tokens: ' + raw.join(' | '));
   });
 };

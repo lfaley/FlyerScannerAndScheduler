@@ -5,15 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#2D5A4A">
+<meta name="theme-color" content="#2D5A4A" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#2F5D4C" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>FlyerSnap</title>
 <style>
   :root{
-    --green:#2D5A4A; --green-lt:#E4EEE9; --red:#C0392B; --amber:#B45309;
-    --bg:#F7F5F0; --card:#fff; --ink:#1E2B26; --muted:#4A5B53; --faint:#6B7A72;
-    --line:#D5DDD8;
+    /* Color tokens. EVERY color in the app lives here (or in the dark block
+       below) -- nothing outside :root may name a raw color. Text/link colors
+       use --accent / --red-accent / --amber-accent so dark mode can brighten
+       them without touching the filled surfaces (--green, --red, --amber). */
+    --green:#2D5A4A; --accent:#2D5A4A; --green-lt:#E4EEE9; --green-line:#CBDDD2;
+    --red:#C0392B; --red-accent:#C0392B; --red-lt:#FDEBEA;
+    --amber:#B45309; --amber-accent:#B45309;
+    --bg:#F7F5F0; --card:#fff; --card-edge:transparent; --divider:#EEF2EF;
+    --ink:#1E2B26; --muted:#4A5B53; --faint:#637169; --line:#D5DDD8;
+    --placeholder:#7C9188; --on-accent:#fff; --overlay:rgba(0,0,0,.3);
+    --shadow-card:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
+    --shadow-near:0 1px 2px rgba(30,43,38,.05), 0 4px 14px rgba(30,43,38,.09);
+    --shadow-float:0 3px 10px rgba(0,0,0,.2);
+    --shadow-nav:0 -4px 12px rgba(0,0,0,.06);
+    --shadow-sheet:0 -2px 12px rgba(0,0,0,.12);
 
     /* Type scale. Five steps instead of twelve ad-hoc sizes. Body sits at 16px,
        the mobile minimum in Apple HIG (17pt) and Material (16sp). */
@@ -30,29 +43,48 @@
     /* WCAG 2.5.8 floor is 24px; 44px is the Apple HIG / WCAG 2.5.5 AAA target. */
     --tap:44px;
   }
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  /* Dark theme: true dark green-tinted neutrals, not an inversion. Fills keep
+     their weight; text accents brighten to hold WCAG AA (the contrast test in
+     tests-modules.js checks every pair in BOTH themes). Cards trade shadows
+     for a 1px edge, the standard dark-elevation cue. */
+  @media (prefers-color-scheme: dark){
+    :root{
+      --green:#2F5D4C; --accent:#9CC9B4; --green-lt:#24382F; --green-line:#3C574B;
+      --red:#C0392B; --red-accent:#F0A091; --red-lt:#3B211D;
+      --amber:#B45309; --amber-accent:#E5A163;
+      --bg:#131715; --card:#1C2320; --card-edge:#2A332E; --divider:#2A332E;
+      --ink:#E9EDEA; --muted:#AEBAB3; --faint:#93A099; --line:#323D37;
+      --placeholder:#66756D; --on-accent:#fff; --overlay:rgba(0,0,0,.55);
+      --shadow-card:0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.35);
+      --shadow-near:0 1px 2px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.4);
+      --shadow-float:0 3px 12px rgba(0,0,0,.55);
+      --shadow-nav:0 -4px 12px rgba(0,0,0,.45);
+      --shadow-sheet:0 -2px 16px rgba(0,0,0,.55);
+    }
+  }
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   /* Nothing in the app showed focus before -- switch-control and keyboard users
      had no idea where they were. :focus-visible keeps it invisible for taps. */
-  :focus-visible{outline:3px solid var(--green);outline-offset:2px;border-radius:8px}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:8px}
   @media (prefers-reduced-motion: reduce){
     *{animation-duration:.01ms !important;transition-duration:.01ms !important}
   }
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
     background:var(--bg);color:var(--ink);font-size:var(--t-body);line-height:1.5;
     padding-top:env(safe-area-inset-top);padding-bottom:calc(88px + env(safe-area-inset-bottom))}
-  header{position:sticky;top:0;background:var(--green);color:#fff;padding:14px 16px;
+  header{position:sticky;top:0;background:var(--green);color:var(--on-accent);padding:14px 16px;
     font-weight:700;font-size:17px;z-index:10;display:flex;align-items:center;gap:10px;
     padding-top:calc(14px + env(safe-area-inset-top));margin-top:calc(-1 * env(safe-area-inset-top))}
-  header .back{background:none;border:none;color:#fff;font-size:20px;padding:0 4px;font-weight:700}
+  header .back{background:none;border:none;color:var(--on-accent);font-size:20px;padding:0 4px;font-weight:700}
   main{padding:var(--s4);max-width:640px;margin:0 auto;padding-bottom:var(--s5)}
   /* Larger phones get a touch more air; content stays in a readable measure. */
   @media (min-width:430px){ main{padding:var(--s5)} }
-  nav{position:fixed;bottom:0;left:0;right:0;background:#ffffff;display:flex;
+  nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);display:flex;
     border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);
-    box-shadow:0 -4px 12px rgba(0,0,0,.06);z-index:30}
+    box-shadow:var(--shadow-nav);z-index:30}
   nav button{flex:1;background:none;border:none;padding:8px 0 6px;font-size:var(--t-cap);font-weight:600;min-height:var(--tap);
     color:var(--faint);display:flex;flex-direction:column;align-items:center;gap:2px}
-  nav button.on{color:var(--green)}
+  nav button.on{color:var(--accent)}
   nav button .ic{font-size:20px;opacity:.45}
   nav button.on .ic{opacity:1}
   /* iOS 26 standalone viewport bug: the layout viewport can come up short of
@@ -61,9 +93,9 @@
      bottom-fixed bar. Extend the nav's white downward to cover any such gap;
      when the viewport is sized correctly this paints off-screen and is
      invisible. */
-  nav::after{content:'';position:absolute;top:100%;left:0;right:0;height:120px;background:#ffffff}
-  .card{background:var(--card);border-radius:14px;padding:var(--s4);margin-bottom:var(--s3);
-    box-shadow:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
+  nav::after{content:'';position:absolute;top:100%;left:0;right:0;height:120px;background:var(--card)}
+  .card{background:var(--card);border:1px solid var(--card-edge);border-radius:14px;padding:var(--s4);margin-bottom:var(--s3);
+    box-shadow:var(--shadow-card);
     transition:transform .1s ease, box-shadow .1s ease}
   .card:active{transform:scale(.99)}
 
@@ -77,7 +109,7 @@
     padding:1px 7px;font-size:11px;letter-spacing:0}
 
   /* Density tiers. Imminent events earn presence; distant ones stay quiet. */
-  .card.near{box-shadow:0 1px 2px rgba(30,43,38,.05), 0 4px 14px rgba(30,43,38,.09)}
+  .card.near{box-shadow:var(--shadow-near)}
   .card.compact{padding:var(--s3) var(--s4);margin-bottom:var(--s2);opacity:.88}
   .card.compact .badge{background:transparent;color:var(--faint);padding:4px 0;font-weight:600}
 
@@ -90,42 +122,42 @@
   .meta{font-size:var(--t-sm);color:var(--muted);margin-top:var(--s1);line-height:1.45}
   .notes{font-size:var(--t-sm);color:var(--faint);font-style:normal;margin-top:var(--s2);
     white-space:pre-wrap;word-break:break-word;line-height:1.5;padding-left:10px;border-left:2px solid var(--line)}
-  .stripe{border-left:5px solid var(--green)}
-  .stripe.deadline{border-left-color:var(--red)}
-  .badge{font-size:var(--t-cap);font-weight:700;color:var(--green);background:var(--green-lt);
+  .stripe{border-left:5px solid var(--accent)}
+  .stripe.deadline{border-left-color:var(--red-accent)}
+  .badge{font-size:var(--t-cap);font-weight:700;color:var(--accent);background:var(--green-lt);
     padding:6px 10px;border-radius:9px;white-space:nowrap}
-  .badge.urgent{color:#fff;background:var(--red)}
-  .kidtag{display:inline-block;color:#fff;font-size:11px;font-weight:700;
+  .badge.urgent{color:var(--on-accent);background:var(--red)}
+  .kidtag{display:inline-block;color:var(--on-accent);font-size:11px;font-weight:700;
     padding:3px 8px;border-radius:10px;margin-top:6px}
-  .kindtag{font-size:10px;font-weight:800;letter-spacing:.5px;color:var(--green);
+  .kindtag{font-size:10px;font-weight:800;letter-spacing:.5px;color:var(--accent);
     background:var(--green-lt);padding:2px 6px;border-radius:4px}
-  .kindtag.deadline{color:#fff;background:var(--red)}
-  .btn{background:var(--green);color:#fff;border:none;border-radius:12px;
+  .kindtag.deadline{color:var(--on-accent);background:var(--red)}
+  .btn{background:var(--green);color:var(--on-accent);border:none;border-radius:12px;
     padding:14px 18px;font-size:var(--t-body);font-weight:700;width:100%;
     min-height:var(--tap);-webkit-tap-highlight-color:transparent;
     transition:transform .08s ease}
   .btn:active{transform:scale(.985)}
-  .btn.alt{background:#fff;color:var(--green);border:1.5px solid var(--green)}
+  .btn.alt{background:var(--card);color:var(--accent);border:1.5px solid var(--accent)}
   .btn.sm{width:auto;padding:10px 18px;font-size:var(--t-sm);min-height:var(--tap)}
   .btn.danger{background:var(--red)}
   .btn:disabled{opacity:.5}
   .fab{position:fixed;bottom:calc(76px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
-    width:auto;padding:14px 24px;border-radius:28px;box-shadow:0 3px 10px rgba(0,0,0,.2);z-index:9}
-  .newflag{display:inline-block;background:var(--amber);color:#fff;border-radius:6px;
+    width:auto;padding:14px 24px;border-radius:28px;box-shadow:var(--shadow-float);z-index:9}
+  .newflag{display:inline-block;background:var(--amber);color:var(--on-accent);border-radius:6px;
     padding:1px 6px;font-size:10px;font-weight:800;margin-right:6px;vertical-align:middle;letter-spacing:.4px}
-  .calflag{display:inline-block;background:#E7F0EA;color:var(--green);border:1px solid #CBDDD2;
+  .calflag{display:inline-block;background:var(--green-lt);color:var(--accent);border:1px solid var(--green-line);
     border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;margin-top:4px;white-space:nowrap}
-  .chip{display:inline-flex;align-items:center;background:#fff;border:1px solid var(--line);
+  .chip{display:inline-flex;align-items:center;background:var(--card);border:1px solid var(--line);
     color:var(--muted);border-radius:22px;padding:0 16px;min-height:var(--tap);
     font-size:var(--t-sm);font-weight:600;margin:0 var(--s2) var(--s2) 0;
     flex-shrink:0;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:rgba(0,0,0,.08)}
   .chip:active{transform:scale(.97)}
-  .chip.on{background:var(--green);border-color:var(--green);color:#fff}
-  .check{width:28px;height:28px;border-radius:14px;border:2px solid #B8C4BE;flex-shrink:0;
-    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:14px}
+  .chip.on{background:var(--green);border-color:var(--green);color:var(--on-accent)}
+  .check{width:28px;height:28px;border-radius:14px;border:2px solid var(--placeholder);flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;color:var(--on-accent);font-weight:800;font-size:14px}
   .check.on{background:var(--green);border-color:var(--green)}
   input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],textarea{
-    width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;
+    width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
     padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
   textarea{min-height:90px;resize:vertical}
   .formrow{display:flex;gap:8px;margin-bottom:10px}
@@ -137,10 +169,10 @@
   .sect{font-size:var(--t-lg);font-weight:800;margin:var(--s6) 0 var(--s2);letter-spacing:-.02em}
   .help{font-size:var(--t-sm);color:var(--muted);line-height:1.55;margin-bottom:var(--s3)}
   .filterbar{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch}
-  .balance{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid;
+  .balance{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid;
     border-radius:16px;padding:6px 12px;font-size:13px;font-weight:700;white-space:nowrap}
   .spin{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;gap:14px}
-  .spinner{width:36px;height:36px;border:4px solid var(--green-lt);border-top-color:var(--green);
+  .spinner{width:36px;height:36px;border:4px solid var(--green-lt);border-top-color:var(--accent);
     border-radius:50%;animation:sp 1s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
   /* screenIn must NEVER animate transform. main.enter keeps its finished
@@ -155,33 +187,33 @@
   @keyframes screenIn{from{opacity:0}to{opacity:1}}
   main.enter{animation:screenIn .2s ease both}
   .celebrate{background:var(--green-lt);border-radius:10px;padding:12px;text-align:center;
-    font-weight:700;color:var(--green);margin-bottom:12px}
+    font-weight:700;color:var(--accent);margin-bottom:12px}
   .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
-    background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
+    background:var(--ink);color:var(--bg);padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
     z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none}
   .toast.show{opacity:1}
   .strike{text-decoration:line-through;color:var(--faint)}
   .dim{opacity:.55}
   .slot{display:flex;align-items:center;gap:10px;padding:6px 0}
-  .slotb{width:24px;height:24px;border-radius:12px;background:var(--green-lt);color:var(--green);
+  .slotb{width:24px;height:24px;border-radius:12px;background:var(--green-lt);color:var(--accent);
     font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
   .slottext{font-size:14px}
-  .slottext.empty{color:#B8C4BE;font-style:italic}
-  .sheet{position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:16px 16px 0 0;
+  .slottext.empty{color:var(--faint);font-style:italic}
+  .sheet{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-radius:16px 16px 0 0;
     padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom));z-index:20;
-    box-shadow:0 -2px 12px rgba(0,0,0,.12)}
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:15}
+    box-shadow:var(--shadow-sheet)}
+  .overlay{position:fixed;inset:0;background:var(--overlay);z-index:15}
   /* min-height wins over the inline paddings scattered through the markup, so
      every one of these clears the 44px target without touching 26 call sites. */
-  .linkbtn{background:none;border:none;color:var(--green);font-weight:700;
+  .linkbtn{background:none;border:none;color:var(--accent);font-weight:700;
     font-size:var(--t-sm);padding:8px;min-height:var(--tap);min-width:var(--tap);
     display:inline-flex;align-items:center;justify-content:center;
     border-radius:8px;-webkit-tap-highlight-color:rgba(45,90,74,.12)}
   .linkbtn:active{background:var(--green-lt)}
-  .linkbtn.red{color:var(--red)}
-  .sheetbtn{display:block;width:100%;background:var(--green-lt);color:var(--green);border:none;
+  .linkbtn.red{color:var(--red-accent)}
+  .sheetbtn{display:block;width:100%;background:var(--green-lt);color:var(--accent);border:none;
     border-radius:10px;padding:13px;font-size:15px;font-weight:700;margin-bottom:8px;text-align:center}
-  .sheetbtn.danger{background:#FDEBEA;color:var(--red)}
+  .sheetbtn.danger{background:var(--red-lt);color:var(--red-accent)}
   .sheetbtn.cancel{background:none;color:var(--muted);font-weight:600}
   h3{margin:6px 0 10px;font-size:16px}
 </style>
@@ -1303,16 +1335,16 @@ function renderExportQueue(m){
   if(!next){ S.settings.exportQueue = q.slice(1); save(); return renderExportQueue(m); }
   const alreadyDone = S.events.filter(e=>!e.deleted && e.exported && e.date>=todayISO()).length;
   const total = q.length + alreadyDone;
-  m.innerHTML = `<div class="card" style="background:var(--green);color:#fff">
+  m.innerHTML = `<div class="card" style="background:var(--green);color:var(--on-accent)">
     <div style="font-weight:800;margin-bottom:4px">Adding events to Calendar</div>
     <div style="font-size:13px;opacity:0.92;margin-bottom:4px">${alreadyDone+1} of ${total}: ${esc(next.title)}</div>
     <div style="font-size:12px;opacity:0.85;line-height:1.45;margin-bottom:10px">
       Tap <b>Add next</b> → Calendar opens → tap <b>Add</b> → come back and repeat.
     </div>
-    <button class="btn" style="background:#fff;color:var(--green);margin-bottom:2px" onclick="exportNextInQueue()">Add next event →</button>
+    <button class="btn" style="background:var(--card);color:var(--accent);margin-bottom:2px" onclick="exportNextInQueue()">Add next event →</button>
     <div style="display:flex;gap:8px;margin-top:2px">
-      <button class="linkbtn" style="color:#fff;flex:1" onclick="skipNextInQueue()">Skip this one</button>
-      <button class="linkbtn" style="color:#fff;flex:1" onclick="cancelExportQueue()">Cancel</button>
+      <button class="linkbtn" style="color:var(--on-accent);flex:1" onclick="skipNextInQueue()">Skip this one</button>
+      <button class="linkbtn" style="color:var(--on-accent);flex:1" onclick="cancelExportQueue()">Cancel</button>
     </div>
   </div>
   <div style="text-align:center;margin-top:10px">
@@ -1331,16 +1363,16 @@ function exportQueueBanner(){
   const alreadyDone = S.events.filter(e=>!e.deleted && e.exported && e.date>=todayISO()).length;
   const total = q.length + alreadyDone;
   const done = alreadyDone;
-  return `<div class="card" style="background:var(--green);color:#fff">
+  return `<div class="card" style="background:var(--green);color:var(--on-accent)">
     <div style="font-weight:800;margin-bottom:4px">Adding events to Calendar</div>
     <div style="font-size:13px;opacity:0.92;margin-bottom:4px">${done+1} of ${total}: ${esc(next.title)}</div>
     <div style="font-size:12px;opacity:0.85;line-height:1.45;margin-bottom:10px">
       Tap <b>Add next</b> → Calendar opens → tap <b>Add</b> → come back and repeat.
     </div>
-    <button class="btn" style="background:#fff;color:var(--green);margin-bottom:2px" onclick="exportNextInQueue()">Add next event →</button>
+    <button class="btn" style="background:var(--card);color:var(--accent);margin-bottom:2px" onclick="exportNextInQueue()">Add next event →</button>
     <div style="display:flex;gap:8px;margin-top:2px">
-      <button class="linkbtn" style="color:#fff;flex:1" onclick="skipNextInQueue()">Skip this one</button>
-      <button class="linkbtn" style="color:#fff;flex:1" onclick="cancelExportQueue()">Cancel</button>
+      <button class="linkbtn" style="color:var(--on-accent);flex:1" onclick="skipNextInQueue()">Skip this one</button>
+      <button class="linkbtn" style="color:var(--on-accent);flex:1" onclick="cancelExportQueue()">Cancel</button>
     </div>
   </div>`;
 }
@@ -1578,7 +1610,7 @@ function evtCard(e, isPast){
   const badge = isPast ? 'past' : (days===0?'Today':days===1?'1 day':days+' days');
   if(selectMode){
     const on = selectedEvents.has(e.id);
-    return `<div class="card stripe ${e.kind} ${isPast?'dim':''} ${on?'':'dim'}" style="${on?'border:2px solid var(--green)':'border:2px solid transparent'}" onclick="toggleEventSelect('${e.id}')">
+    return `<div class="card stripe ${e.kind} ${isPast?'dim':''} ${on?'':'dim'}" style="${on?'border:2px solid var(--accent)':'border:2px solid transparent'}" onclick="toggleEventSelect('${e.id}')">
       <div class="row">
         <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px;flex-shrink:0">${on?'✓':''}</div>
         <div class="grow">
@@ -1639,9 +1671,9 @@ function renderEvents(m){
   if(people.length){
     html += `<div class="filterbar">
       <span class="chip ${eventFilter===null?'on':''}" onclick="setEventFilter(null)">All</span>` +
-      (unreadCount() ? `<span class="chip ${eventFilter===UNREAD_FILTER?'on':''}" style="${eventFilter===UNREAD_FILTER?'':'border-color:var(--amber);color:var(--amber)'}"
+      (unreadCount() ? `<span class="chip ${eventFilter===UNREAD_FILTER?'on':''}" style="${eventFilter===UNREAD_FILTER?'':'border-color:var(--amber-accent);color:var(--amber-accent)'}"
         onclick="setEventFilter(UNREAD_FILTER)">🔔 New ${unreadCount()}</span>` : '') +
-      people.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+      people.map(k=>`<span class="chip" style="${eventFilter===k.id?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
         onclick="setEventFilter('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
   }
   // Search only earns its space once there's enough to sift through.
@@ -1943,7 +1975,7 @@ function renderSenders(m){
       const tagged = (S.settings.senderTags||{})[s.toLowerCase()] || [];
       const people = allPeople();
       const chips = people.length ? `<div style="margin-top:8px"><span class="label" style="margin-right:4px">Tag as:</span>` +
-        people.map(p=>`<span class="chip" style="${tagged.includes(p.id)?`background:${p.color};border-color:${p.color};color:#fff`:''}"
+        people.map(p=>`<span class="chip" style="${tagged.includes(p.id)?`background:${p.color};border-color:${p.color};color:var(--on-accent)`:''}"
           onclick="toggleSenderTag('${esc(s.toLowerCase())}','${p.id}')">${esc(p.name)}</span>`).join('') + `</div>` : '';
       return `<div class="card" style="padding:12px">
         <div class="row"><div class="grow" style="font-size:14px;word-break:break-all">${esc(s)}</div>
@@ -2278,7 +2310,7 @@ function renderShareEvents(m){
     <button class="linkbtn" style="padding:2px 8px" onclick="shareSelectAll()">${n===evts.length?'Clear all':'Select all'}</button></div>`;
   html += evts.map(e=>{
     const on = shareSel.has(e.id);
-    return `<div class="card ${on?'':'dim'}" style="${on?'border:2px solid var(--green)':'border:2px solid transparent'}"
+    return `<div class="card ${on?'':'dim'}" style="${on?'border:2px solid var(--accent)':'border:2px solid transparent'}"
       onclick="toggleShare('${e.id}')">
       <div class="row">
         <div class="check ${on?'on':''}">${on?'✓':''}</div>
@@ -2300,13 +2332,13 @@ function emailBanner(){
   if(!watcherConfigured()) return '';
   const n = S.settings.pendingEmailCount || 0;
   if(!n) return '';
-  return `<div class="card" style="background:var(--green);color:#fff">
+  return `<div class="card" style="background:var(--green);color:var(--on-accent)">
     <div class="row">
       <div class="grow">
         <div style="font-weight:800">📧 ${n} new ${n===1?'event':'events'} from your email</div>
         <div style="font-size:12px;opacity:.85;margin-top:2px">Pulled in automatically — tap to review.</div>
       </div>
-      <button class="btn sm" style="background:#fff;color:var(--green)" onclick="openEmailReviewNow()">Review</button>
+      <button class="btn sm" style="background:var(--card);color:var(--accent)" onclick="openEmailReviewNow()">Review</button>
     </div></div>`;
 }
 
@@ -2351,7 +2383,7 @@ function renderPickExport(m){
   html += evts.map(e=>{
     const on = exportPick.has(e.id);
     const ppl = eventPeople(e);
-    return `<div class="card row ${on?'':'dim'}" style="padding:11px;margin-bottom:6px;${on?'border:2px solid var(--green)':'border:2px solid transparent'}" onclick="togglePickExport('${e.id}')">
+    return `<div class="card row ${on?'':'dim'}" style="padding:11px;margin-bottom:6px;${on?'border:2px solid var(--accent)':'border:2px solid transparent'}" onclick="togglePickExport('${e.id}')">
       <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px;flex-shrink:0">${on?'✓':''}</div>
       <div class="grow">
         <div style="font-size:14px;font-weight:600">${esc(e.title)} ${e.exported?'📆':''}</div>
@@ -2499,7 +2531,7 @@ function renderDedupe(m){
     ${g.map(e => {
       const on = dedupeKeep[i] === e.id;
       const people = eventPeople(e);
-      return `<div class="row" style="padding:8px 0;border-top:1px solid #EEF2EF" onclick="setDedupeKeep(${i}, '${e.id}')">
+      return `<div class="row" style="padding:8px 0;border-top:1px solid var(--divider)" onclick="setDedupeKeep(${i}, '${e.id}')">
         <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px">${on?'✓':''}</div>
         <div class="grow">
           <div style="font-size:14px;font-weight:${on?'700':'400'}">${esc(e.title)} ${e.exported?'📆':''}</div>
@@ -2734,7 +2766,7 @@ function openLinkSheet(){
     <div class="meta" style="margin-bottom:12px">Direct PDF links work best. Login-protected pages (e.g. some ParentSquare posts) won't work — save the PDF and use Import instead.</div>
     <input type="text" id="linkUrl" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false">
     <div style="height:10px"></div>
-    <button class="sheetbtn" style="background:var(--green);color:#fff" onclick="submitLink()">Read this link</button>
+    <button class="sheetbtn" style="background:var(--green);color:var(--on-accent)" onclick="submitLink()">Read this link</button>
     <button class="sheetbtn cancel" onclick="closeLinkSheet()">Cancel</button>`;
   overlay.onclick = closeLinkSheet;
   document.body.append(overlay, sh);
@@ -2804,12 +2836,12 @@ function renderReview(m){
   }
   if(!kids.length) html += `<div class="help" style="font-style:italic">Tip: add people in Settings to tag events.</div>`;
   html += pendingEvents.map((e,i)=>`
-    <div class="card ${e.selected?'':'dim'}" style="${e.selected?'border:2px solid var(--green)':'border:2px solid transparent'}">
+    <div class="card ${e.selected?'':'dim'}" style="${e.selected?'border:2px solid var(--accent)':'border:2px solid transparent'}">
       <div class="row" onclick="toggleReview(${i})">
         <div class="check ${e.selected?'on':''}">${e.selected?'✓':''}</div>
         <div class="grow">
           <div class="row"><div class="title grow">${esc(e.title)}</div>
-            ${e.dup?`<span class="kindtag" style="background:#FDEBEA;color:var(--red)">TRACKED</span>`:''}
+            ${e.dup?`<span class="kindtag" style="background:var(--red-lt);color:var(--red-accent)">TRACKED</span>`:''}
             <span class="kindtag ${e.kind}">${e.kind==='deadline'?'DEADLINE':'EVENT'}</span>
             <button class="linkbtn" style="padding:2px 4px" onclick="event.stopPropagation();openPendingEdit(${i})">✏️</button></div>
           <div class="meta">${friendly(e.date)}${e.time?' · '+fmtTimeRange(e):''}${e.location?' · '+esc(e.location):''}</div>
@@ -2817,9 +2849,9 @@ function renderReview(m){
         </div>
       </div>
       ${e.from ? `<div class="meta" style="font-size:11px;opacity:.75">✉️ ${esc(e.from)}</div>` : ''}
-      ${e.selected && allPeople().length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #EEF2EF">
+      ${e.selected && allPeople().length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--divider)">
         <span class="label" style="margin-right:6px">Who:</span>` +
-        allPeople().map(k=>`<span class="chip" style="${(e.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+        allPeople().map(k=>`<span class="chip" style="${(e.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
           onclick="setReviewKid(${i},'${k.id}')">${esc(k.name)}</span>`).join('') + `</div>` : ''}
     </div>`).join('');
   html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">＋ Scan another page</button></div>
@@ -2930,7 +2962,7 @@ function renderEventEdit(m){
     <span class="chip ${f.kind==='deadline'?'on':''}" onclick="syncEventForm();eventForm.kind='deadline';render()">Deadline</span>
     ${allPeople().length ? `<div class="label">Who (tap all that apply)</div>
       <span class="chip ${!(f.personIds||[]).length?'on':''}" onclick="syncEventForm();eventForm.personIds=[];render()">No one</span>` +
-      allPeople().map(k=>`<span class="chip" style="${(f.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+      allPeople().map(k=>`<span class="chip" style="${(f.personIds||[]).includes(k.id)?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
         onclick="toggleEventPerson('${k.id}')">${esc(k.name)}</span>`).join('') : ''}
     <div class="label">Location</div>
     <input type="text" id="efLoc" value="${esc(f.location)}">
@@ -3062,12 +3094,12 @@ function renderChores(m){
 function renderChoreForm(){
   const kids = justKids();
   const f = choreForm;
-  return `<div class="card" style="border:2px solid var(--green)">
+  return `<div class="card" style="border:2px solid var(--accent)">
     <input type="text" id="choreTitle" placeholder="Chore (emoji ok, e.g. 🦷 Brush teeth)" value="${esc(f.title)}"
       oninput="choreForm.title=this.value">
     <div class="label">Who</div>
     <span class="chip ${f.kidId===null?'on':''}" onclick="choreForm.kidId=null;syncChoreTitle();render()">Anyone</span>` +
-    kids.map(k=>`<span class="chip" style="${f.kidId===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+    kids.map(k=>`<span class="chip" style="${f.kidId===k.id?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
       onclick="choreForm.kidId='${k.id}';syncChoreTitle();render()">${esc(k.name)}</span>`).join('') + `
     <div class="label">When</div>
     <span class="chip ${f.frequency==='daily'?'on':''}" onclick="choreForm.frequency='daily';syncChoreTitle();render()">Daily</span>
@@ -3201,7 +3233,7 @@ function renderLedger(m){
   if(kids.length>1){
     html += `<div class="filterbar">
       <span class="chip ${ledgerKid===null?'on':''}" onclick="setLedgerKid(null)">All</span>` +
-      kids.map(k=>`<span class="chip" style="${ledgerKid===k.id?`background:${k.color};border-color:${k.color};color:#fff`:''}"
+      kids.map(k=>`<span class="chip" style="${ledgerKid===k.id?`background:${k.color};border-color:${k.color};color:var(--on-accent)`:''}"
         onclick="setLedgerKid('${k.id}')">${esc(k.name)}</span>`).join('') + `</div>`;
   }
   if(!entries.length){
@@ -3212,7 +3244,7 @@ function renderLedger(m){
       return `<div class="card row" style="padding:12px">
         <div class="grow"><div style="font-weight:600;font-size:14px">${esc(e.label)}</div>
           <div class="meta" style="font-size:12px">${kid?esc(kid.name)+' · ':''}${e.date?friendly(e.date):'—'}</div></div>
-        <span style="font-weight:800;color:${e.delta>0?'var(--green)':'var(--red)'}">${e.delta>0?'+':''}${e.delta} ⭐</span>
+        <span style="font-weight:800;color:${e.delta>0?'var(--accent)':'var(--red-accent)'}">${e.delta>0?'+':''}${e.delta} ⭐</span>
       </div>`;
     }).join('');
   }
@@ -3694,7 +3726,7 @@ function renderSettings(m){
       <button class="btn sm" onclick="saveKey()">Save</button>
     </div>
 
-    ${activeProblems().length ? `<button class="btn alt" style="border-color:var(--amber);color:var(--amber)" onclick="openProblems()">
+    ${activeProblems().length ? `<button class="btn alt" style="border-color:var(--amber-accent);color:var(--amber-accent)" onclick="openProblems()">
       ⚠️ ${activeProblems().length} problem${activeProblems().length===1?'':'s'} to look at</button>` :
       `<button class="btn alt" onclick="openProblems()">Problem log</button>`}
 
@@ -3785,7 +3817,7 @@ function renderSettings(m){
       </div>
     </div>
 
-    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.7 · floating buttons pinned to the screen again</div>`;
+    <div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap v8.8 · design tokens, dark mode, contrast-guarded</div>`;
 }
 function manualPrune(){
   const n = pruneData();
@@ -3962,7 +3994,7 @@ function compareColumn(title, events, err){
   const list = events || [];
   return `<div class="card">
     <div style="font-weight:800;font-size:var(--t-sm);margin-bottom:6px">${esc(title)} — ${list.length} event${list.length===1?'':'s'}</div>
-    ${list.length ? list.map(e=>`<div style="padding:6px 0;border-top:1px solid #EEF2EF">
+    ${list.length ? list.map(e=>`<div style="padding:6px 0;border-top:1px solid var(--divider)">
       <div style="font-size:var(--t-sm);font-weight:600">${esc(e.title||'(no title)')}</div>
       <div class="meta" style="font-size:var(--t-cap)">${esc(e.date||'no date')}${e.time?' · '+fmt12(e.time):''}${e.endTime?'-'+fmt12(e.endTime):''}</div>
     </div>`).join('') : '<div class="meta">Nothing found</div>'}
@@ -3995,7 +4027,7 @@ function renderCompare(m){
 function renderSelfTest(m){
   setHeader('Local Model Self-Test', true);
   const pass = selfTestResults.filter(r=>r.ok).length;
-  let html = `<div class="card" style="border-left:5px solid ${pass===selfTestResults.length?'var(--green)':'var(--amber)'}">
+  let html = `<div class="card" style="border-left:5px solid ${pass===selfTestResults.length?'var(--accent)':'var(--amber-accent)'}">
     <div style="font-weight:800">${pass} of ${selfTestResults.length} checks passed</div></div>`;
   html += selfTestResults.map(r => `<div class="card">
     <div class="row">

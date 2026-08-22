@@ -1,0 +1,55 @@
+/* Design tokens -- single source of truth for every color, size and shadow.
+   Inlined into index.html's <style> by tools/inline.js (never edit the copy
+   there by hand). tests-modules.js fails the build if the copies drift or if
+   any token pair drops below WCAG AA in either theme. */
+:root{
+    /* Color tokens. EVERY color in the app lives here (or in the dark block
+       below) -- nothing outside :root may name a raw color. Text/link colors
+       use --accent / --red-accent / --amber-accent so dark mode can brighten
+       them without touching the filled surfaces (--green, --red, --amber). */
+    --green:#2D5A4A; --accent:#2D5A4A; --green-lt:#E4EEE9; --green-line:#CBDDD2;
+    --red:#C0392B; --red-accent:#C0392B; --red-lt:#FDEBEA;
+    --amber:#B45309; --amber-accent:#B45309;
+    --bg:#F7F5F0; --card:#fff; --card-edge:transparent; --divider:#EEF2EF;
+    --ink:#1E2B26; --muted:#4A5B53; --faint:#637169; --line:#D5DDD8;
+    --placeholder:#7C9188; --on-accent:#fff; --overlay:rgba(0,0,0,.3);
+    --shadow-card:0 1px 2px rgba(30,43,38,.04), 0 2px 8px rgba(30,43,38,.05);
+    --shadow-near:0 1px 2px rgba(30,43,38,.05), 0 4px 14px rgba(30,43,38,.09);
+    --shadow-float:0 3px 10px rgba(0,0,0,.2);
+    --shadow-nav:0 -4px 12px rgba(0,0,0,.06);
+    --shadow-sheet:0 -2px 12px rgba(0,0,0,.12);
+
+    /* Type scale. Five steps instead of twelve ad-hoc sizes. Body sits at 16px,
+       the mobile minimum in Apple HIG (17pt) and Material (16sp). */
+    --t-cap:13px;    /* captions, tags -- non-essential only */
+    --t-sm:15px;     /* secondary text */
+    --t-body:16px;   /* body minimum */
+    --t-title:17px;  /* card titles */
+    --t-lg:22px;     /* section heads */
+    --t-xl:28px;     /* page numbers, counts */
+
+    /* 4px spacing grid */
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+
+    /* WCAG 2.5.8 floor is 24px; 44px is the Apple HIG / WCAG 2.5.5 AAA target. */
+    --tap:44px;
+  }
+  /* Dark theme: true dark green-tinted neutrals, not an inversion. Fills keep
+     their weight; text accents brighten to hold WCAG AA (the contrast test in
+     tests-modules.js checks every pair in BOTH themes). Cards trade shadows
+     for a 1px edge, the standard dark-elevation cue. */
+  @media (prefers-color-scheme: dark){
+    :root{
+      --green:#2F5D4C; --accent:#9CC9B4; --green-lt:#24382F; --green-line:#3C574B;
+      --red:#C0392B; --red-accent:#F0A091; --red-lt:#3B211D;
+      --amber:#B45309; --amber-accent:#E5A163;
+      --bg:#131715; --card:#1C2320; --card-edge:#2A332E; --divider:#2A332E;
+      --ink:#E9EDEA; --muted:#AEBAB3; --faint:#93A099; --line:#323D37;
+      --placeholder:#66756D; --on-accent:#fff; --overlay:rgba(0,0,0,.55);
+      --shadow-card:0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.35);
+      --shadow-near:0 1px 2px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.4);
+      --shadow-float:0 3px 12px rgba(0,0,0,.55);
+      --shadow-nav:0 -4px 12px rgba(0,0,0,.45);
+      --shadow-sheet:0 -2px 16px rgba(0,0,0,.55);
+    }
+  }
