@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.7 · **Tests:** 315 passing
+**Updated:** August 22, 2026 · **Live version:** v9.8 · **Tests:** 343 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -68,6 +68,7 @@ a per-version progress log.
 | v9.5 | EXPERT-QA.md — presentation prep; UI plan complete |
 | v9.6 | Extraction accuracy benchmark (corpus + scorer + runner) |
 | v9.7 | AI throughout the app: capability registry, Ask, clash warnings, global off switch |
+| v9.8 | Real assistant: intent registry + router, app-wide, can act (with consent) |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -119,6 +120,34 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.8 — a real assistant, not a chatbot.** Research-first again; see
+**ASSISTANT-PLAN.md** for sources. The reframing insight: Apple App Intents
+and Google App Actions show that the platform teams do NOT put a chatbot in
+the app — they let the app DECLARE its capabilities as typed intents the
+assistant invokes. And NN/g's usability evidence says why chat-first fails:
+it "places the burden of discovering an app's capabilities upon the user",
+trading recognition for recall.
+
+So: `js/intents.js` is a capability registry (one intent per action, variants
+via parameters, exposing only entities the user already sees). `js/router.js`
+makes ONE model call that returns `{intent, params, confidence}` and stops —
+Anthropic's routing workflow, not an agent, because their own criteria rule an
+agent out here. Everything after that is tested code: validation, entity
+resolution, confirmation, execution.
+
+Every intent declares a consequence — `answer`, `navigate`, `draft`,
+`confirm` — and there is no class that writes silently. Model output is
+treated as hostile: unknown intents refused, wrong-typed values dropped rather
+than coerced, invented parameters discarded, low confidence refused, and a
+routing failure turned into capability disclosure. Ambiguity asks ("Storage
+unit or Store?") instead of picking. 28 new tests including a loop over the
+whole registry, so an intent added next year is covered the day it lands.
+
+Two real bugs the verification caught, neither visible to a unit test: the
+suggestion chips were dead (`runAsk` read the empty input box instead of the
+tapped chip), and the chore draft called `newChoreForm()`, which takes no
+arguments and RESETS the form — it would have thrown the draft away.
 
 **v9.7 — AI across the app, on a researched footing.** Built research-first
 from Microsoft's HAX guidelines, Google PAIR, Stanford HAI and IBM's
@@ -231,7 +260,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 315 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 343 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.

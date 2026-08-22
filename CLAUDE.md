@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.7 · **Tests:** 315 passing (`node tests.js`)
+**Current version:** v9.8 · **Tests:** 343 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -132,7 +132,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 315 tests: data safety, migrations, inline-handler
+- `node tests.js` — 343 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -148,6 +148,28 @@ having checked it.
   corpus in `eval/`. Costs API tokens, so it is NOT in `node tests.js`; run it
   before and after any prompt change and commit `eval/last-run.json`.
   `--dry` self-checks the scorer for free.
+
+THE ASSISTANT (v9.8): the model does ONE job — turn a sentence into
+`{intent, params, confidence}` and stop. It never acts, never loops, never
+calls a tool. This is Anthropic's ROUTING workflow, chosen because their own
+criteria rule out an agent here (high-frequency, low-complexity, verifiable
+output, compounding per-call error). Control flow lives in `performRoute()`,
+in code.
+
+- `js/intents.js` — the capability registry, modelled on Apple App Intents.
+  One intent per action, variants via parameters. Every intent declares a
+  CONSEQUENCE: `answer`/`navigate` may run immediately; `draft` goes to the
+  existing review screen; `confirm` needs an explicit yes. There is no class
+  that writes silently, and a test loops the whole registry to prove it.
+- `js/router.js` — treats model output as UNTRUSTED: string-aware brace
+  scanning, unknown intents refused, wrong-typed values DROPPED never coerced,
+  invented params discarded, low confidence refused. A routing failure becomes
+  capability disclosure, not a dead end.
+- Entity resolution (`resolveEntity`) is code, never the model. Two possible
+  matches ASK; they never get picked. Exact match beats fuzzy.
+- Suggestion chips come from the registry — NN/g: a chat box "places the
+  burden of discovering an app's capabilities upon the user".
+See ASSISTANT-PLAN.md for the sources.
 
 AI FEATURES: every AI capability is declared in `js/ai-actions.js` with a
 risk class — `read` (changes nothing), `propose` (draft, user reviews before

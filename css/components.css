@@ -193,3 +193,9 @@
   /* Leading icon on a card row -- the old 28px emoji slot. Accent-colored so
      the row reads as an action, not decoration. */
   .rowicon{width:26px;height:26px;stroke-width:1.5;color:var(--accent);margin-right:0}
+  /* Header action (Ask). Sits opposite the title; 44px like every other target. */
+  .headerbtn{margin-left:auto;background:none;border:none;color:var(--on-accent);
+    min-width:var(--tap);min-height:var(--tap);display:inline-flex;align-items:center;
+    justify-content:center;border-radius:10px;padding:0}
+  .headerbtn .ico{width:22px;height:22px;margin:0}
+  .headerbtn:active{background:var(--on-accent-press)}
