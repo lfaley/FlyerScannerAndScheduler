@@ -1,9 +1,16 @@
 # FlyerSnap — UI Modernization Plan
 
 **Written:** August 22, 2026 · **Baseline:** v8.7 (239 tests passing)
-**Status:** Phases 1–5 SHIPPED (v8.8–v9.3 — 268 tests). Phase 6 pending.
+**Status:** ✅ ALL SIX PHASES COMPLETE (v8.8–v9.5 — 276 tests).
 
 > Progress log
+> - **v9.5 / Phase 6 done:** `EXPERT-QA.md` — anticipated panel questions with
+>   fact-checked answers, figures pulled from the repo. States weaknesses as
+>   weaknesses with reasoning and mitigation. Plan complete.
+> - **v9.4 (extra, requested):** swipe left/right between tabs. Decision logic
+>   is a pure `swipeIntent()` in `js/gestures.js` with 8 unit tests, verified
+>   end-to-end with synthetic touch events. Edge zones are left to iOS's own
+>   back gesture, which a web app cannot disable (researched).
 > - **v9.3 / Phase 5 done:** all app icons generated from brand tokens by
 >   `tools/build-app-icons.py` — `any`, `maskable` (full-bleed, artwork inside
 >   the 80% safe circle) and an opaque 180px `apple-touch-icon`; manifest

@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.4 · **Tests:** 276 passing
+**Updated:** August 22, 2026 · **Live version:** v9.5 · **Tests:** 276 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -43,7 +43,9 @@ The repo moved from `FlyerAndScheduler\flyersnap-pwa` to `Repos\FlyerSnap`;
 older docs may still name the old path, which is dead.
 
 Docs in the repo: **CLAUDE.md** (architecture + rules, read first),
-**HANDOFF.md** (this file), **UI-MODERNIZATION-PLAN.md** (the design work),
+**HANDOFF.md** (this file), **EXPERT-QA.md** (presentation prep — also the
+clearest single summary of what this project is and where it is weak),
+**UI-MODERNIZATION-PLAN.md** (the design work),
 **GMAIL-WATCHER-SETUP.md**, **LOCAL-MODEL-PLAN.md**, **VISION-MODEL-SETUP.md**,
 **RETIRED-CODE-REFERENCE.md**, the RECIPE-APP-*.md integration notes, and
 **DEPLOY.md** (historical one-time Pages setup).
@@ -63,6 +65,7 @@ a per-version progress log.
 | v9.2 | Self-contained-boot guard; deleted the doc that recommended the v8.1 mistake |
 | v9.3 | Maskable icons, manifest, Lighthouse 99/100/100/100 |
 | v9.4 | Swipe left/right between the five tabs |
+| v9.5 | EXPERT-QA.md — presentation prep; UI plan complete |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -115,8 +118,14 @@ and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
 
-**Next up: Phase 6**, `EXPERT-QA.md`: the anticipated questions and honest
-answers for the presentation.
+**v9.5 — presentation prep.** `EXPERT-QA.md` written: anticipated panel
+questions with fact-checked answers, every figure taken from the repo rather
+than remembered. It deliberately states weaknesses as weaknesses (no
+extraction accuracy benchmark, no multi-device sync, browser-held API key,
+escaping-by-discipline, ~4,300 lines still in one scope, Chromium-verified
+but WebKit-shipped), each with the reasoning and the mitigation — a stated
+weakness cannot be knocked over. **All six UI-modernization phases are now
+complete.**
 
 ## Recent work in detail (v8.7 – v9.3)
 
@@ -212,4 +221,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
   CLAUDE.md. No urgency; the dangerous logic (`migrate`) is already isolated.
 - **Logan's iOS version** — unconfirmed. If it is 26.0, updating may remove
   the bottom-gap symptom the `nav::after` cover works around.
-- Phases 5 and 6 of the UI plan (see above).
+- **An extraction accuracy benchmark** — a labelled corpus of real flyers
+  scored per field, run against both providers on every prompt change. The
+  biggest genuine gap; prompt changes are currently judged by eye.
+- **Multi-device sync** — today it is one phone, one copy, manual backups.

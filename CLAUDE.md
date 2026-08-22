@@ -124,8 +124,11 @@ inside any zip (it self-updates).
 ## Current work: UI modernization (see UI-MODERNIZATION-PLAN.md)
 
 Six phases toward a design that holds up in front of design professionals.
-Status: Phases 1-5 DONE (v8.8 tokens/dark mode, v8.9 icons, v9.0 components,
-v9.1 accessibility, v9.3 PWA hygiene). Next: Phase 6 — EXPERT-QA.md.
+Status: ALL SIX PHASES COMPLETE (v8.8 tokens/dark mode, v8.9 icons, v9.0
+components, v9.1 accessibility, v9.3 PWA hygiene, v9.5 EXPERT-QA.md).
+v9.4 added swipe navigation. EXPERT-QA.md is also the best single summary of
+the project's design decisions and its known weaknesses — read it before
+proposing architectural changes.
 
 Icons are GENERATED: `python3 tools/build-app-icons.py` draws every app icon
 from the palette. Never hand-edit the PNGs. Maskable icons must stay
