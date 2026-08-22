@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.10 · **Tests:** 368 passing (`node tests.js`)
+**Current version:** v9.23 · **Tests:** 482 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -145,7 +145,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 449 tests: data safety, migrations, inline-handler
+- `node tests.js` — 482 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -192,6 +192,37 @@ having checked it.
 - `node tools/diagnostics.js <file>` — read a diagnostics export off Logan's
   phone (see AI CALL LOGGING below). `--errors`, `--all`, `--json`.
 
+SETTINGS IS A HUB (v9.22). `renderSettings` is a MENU of six rows, each
+opening a real sub-screen (`setPeople`, `setAI`, `setCapabilities`,
+`setReminders`, `setAppearance`, `setBackup`, `setTrouble`). It was one
+5,794px scroll — 6.8 phone screens, 11 sections — and is now 590px.
+  - Hub-and-spoke, not accordions: NN/g find accordions on mobile "conserve
+    space but can also cause disorientation and too much scrolling", and
+    drill-down is what iOS Settings already teaches every user.
+  - **Do not put fields back on the hub.** A test fails on an `<input>`,
+    `<textarea>` or `.sect` heading appearing there; that is how it slides
+    back into being a long scroll.
+  - Every row shows CURRENT STATE ("Appearance / Dark"), amber when it wants
+    attention. A test checks the hub reads live state rather than static text.
+  - A test lists 24 controls that must stay reachable somewhere in the family,
+    so a reorganisation cannot quietly drop a feature. The section helpers
+    (`diagnosticsSection`, `appearanceSection`, `aiCapabilitySection`) count as
+    reachable — the pages call them rather than inlining their markup.
+  - Adding a settings page means adding it to `tools/a11y-audit.js` SCREENS.
+
+ASK IS REACHABLE FROM EVERY SCREEN (v9.21). `openAsk()` records
+`{tab, sub, data}` in `askOrigin`; `closeAsk()` restores all three. Plain
+`back()` cannot be used to leave Ask — it drops to the top of a tab and would
+strand anyone who asked from a list or a half-filled form. `nav()` clears the
+origin, because choosing a tab is a deliberate departure.
+  - It stays a SCREEN, not an overlay, on evidence: NN/g's overlay-dismissal
+    study found users "lose their work" picking the wrong dismissal method and
+    recommends "avoiding overlays entirely when possible, preferring separate
+    pages". Ask holds a typed draft and sometimes a pending confirm-this-action.
+  - `renderEventEdit` builds its header by hand (Back must cancel the edit), so
+    its Ask button is added explicitly. Any other hand-built header needs the
+    same or it becomes the one screen without it.
+
 THE ASSISTANT CAN ACT (v9.14, `js/assistant-actions.js`). Gordon does not
 only answer. Ten intents in `js/intents.js` change something; five only read.
 The safety properties below are each enforced by a test, and none of them is
@@ -228,6 +259,12 @@ it a `confirmPendingAction` case with an undo, and add its example to the
 registry so the chips can find it. `js/ai-actions.js` is the user-facing
 disclosure list and must be updated too — it exists so the promise a user
 reads cannot drift from what the code does, and it HAS drifted before.
+
+WHEN A GUARD TEST READS PROSE IT IS NOT READING CODE. Twice in one session a
+test split on a token that also appeared in a nearby COMMENT -- `e.waitUntil(`
+in sw.js, `AbortError` in shareDiagnostics -- so deleting the real code still
+passed. **Strip comments before analysing a function's source in a test.**
+Mutation-test every new guard; that is what caught both.
 
 AI CALL LOGGING (v9.13, `js/ailog.js`): every AI call is recorded in
 `S.aiLog`, rolling 200 entries, both providers, success and failure. Field

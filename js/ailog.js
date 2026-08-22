@@ -65,6 +65,49 @@ export function classifyError(err, status){
   return 'unknown';
 }
 
+/**
+ * Turn an error class into something a parent can act on.
+ *
+ * v9.23. The app already classified every failure correctly and then told the
+ * user "Extraction failed: Load failed", which names the symptom in the
+ * browser's words and says nothing about what to do. Logan hit this with two
+ * pages that appeared to be read and then failed repeatedly, and could not
+ * tell from the alert whether it was his connection, his key, or the service.
+ *
+ * `detail` is deliberately NOT included: it is the provider's raw string and
+ * belongs in the diagnostics file, not in an alert.
+ */
+export function explainError(errorType, provider){
+  const who = provider === 'local' ? 'your local model' : 'Anthropic';
+  switch(errorType){
+    case 'network':
+      return `Could not reach ${who}.\n\nCheck your connection`
+        + (provider === 'local' ? ' and that the desktop is awake with Tailscale connected.' : ' and try again.');
+    case 'timeout':
+      return `${who === 'Anthropic' ? 'Anthropic' : 'Your local model'} took too long to answer.\n\n`
+        + (provider === 'local'
+            ? 'A big photo on a slow machine can exceed three minutes. Try one page at a time.'
+            : 'Try again, or try one page at a time.');
+    case 'rate_limit':
+      return `${who} is busy or you have hit a rate limit.\n\nWait a moment and try again — nothing was lost.`;
+    case 'auth':
+      return `${who} rejected the API key.\n\nCheck it in Settings → ${'Gordon'} and AI. A key can be revoked or expire.`;
+    case 'provider_error':
+      return `${who} had a problem on their side.\n\nThis is not something you did. Try again shortly.`;
+    case 'no_api_key':
+      return 'Add your Anthropic API key in Settings first.';
+    case 'unsupported_input':
+      return 'Your local model cannot read PDFs or fetched links — only photos and text.\n\n'
+        + 'Photograph the page instead, or turn on "Fall back to Anthropic" in Settings.';
+    case 'bad_response':
+      return `${who} replied with something this app could not read.\n\n`
+        + 'Often a clearer photo fixes it. If it keeps happening, export diagnostics from Settings.';
+    default:
+      return `Something went wrong talking to ${who}.\n\n`
+        + 'Settings → When something goes wrong has the details, and can export them.';
+  }
+}
+
 /** Build one log entry. Everything optional; nothing here can throw. */
 export function makeEntry(e){
   const v = e || {};

@@ -944,10 +944,32 @@ module.exports = async function runModuleTests(test){
     // copies must have them stripped, or the script is a module by accident.
     const bad = script.split('\n')
       .map((l, i) => [i + 1, l])
-      .filter(([, l]) => /^\s*(?:import\s|export\s|export\{|import\()/.test(l))
+      .filter(([, l]) => /^\s*(?:import\s|export\s|export\{)/.test(l))
       .map(([n, l]) => n + ': ' + l.trim().slice(0, 60));
     assert.deepStrictEqual(bad, [],
       'import/export in the shipped script turns it into a module: ' + bad.join(' | '));
+  });
+
+  test('no dynamic import() has crept in anywhere on a line', () => {
+    // The old guard only matched `import(` at the START of a line, so all
+    // three of these walked straight past it:
+    //     const m = await import('https://cdn/firebase.js');
+    //     p.then(() => import('./big.js'));
+    //     if(x) import('./y.js');
+    //
+    // A dynamic import is not automatically wrong -- unlike a static one it
+    // fetches only when called, so a LAZY, post-boot dependency (a sign-in SDK,
+    // say) is a legitimate design. What is wrong is one arriving by accident.
+    // There are zero today, so zero is the assertion, and adding one has to be
+    // a deliberate act that updates this test -- the same discipline the
+    // consequence classes and risk classes already use.
+    const bad = script.split('\n')
+      .map((l, i) => [i + 1, l])
+      .filter(([, l]) => !l.trim().startsWith('//') && /\bimport\s*\(/.test(l))
+      .map(([n, l]) => n + ': ' + l.trim().slice(0, 70));
+    assert.deepStrictEqual(bad, [],
+      'a dynamic import() reached the shipped file. If it is deliberate and lazy, '
+      + 'say so here and explain why it cannot run at boot: ' + bad.join(' | '));
   });
 
   // -------------------------------------------------------------------------
@@ -1790,6 +1812,76 @@ module.exports = async function runModuleTests(test){
     const fn = script.split('function renderSetCapabilities(')[1].split('\n}')[0];
     assert.ok(/aiCapabilitySection\(\)/.test(fn),
       'the capability page no longer renders the real list');
+  });
+
+  console.log('\nFailures explain themselves, and can be sent (v9.23)');
+
+  // Imported locally: the shared `ailog` binding is declared further down the
+  // file, in the v9.13 block, and is not initialised yet at this point.
+  const ailog23 = await import('./js/ailog.js');
+
+  test('every error class has an actionable message, not the raw one', () => {
+    // The app already classified failures correctly and then told the user
+    // "Extraction failed: Load failed" -- the browser's words for the symptom,
+    // and no help at all. Logan could not tell whether it was his connection,
+    // his key, or the service.
+    const CLASSES = ['auth', 'rate_limit', 'provider_error', 'timeout', 'network',
+      'no_api_key', 'bad_response', 'unsupported_input', 'request_rejected', 'unknown'];
+    CLASSES.forEach(c => {
+      const msg = ailog23.explainError(c, 'anthropic');
+      assert.ok(msg && msg.length > 25, c + ' has no usable message');
+      // Every one must say what to DO, not only what happened.
+      assert.ok(/try again|check|wait|add your|photograph|export|settings/i.test(msg),
+        c + ' does not tell the user what to do: ' + msg);
+    });
+  });
+
+  test('the message names the provider actually in use', () => {
+    assert.ok(/local model/i.test(ailog23.explainError('network', 'local')));
+    assert.ok(/Anthropic/.test(ailog23.explainError('network', 'anthropic')));
+    // The local timeout is a different situation and needs different advice.
+    assert.notStrictEqual(ailog23.explainError('timeout', 'local'),
+      ailog23.explainError('timeout', 'anthropic'));
+  });
+
+  test('the raw provider string never reaches the alert', () => {
+    // It belongs in the diagnostics file, not in a dialog. It can be long, it
+    // can be JSON, and it is the one place a key could be echoed back.
+    const msg = ailog23.explainError(ailog23.classifyError(
+      new Error('API error 401: {"error":"invalid x-api-key sk-ant-api03-LEAK"}'), 401), 'anthropic');
+    assert.ok(!/sk-ant|LEAK|\{/.test(msg), msg);
+  });
+
+  test('the extraction alerts use the explanation, not err.message', () => {
+    assert.ok(!/Extraction failed: ' ?\+ ?err\.message/.test(script),
+      'a raw error message is still being shown to the user');
+    assert.ok((script.match(/explainError\(classifyError\(err\)/g) || []).length >= 2,
+      'the classified explanation is not wired into the failure paths');
+  });
+
+  test('diagnostics can be sent in one tap, with a fallback that always works', () => {
+    // A download alone means finding the file in Files and attaching it by
+    // hand, which on an installed PWA is several steps and easy to abandon.
+    // Comments stripped first. The previous version of this test matched the
+    // word "AbortError" inside the comment that EXPLAINS the AbortError case,
+    // so deleting the actual handling still passed. Second time this session
+    // that a guard read prose instead of code.
+    const fn = script.split('async function shareDiagnostics(')[1]
+      .split('\nfunction exportDiagnostics')[0]
+      .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    assert.ok(/navigator\.canShare/.test(fn), 'share is not feature-detected');
+    assert.ok(/navigator\.share\(/.test(fn), 'nothing is ever shared');
+    assert.ok(/exportDiagnostics\(\)/.test(fn), 'no fallback when share is unavailable');
+    assert.ok(/AbortError/.test(fn),
+      'cancelling the share would fall through to a download the user did not ask for');
+    assert.ok(/onclick="shareDiagnostics\(\)"/.test(script), 'not reachable from Settings');
+  });
+
+  test('the shared file is built by buildDiagnostics, never from raw state', () => {
+    const fn = script.split('function buildDiagnosticsFile(')[1].split('\n}')[0];
+    assert.ok(/buildDiagnostics\(S,/.test(fn));
+    assert.ok(!/JSON\.stringify\(S\)/.test(fn),
+      'the shared file must never be the whole state');
   });
 
   console.log('\nEvery screen is audited (v9.15)');

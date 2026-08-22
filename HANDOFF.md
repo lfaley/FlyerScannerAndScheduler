@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.22 · **Tests:** 475 passing
+**Updated:** August 22, 2026 · **Live version:** v9.23 · **Tests:** 482 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -83,6 +83,7 @@ a per-version progress log.
 | v9.20 | Service worker serves cache-first: launches paint instantly instead of waiting on 124KB |
 | v9.21 | Ask reachable from all 28 screens, returning you exactly where you were |
 | v9.22 | Settings became a six-page hub: 5,794px of scroll down to a 590px menu |
+| v9.23 | Failures say what to do about them; diagnostics send in one tap |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a
@@ -134,6 +135,85 @@ not discard a half-filled form), on multi-touch (pinch-zoom must keep working),
 and when the gesture starts on an input or on the horizontally-scrolling chip
 bar. No wrap-around at the ends. The tab bar still does everything swiping
 does, which WCAG 2.5.1 requires.
+
+**v9.23 — a failure that says what to do, and a way to send it.**
+
+Logan, mid-session: *"i need a way to get the errors that occur on my phone to
+be sent in… i am trying to have two pages uploaded… multiple times i got alerts
+that anthropic couldnt be reached."*
+
+His wording is not a string in the app, so the cause was not guessed at. What
+IS true is that v9.13 is already live on his phone, so the AI log has recorded
+every one of those calls with its `errorType`, HTTP status and a redacted
+detail. **The answer to the incident is the export, not a theory.** Two things
+were done to make that loop work properly.
+
+**1. The alert was uninformative by construction.** The app classified every
+failure correctly and then said `Extraction failed: Load failed` — the
+browser's words for a symptom, with nothing to act on. `explainError()` in
+`js/ailog.js` turns each of the ten error classes into a sentence that names
+what to do, and the provider actually in use:
+
+| what happened | what it used to say | what it says now |
+|---|---|---|
+| network | `Extraction failed: Load failed` | "Could not reach Anthropic. Check your connection and try again." |
+| rate_limit | `Extraction failed: API error 429: …` | "Anthropic is busy or you have hit a rate limit. Wait a moment and try again — nothing was lost." |
+| auth | `Extraction failed: API error 401: …` | "Anthropic rejected the API key. Check it in Settings → Gordon and AI." |
+| timeout (local) | `Extraction failed: timed out…` | "A big photo on a slow machine can exceed three minutes. Try one page at a time." |
+
+The raw provider string deliberately does NOT reach the alert — it can be long,
+it can be JSON, and it is the one place a key could be echoed back. It stays in
+the diagnostics file. A test asserts every class produces a message that tells
+the user what to DO, and that a 401 body carrying `sk-ant-…` cannot leak into a
+dialog.
+
+**2. Diagnostics now send in one tap.** A download alone means finding the file
+in Files and attaching it by hand, which on an installed PWA is several steps
+and easy to abandon. `shareDiagnostics()` uses the Web Share API to hand the
+file straight to Mail, Messages or AirDrop. Feature-detected, with the download
+kept as "Save it to Files instead" — and a CANCELLED share is not an error, so
+it must not fall through to a download the user did not ask for.
+
+Verified in a browser with `navigator.share` stubbed: the shared file is
+899 bytes, contains no events, no people and no key (seeded with "Zylphinar"
+and "Wexlorb", both absent), reports `hasApiKey: true` without the key itself,
+cancelling shares nothing, and removing share support falls back to download.
+
+**A guard bug worth recording, because it is the second this session.** The
+share test checked `/AbortError/` and matched the word inside the COMMENT
+explaining the AbortError case — so deleting the actual handling still passed.
+Comments are stripped before the check now, exactly as in the `sw.js` guard
+that had the same flaw. **A guard that reads prose is not reading code**, and
+this is now a pattern to watch for in this repo.
+
+**Consolidation pass (still v9.22).** Six versions were stacked unpushed, so
+rather than add a seventh feature: the new Settings pages were checked visually
+and two printed their own title twice — "When something goes wrong" in the
+header bar and again as the first line of the body, and "Gordon" under a page
+already called "Gordon and AI". `diagnosticsSection(false)` now suppresses its
+heading when the page already carries it.
+
+**The boot guard had a hole, and it is closed.** The rule that keeps
+`index.html` self-contained matched `import(` only at the START of a line, so
+all three of these walked past it:
+
+```
+const m = await import('https://cdn/firebase.js');
+p.then(() => import('./big.js'));
+if(x) import('./y.js');
+```
+
+A dynamic import is not automatically wrong — unlike a static one it fetches
+only when called, so a lazy post-boot dependency is a legitimate design (see
+SECURITY-PLAN.md §3.5). What is wrong is one arriving by accident. There are
+zero today, so zero is the assertion, and adding one has to be a deliberate act
+that updates the test. Mutation-tested — and the first mutation I tried was
+invalid JS (top-level `await` in a classic script), which killed the runner
+before any test ran; a mutation that does not compile proves nothing.
+
+`CLAUDE.md` was two versions stale in its header (v9.10, 368 tests) and is now
+current, with the Settings-hub and Ask-everywhere rules written down where a
+fresh agent will read them.
 
 **v9.22 — Settings stopped being a wall.**
 
@@ -896,7 +976,7 @@ name lived on the `<svg>` inside. Names now sit on the buttons themselves.
 
 ## Verification before any deploy
 
-- `node tests.js` — 475 tests. Data safety, migrations, inline-handler
+- `node tests.js` — 482 tests. Data safety, migrations, inline-handler
   resolution, module/CSS drift, icon integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes, and the
   self-contained-boot guard.

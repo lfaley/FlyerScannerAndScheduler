@@ -2600,6 +2600,36 @@ function isCarriedOver(turns, todayISO){
  * Pure: no DOM, no app state, no clock of its own.
  */
 
+/**
+ * AI call logging.
+ *
+ * Modelled on the OpenTelemetry GenAI semantic conventions, which are the
+ * vendor-neutral standard for what to record around a model call. Field names
+ * mirror the `gen_ai.*` namespace so the log means the same thing an engineer
+ * would expect it to mean:
+ *
+ *   op            gen_ai.operation.name   what was being done
+ *   provider      gen_ai.provider.name    anthropic | local
+ *   reqModel      gen_ai.request.model    what we asked for
+ *   resModel      gen_ai.response.model   what actually answered (can differ)
+ *   inTokens/out  gen_ai.usage.*_tokens
+ *   finish        gen_ai.response.finish_reasons
+ *   ms            gen_ai.client.operation.duration
+ *   errorType     error.type
+ *
+ * WHAT IS DELIBERATELY NOT LOGGED
+ *
+ * The conventions exclude prompt and completion bodies from standard
+ * attributes because they "routinely contain names, emails, account numbers,
+ * or proprietary business logic". That warning lands harder here than in most
+ * apps: the prompts ARE children's names, schools, addresses and schedules.
+ * So no prompt text, no answer text, and never the API key. `redact()` below
+ * is the last line of defence for error strings, which are the one place a
+ * provider can hand back something sensitive without being asked.
+ *
+ * Pure: no DOM, no app state, no clock of its own.
+ */
+
 const AI_LOG_MAX = 200;          // rolling window; oldest dropped first
 
 // Anything shaped like a key must never reach storage, a file, or a screen.
@@ -2635,6 +2665,49 @@ function classifyError(err, status){
   if(/unsupported_block/.test(msg))                                                           return 'unsupported_input';
   if(status && status >= 400)                                                                 return 'request_rejected';
   return 'unknown';
+}
+
+/**
+ * Turn an error class into something a parent can act on.
+ *
+ * v9.23. The app already classified every failure correctly and then told the
+ * user "Extraction failed: Load failed", which names the symptom in the
+ * browser's words and says nothing about what to do. Logan hit this with two
+ * pages that appeared to be read and then failed repeatedly, and could not
+ * tell from the alert whether it was his connection, his key, or the service.
+ *
+ * `detail` is deliberately NOT included: it is the provider's raw string and
+ * belongs in the diagnostics file, not in an alert.
+ */
+function explainError(errorType, provider){
+  const who = provider === 'local' ? 'your local model' : 'Anthropic';
+  switch(errorType){
+    case 'network':
+      return `Could not reach ${who}.\n\nCheck your connection`
+        + (provider === 'local' ? ' and that the desktop is awake with Tailscale connected.' : ' and try again.');
+    case 'timeout':
+      return `${who === 'Anthropic' ? 'Anthropic' : 'Your local model'} took too long to answer.\n\n`
+        + (provider === 'local'
+            ? 'A big photo on a slow machine can exceed three minutes. Try one page at a time.'
+            : 'Try again, or try one page at a time.');
+    case 'rate_limit':
+      return `${who} is busy or you have hit a rate limit.\n\nWait a moment and try again — nothing was lost.`;
+    case 'auth':
+      return `${who} rejected the API key.\n\nCheck it in Settings → ${'Gordon'} and AI. A key can be revoked or expire.`;
+    case 'provider_error':
+      return `${who} had a problem on their side.\n\nThis is not something you did. Try again shortly.`;
+    case 'no_api_key':
+      return 'Add your Anthropic API key in Settings first.';
+    case 'unsupported_input':
+      return 'Your local model cannot read PDFs or fetched links — only photos and text.\n\n'
+        + 'Photograph the page instead, or turn on "Fall back to Anthropic" in Settings.';
+    case 'bad_response':
+      return `${who} replied with something this app could not read.\n\n`
+        + 'Often a clearer photo fixes it. If it keeps happening, export diagnostics from Settings.';
+    default:
+      return `Something went wrong talking to ${who}.\n\n`
+        + 'Settings → When something goes wrong has the details, and can export them.';
+  }
 }
 
 /** Build one log entry. Everything optional; nothing here can throw. */
@@ -3506,8 +3579,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.22';
-const APP_TAGLINE = 'Settings, sorted';
+const APP_VERSION = 'v9.23';
+const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
 
@@ -6124,7 +6197,9 @@ async function handleCapture(fileList, isPdf){
     }
     sub('review');
   }catch(err){
-    alert(err.message==='NO_API_KEY' ? 'Add your Anthropic API key in Settings first.' : 'Extraction failed: '+err.message);
+    // The classification already exists; using it is the difference between
+    // "Extraction failed: Load failed" and "Check your connection and try again".
+    alert(explainError(classifyError(err), aiProvider()));
     append ? sub('review') : back();
   }
 }
@@ -6206,7 +6281,7 @@ async function handleLinkCapture(url){
     else if(/40\d|fetch|url|access|forbidden|unauth/i.test(err.message)){
       alert('Could not fetch that link — it likely needs a login. Open it in Safari, save the PDF, and use Import instead.');
     } else {
-      alert('Extraction failed: ' + err.message);
+      alert(explainError(classifyError(err), aiProvider()));
     }
     append ? sub('review') : back();
   }
@@ -6960,11 +7035,14 @@ function aiHealthLine(){
   return parts.join(' \u00b7 ') + '.';
 }
 
-function diagnosticsSection(){
+// `withHeading` is false when the page it sits on is ALREADY titled the same
+// thing. v9.22 gave this section its own page, so the heading printed twice --
+// once in the header bar and again as the first line of the body.
+function diagnosticsSection(withHeading){
   const problems = activeProblems().length;
   const failed = summarize(S.aiLog || []).failed;
   return `
-    <div class="sect">When something goes wrong</div>
+    ${withHeading === false ? '' : '<div class="sect">When something goes wrong</div>'}
     <div class="help">${aiHealthLine()} Every AI call is recorded automatically —
       what was attempted, which model answered, how long it took and what failed.
       Never the wording of a request or its answer.</div>
@@ -6972,12 +7050,13 @@ function diagnosticsSection(){
       ${ico('alert')}${problems} problem${problems===1?'':'s'} to look at</button>`
       : `<button class="btn alt" style="margin-bottom:var(--s2)" onclick="openProblems()">
       ${ico('clipboard')}Problem log</button>`}
-    <button class="btn alt" ${failed ? 'style="border-color:var(--amber-accent);color:var(--amber-accent)"' : ''} onclick="exportDiagnostics()">
-      ${ico('download')}Export diagnostics for desktop</button>
-    <div class="help">A small file holding the AI call log and anything reported as
-      a problem — no events, notes or API key in it, so it is safe to email to
-      yourself. On the desktop, read it with:
-      <code>node tools/diagnostics.js &lt;file&gt;</code></div>`;
+    <button class="btn${failed ? '' : ' alt'}" onclick="shareDiagnostics()">
+      ${ico('share')}Send diagnostics</button>
+    <div class="help">Hands the file straight to Mail, Messages or AirDrop, so an
+      error on this phone can be looked at somewhere else. It holds the AI call
+      log and anything reported as a problem — <b>no events, notes or API key</b>.
+      On the desktop, read it with <code>node tools/diagnostics.js &lt;file&gt;</code></div>
+    <button class="btn alt" onclick="exportDiagnostics()">${ico('download')}Save it to Files instead</button>`;
 }
 
 function mealPlanDiagnostic(){
@@ -7253,8 +7332,8 @@ function renderSetPeople(m){
 
 function renderSetAI(m){
   setHeader(aiName() + ' and AI', true);
-  m.innerHTML = `<div class="sect">Gordon</div>
-    <div class="help">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
+  // No "Gordon" heading here: the header bar already says "Gordon and AI".
+  m.innerHTML = `<div class="help" style="margin-top:0">Gordon is your assistant — he reads your flyers and emails and writes up what he finds. Below is the model doing the actual reading for him. Anthropic works anywhere; the local model is free but needs your desktop awake and Tailscale connected.</div>
     <div style="margin-bottom:10px">
       <span class="chip ${aiProvider()==='anthropic'?'on':''}" onclick="setAiProvider('anthropic')">${ico('cloud')}Anthropic</span>
       <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">${ico('home')}Local model</span>
@@ -7383,7 +7462,7 @@ function renderSetBackup(m){
 
 function renderSetTrouble(m){
   setHeader('When something goes wrong', true);
-  m.innerHTML = diagnosticsSection() + `
+  m.innerHTML = diagnosticsSection(false) + `
 
     <div class="sect">How well does ${aiName()} understand you?</div>
     <div class="help">Runs ${BENCH.cases.length} example sentences through whatever model is
@@ -7926,6 +8005,56 @@ function saveKey(){
 // Diagnostics leave the phone as their own file. Deliberately NOT the full
 // backup: no events, chores, lists, notes or API key, so it is safe to email
 // or AirDrop to a desktop.
+// Build once, used by both the share and the download paths.
+function buildDiagnosticsFile(){
+  const diag = buildDiagnostics(S, {
+    now: new Date().toISOString(),
+    appVersion: 'FlyerSnap ' + APP_VERSION,
+    provider: aiProvider(), model: aiModelName(),
+    includeLocalUrl: true,
+    userAgent: navigator.userAgent,
+  });
+  const name = 'flyersnap-diagnostics-' + todayISO() + '.json';
+  const text = JSON.stringify(diag, null, 2);
+  return { diag, name, text };
+}
+
+/**
+ * Send the diagnostics somewhere, in one tap.
+ *
+ * v9.23, at Logan's request: he needs errors off the phone and into an email
+ * so they can be looked at. A download alone means finding the file in Files
+ * and attaching it by hand -- on an installed PWA that is several steps and
+ * easy to abandon. The Web Share API hands it straight to Mail, Messages or
+ * AirDrop.
+ *
+ * Feature-detected, and the download stays as the fallback: share with files
+ * is not available everywhere, and a failed share must not be a dead end.
+ * A cancelled share is not an error -- the user simply changed their mind.
+ */
+async function shareDiagnostics(){
+  let f;
+  try{
+    const { name, text } = buildDiagnosticsFile();
+    f = new File([text], name, { type:'application/json' });
+  }catch(e){
+    alert('Could not build the diagnostics file: ' + (e && e.message));
+    return;
+  }
+  if(navigator.canShare && navigator.canShare({ files:[f] })){
+    try{
+      await navigator.share({ files:[f], title:'FlyerSnap diagnostics',
+        text:'FlyerSnap diagnostics — AI call log and reported problems. No events, notes or API key.' });
+      return;
+    }catch(err){
+      // AbortError is the user tapping Cancel. Anything else falls through to
+      // the download, which always works.
+      if(err && err.name === 'AbortError') return;
+    }
+  }
+  exportDiagnostics();
+}
+
 function exportDiagnostics(){
   try{
     const diag = buildDiagnostics(S, {
