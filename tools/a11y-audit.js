@@ -131,6 +131,9 @@ const SCREENS = [
   // is audited -- that is the whole point of keeping the SCREENS table honest.
   { key:'setPeople',       setup:`sub('setPeople')` },
   { key:'setAI',           setup:`S.settings.aiProvider='local'; sub('setAI')` },
+  // v9.29: with a key SAVED, so the Remove-key button exists to be audited.
+  // The default fixture has none, which would skip the control entirely.
+  { key:'setAI-haskey',    setup:`S.settings.aiProvider='anthropic'; S.settings.apiKey='sk-ant-x'; sub('setAI')` },
   { key:'setCapabilities', setup:`sub('setCapabilities')` },
   { key:'setReminders',    setup:`sub('setReminders')` },
   { key:'setAppearance',   setup:`sub('setAppearance')` },
@@ -138,6 +141,9 @@ const SCREENS = [
   { key:'setTrouble',      setup:`S.settings.aiProvider='local'; sub('setTrouble')` },
 
   { key:'capture',    setup:`sub('capture')` },
+  // v9.29: the keyless state, which is the one a brand-new user meets and the
+  // only one that renders the "needs an AI key" nudge.
+  { key:'capture-nokey', setup:`S.settings.apiKey=''; S.settings.aiProvider='anthropic'; sub('capture')` },
   { key:'review',     setup:`
       pendingEvents = [{ title:'Winter Recital', date:'2026-12-01', time:'18:00', endTime:null,
         kind:'event', location:'School hall', notes:'Bring a plate', selected:true, dup:false,

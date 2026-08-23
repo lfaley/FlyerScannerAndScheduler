@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 23, 2026 · **Live version:** v9.28 · **Tests:** 549 passing
+**Updated:** August 23, 2026 · **Live version:** v9.30 · **Tests:** 561 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -15,6 +15,10 @@ step. Scans flyers/PDFs/emails → AI extracts events → calendar reminders.
 Also: chores/stars, lists, recipe scanning, meal plan (read-only from a
 separate recipe app), Gmail watcher, event sharing, and a local-AI-model
 option alongside Anthropic.
+
+**As of 23 Aug 2026 the intended primary AI is Gordon — Logan's own model on his
+desktop — with Anthropic as the automatic fallback.** See the v9.30 note below
+for what that does and does not change.
 
 ## Deploying — Logan pushes, agents never do
 
@@ -130,6 +134,8 @@ a per-version progress log.
 | v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — `js/errorReport.js` + ERROR-REPORTING-PLAN.md |
 | v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
 | v9.24 | Diagnostics share as text so Gmail appears; the fallback toast stopped blaming Anthropic |
+| v9.30 | Gordon (Logan's own model) is the primary AI; Anthropic is the automatic fallback |
+| v9.29 | An API key can be removed; a keyless user is told why scanning fails; error reporting has an off switch |
 | v9.28 | An event can be typed in by hand — the app's primary object no longer requires AI to exist; toast stopped covering the FAB |
 | v9.27 | Automatic error reports are diagnostics-only — the email subject stops leaving the device (ruling 2026-08-23) |
 | v9.26 | The app measures the local context window and plans against it; thinking actually turned off; router scorer stopped failing names the app resolves; refusals say why; a wrong-day event is no longer called a hallucination; self-test collapses |
@@ -158,6 +164,64 @@ declare; the file now goes as `.txt` / `text/plain`, byte-identical inside
 added beside **Save to Files** so a share sheet that will not list your mail
 app is never the only way out. All three routes now build through one
 `buildDiagnosticsFile()`, so they cannot drift apart.
+
+**v9.30 — GORDON IS THE PRIMARY AI; ANTHROPIC IS THE FALLBACK.** Logan's
+decision, 23 Aug. The self-hosted Ollama model on his desktop is the intended
+provider; Anthropic covers the gap when that desktop is asleep, automatically.
+
+**What it does NOT mean, both easy to get wrong:**
+
+- **"Gordon" is not a provider.** `aiName()` returns `ASSISTANT_NAME` — the
+  assistant's display name whichever model answers, unchanged since v9.7.
+  `aiProvider()` still has exactly two answers, `'local'` and `'anthropic'`, and
+  a test now fails if `'gordon'` ever appears as a provider value. Naming the
+  real model in Settings and in each event's `aiSource` is the honesty this app
+  is built on; a friendly name that hides which model read your child's
+  permission slip would undo it.
+- **Anthropic is not deprecated.** Removing it was offered and explicitly
+  rejected: it is why the app works at 11pm with the desktop off. A test pins
+  `aiFallback:true`, the Settings switch, and the key handlers — turning the
+  default off fails the suite.
+
+**Shipped with the decision:** the first-run notice on Add Paperwork no longer
+says "needs an AI key" (Anthropic-framed, from v9.29 hours earlier) — it names
+Gordon, offers both setup paths, and still points at typing the event in. The
+Settings key section reads "Anthropic API key (fallback)" while the local
+provider is selected.
+
+> **NOT done, deliberately: the default was not flipped.**
+> `S.settings.aiProvider` still defaults to `'anthropic'` in `blank()`, because
+> `localBaseUrl` defaults to empty — a default of `'local'` would give a fresh
+> install nothing but "No local model URL saved." That is a worse first run,
+> not a one-line edit. Fixing it properly means a first-run chooser, or
+> defaulting to local only once a base URL exists. **Open question for Logan.**
+
+> **And it changes Phase 1 of FLYERSNAP-FIXES-PLAN.md.** The capped Anthropic
+> workspace key is still worth creating, but it now protects the *fallback*
+> key — which is used less, so the cap can be lower still.
+
+**v9.29 — three controls that existed only in code.** Phases 2 and 3 of
+FLYERSNAP-FIXES-PLAN.md. A stored API key could be replaced but never **removed**
+(so "I am selling this phone" had no answer); a keyless user got an alert after
+tapping rather than an explanation before; and `errorReportsOff` was honoured in
+two places and settable only by hand-editing localStorage.
+
+All three are in Settings spokes, so the "hub is a menu" test stays green by
+construction — and all three are now in `mustSurvive`, which is the amendment
+the plan review added. That list is an allowlist: adding a control never breaks
+it, which is exactly why a control left out of it has no protection at all.
+Now CLAUDE.md rule 23.
+
+Removing a key deliberately does **not** use the undo pattern. Undo works by
+keeping the deleted thing around long enough to restore it, and an undoable key
+deletion is a key still on the device. Verified in a browser: after Remove, the
+value is gone from `S.settings` and from localStorage.
+
+> **And the guard for that got it wrong first.** It scanned `removeKey` for
+> `/undo|softDelete/i` and matched the word "undone" inside the function's own
+> confirm message — failing on correct code. Fourth time on this project that a
+> guard has read prose instead of program. It now strips comments and string
+> literals before scanning, and looks for a `softDelete(` call.
 
 **v9.28 — THE APP'S PRIMARY OBJECT COULD ONLY BE CREATED BY THE AI.**
 Reviewing `FLYERSNAP-FIXES-PLAN.md` meant checking its claims rather than

@@ -1840,6 +1840,11 @@ module.exports = async function runModuleTests(test){
       "toggleAlert('deadline'", "toggleAlert('event'", 'toggleExtraReminders()',
       'exportDiagnostics()', 'openProblems()',                // troubleshooting
       'setAiEnabled(',                                        // the global off switch
+      // v9.29. Registered the moment they shipped, not later: this list is an
+      // ALLOWLIST, so a new control that is not in it gets NO protection from
+      // the one test that exists to stop controls vanishing in a reorganisation.
+      'removeKey()',                                          // FS-UI-02
+      'setErrorReports(',                                     // FS-UI-03
     ];
     const missing = mustSurvive.filter(c => !settingsFamily.includes(c));
     assert.deepStrictEqual(missing, [], 'lost in the reorganisation: ' + missing.join(', '));
@@ -2601,6 +2606,142 @@ module.exports = async function runModuleTests(test){
       { ok:true, intent:'complete_chore', params:{ chore:'the bins' } }, meta);
     assert.deepStrictEqual(loose.wrongValue, [], 'an entity name may carry filler');
     assert.strictEqual(loose.pass, true);
+  });
+
+  console.log('\nKey management, onboarding and the reporting opt-out (v9.29)');
+
+  test('a stored API key can actually be removed', () => {
+    // FS-UI-02. Before v9.29 a key could be REPLACED but never deleted, so
+    // "I am selling this phone" or "that key leaked" had no answer in the app.
+    assert.ok(/function removeKey\(\)/.test(script), 'no way to remove a key');
+    assert.ok(/onclick="removeKey\(\)"/.test(script), 'nothing reaches it');
+    const fn = script.split('function removeKey(')[1].split('\nfunction ')[0];
+    // The security action is emptying the PERSISTED blob. Clearing the input
+    // alone would leave the key sitting in localStorage.
+    assert.ok(/S\.settings\.apiKey\s*=\s*''/.test(fn), 'the stored value is not cleared');
+    assert.ok(/save\(\)/.test(fn), 'the cleared value is never persisted');
+    assert.ok(/confirm\(/.test(fn), 'an irreversible delete happens without asking');
+  });
+
+  test('removing a key is deliberately NOT undoable', () => {
+    // The app uses undo toasts for deletes. Undo works by keeping the deleted
+    // thing around long enough to restore it -- and an undoable key deletion is
+    // a key that is still on the device, which is the opposite of the feature.
+    // Strip comments AND string literals first. The first version of this
+    // guard matched the word "undone" inside removeKey's own confirm message
+    // and failed on correct code -- reading prose instead of reading the
+    // program, for the fourth time on this project (CLAUDE.md rule 21).
+    const fn = script.split('function removeKey(')[1].split('\nfunction ')[0]
+      .replace(/\/\/[^\n]*/g, '')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+    assert.ok(!/softDelete\s*\(/.test(fn),
+      'the key is routed through the undo mechanism, so it is still on the device');
+    assert.ok(/S\.settings\.apiKey\s*=\s*''/.test(fn),
+      'nothing clears the stored value');
+  });
+
+  test('the remove control only exists when there is something to remove', () => {
+    const ai = script.split('function renderSetAI(')[1].split('\nfunction ')[0];
+    assert.ok(/S\.settings\.apiKey \? `[\s\S]*?removeKey\(\)/.test(ai),
+      'Remove key is offered even when no key is saved');
+  });
+
+  test('a keyless user is told why scanning will fail, before they tap', () => {
+    // FS-UI-05. Every source row on Add Paperwork alerts "Add your Anthropic
+    // API key in Settings first" when tapped with no key. The explanation has
+    // to arrive BEFORE the dead end, not as the alert after it.
+    const cap = script.split('function renderCapture(')[1].split('\n}')[0];
+    // Wording is deliberately provider-neutral since 23 Aug: Gordon (Logan's own
+    // model) is the intended primary and Anthropic is the fallback, so a notice
+    // that named only Anthropic would point a new user at the wrong setup.
+    assert.ok(/needs \$\{esc\(aiName\(\)\)\} set up first/.test(cap),
+      'no first-run explanation');
+    assert.ok(/your own model/.test(cap) && /Anthropic key/.test(cap),
+      'the notice offers only one of the two providers');
+    assert.ok(/!S\.settings\.apiKey/.test(cap), 'the notice is not gated on a missing key');
+    assert.ok(cap.indexOf('set up first') < cap.indexOf("document.getElementById('fCam')"),
+      'the notice renders below the options it is warning about');
+  });
+
+  test('Gordon is a display name, never a provider', () => {
+    // The 23 Aug decision is "Gordon is primary, Anthropic is fallback", and
+    // the easiest way to get it wrong is to start treating 'gordon' as a
+    // provider value. aiProvider() has exactly two answers; aiName() is what
+    // the assistant is CALLED, whichever model actually answered.
+    assert.ok(/function aiName\(\)\{ return ASSISTANT_NAME; \}/.test(script),
+      'aiName has stopped being a plain display name');
+    const fn = script.split('function aiProvider(')[1].split('\n')[0];
+    assert.ok(/'local' : 'anthropic'/.test(fn),
+      'aiProvider now returns something other than local/anthropic: ' + fn);
+    assert.ok(!/aiProvider\(\)\s*===\s*'gordon'|aiProvider:\s*'gordon'/i.test(script),
+      "'gordon' is being used as a provider value");
+  });
+
+  test('the Anthropic fallback is still reachable and still on by default', () => {
+    // Removing Anthropic was explicitly rejected on 23 Aug: it is the reason
+    // the app works at 11pm with the desktop off. This guards against a later
+    // "simplification" quietly deleting it.
+    assert.ok(/aiFallback:\s*true/.test(script), 'the fallback no longer defaults on');
+    assert.ok(/id="aiFallback"/.test(script), 'the fallback switch is gone from Settings');
+    assert.ok(/function saveKey\(\)/.test(script) && /function removeKey\(\)/.test(script),
+      'key handling was removed, which takes the fallback with it');
+  });
+
+  test('the nudge points at the path that works, not just at Settings', () => {
+    // v9.28 gave a keyless user a way through: typing the event in. A nudge
+    // implying the app is unusable without a key would now be false.
+    const cap = script.split('function renderCapture(')[1].split('\n}')[0];
+    assert.ok(/type the event in yourself/i.test(cap),
+      'the notice does not mention manual entry, which is the working path');
+    assert.ok(/openNewEvent\(\)/.test(cap), 'manual entry is not on this screen at all');
+  });
+
+  test('error reporting can be turned off from inside the app', () => {
+    // FS-UI-03. The flag was honoured in two places and set nowhere, so the
+    // only opt-out was hand-editing localStorage.
+    assert.ok(/function setErrorReports\(/.test(script), 'no handler');
+    assert.ok(/onchange="setErrorReports\(this\.checked\)"/.test(script), 'no control');
+    const fn = script.split('function setErrorReports(')[1].split('\nfunction ')[0];
+    // Stored INVERTED so that an absent value means reporting is on, which is
+    // what every install before v9.24 already assumed.
+    assert.ok(/errorReportsOff\s*=\s*!on/.test(fn), 'the flag is stored the wrong way round');
+    assert.ok(/save\(\)/.test(fn), 'the choice does not survive a restart');
+  });
+
+  test('the toggle reflects the stored value rather than defaulting to on', () => {
+    const tr = script.split('function diagnosticsSection(')[1].split('\nfunction ')[0];
+    assert.ok(/errorReportsOff \? '' : 'checked'/.test(tr),
+      'the checkbox does not read the saved setting');
+  });
+
+  test('the privacy claim beside the toggle is the ruling, not a description', () => {
+    // "Never your events, notes, email contents, or API key" is guaranteed by
+    // ERROR-LOGGING-RULINGS-REPLY.md and enforced by isThirdPartyContent().
+    // If that guard ever goes, this string becomes a lie shown to the user.
+    const tr = script.split('function diagnosticsSection(')[1].split('\nfunction ')[0];
+    assert.ok(/Never your events, notes, email contents, or API key/.test(tr));
+    assert.ok(/function isThirdPartyContent\(/.test(script),
+      'the claim is displayed but nothing enforces it any more');
+  });
+
+  test('all three new controls are registered against silent removal', () => {
+    // The amendment from the plan review. mustSurvive is an allowlist, so
+    // adding a control does not break it -- which is precisely why a control
+    // left out of it has no protection at all.
+    const list = fs.readFileSync('./tests-modules.js', 'utf8')
+      .split('const mustSurvive = [')[1].split('];')[0];
+    ['removeKey()', 'setErrorReports('].forEach(c =>
+      assert.ok(list.includes(c), c + ' is not registered in mustSurvive'));
+  });
+
+  test('the new Settings states are audited', () => {
+    const { SCREENS } = require('./tools/a11y-audit.js');
+    const keys = SCREENS.map(s => s.key);
+    // The default fixtures have no key saved, so without these rows the Remove
+    // button and the nudge would never render for the auditor to look at.
+    assert.ok(keys.includes('setAI-haskey'), 'the Remove-key button is never audited');
+    assert.ok(keys.includes('capture-nokey'), 'the first-run nudge is never audited');
   });
 
   console.log('\nAn event can be typed in by hand (v9.28)');

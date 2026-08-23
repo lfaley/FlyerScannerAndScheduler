@@ -23,8 +23,8 @@ Repo facts verified on disk today (exact sites for the code steps): the key UI l
 
 ```
 Phase 1  Anthropic low-cap workspace key        ← biggest risk-per-effort; pure ops, zero code, do first
-Phase 2  Key management + AI-key onboarding      ← FS-UI-02 (remove key) + FS-UI-05 (first-run nudge)
-Phase 3  Error-reporting opt-out UI              ← FS-UI-03
+Phase 2  Key management + AI-key onboarding      ← FS-UI-02 + FS-UI-05 (SHIPPED v9.29)
+Phase 3  Error-reporting opt-out UI              ← FS-UI-03 (SHIPPED v9.29)
 Phase 4  Gmail-watcher token hardening (docs+rotate) ← FS-BE-03, within the JSONP constraint
 Phase 5  Small UI polish                          ← FS-UI-01 toast (SHIPPED v9.28)
 Deferred/handed-off: FS-BE-01 (SECURITY-PLAN P1), FS-BE-02 (integration phase), FS-BE-04/FS-BE-05 (accepted)
@@ -85,7 +85,14 @@ faster path rather than the only way out of a dead end.
 
 ## 2. Phase 1 — Put a low-cap Anthropic workspace key on the phone (addresses FS-BE-01 interim, sev 3 → reduced)
 
-No code. This is the confirmed version of SECURITY-PLAN.md's separate-key idea. Logan-driven, ~10 minutes:
+No code. This is the confirmed version of SECURITY-PLAN.md's separate-key idea. Logan-driven, ~10 minutes.
+
+> **AMENDED 23 Aug (v9.30):** Gordon — Logan's own model — is now the primary
+> AI and Anthropic is the automatic fallback. Phase 1 still applies, but the key
+> it caps is the **fallback** key, used only when the desktop is asleep. That
+> makes the cap cheaper to set low: measured from Logan's own diagnostics a page
+> costs about **1.4¢** (≈2,430 input + 465 output tokens at $3/$15 per million),
+> so even $5/month is ~350 fallback pages.
 
 1. Open the Anthropic Console workspaces page: `https://console.anthropic.com/settings/workspaces`
 2. **Create workspace** (top-right) → name it e.g. `flyersnap-phone`. ✅ It appears in the workspace list.
@@ -129,6 +136,20 @@ fails.
 
 ---
 
+> **SHIPPED v9.29.** `removeKey()` with a confirm (deliberately not the undo
+> pattern — an undoable key deletion is a key still on the device); the nudge
+> renders **above** the source rows, because tapping one with no key produces an
+> alert and the explanation has to arrive before the dead end; the key help text
+> now recommends the low-cap workspace from Phase 1. `removeKey()` registered in
+> `mustSurvive`, mutation-tested. Verified in a browser: after Remove, the key
+> is gone from `S.settings` **and from localStorage**, and the button
+> disappears. Two new a11y rows (`setAI-haskey`, `capture-nokey`) — the default
+> fixtures have no key, so neither control would otherwise have been audited.
+>
+> **Changed from the plan:** v9.28 shipped manual entry, so the nudge now points
+> at typing the event in rather than implying the app is unusable without a key.
+> A test pins that wording.
+
 ## 4. Phase 3 — Error-reporting opt-out UI (FS-UI-03, sev 1)
 
 The flag `S.settings.errorReportsOff` is honored in code (`index.html:5907`, `:5924`) but has no control. Add one to **When something goes wrong** (`renderSetTrouble`):
@@ -150,6 +171,14 @@ The flag `S.settings.errorReportsOff` is honored in code (`index.html:5907`, `:5
    nobody softens it later without knowing what it is.
 
 ---
+
+> **SHIPPED v9.29.** A checkbox in **When something goes wrong**, reading the
+> stored value rather than defaulting to on. Verified in a browser: with it off,
+> `logProblem` queues **0** reports; back on, it queues again. `setErrorReports(`
+> registered in `mustSurvive`, and storing the flag the wrong way round kills a
+> test. The help text is pinned by a test that also asserts
+> `isThirdPartyContent()` still exists — the claim shown to the user is only
+> true while that guard is there.
 
 ## 5. Phase 4 — Gmail-watcher token hardening (FS-BE-03, sev 2)
 

@@ -5,13 +5,35 @@
 
 FlyerSnap: family-organization PWA for Logan. Scans flyers/PDFs/emails → AI
 extracts events → calendar reminders. Plus chores/stars, lists, read-only meal
-plan (fed by a separate recipe app), Gmail watcher, Anthropic or local-Ollama
-AI provider ("Gordon" is the display name; the real model shows in Settings and
-in each event's `aiSource`).
+plan (fed by a separate recipe app), Gmail watcher, and AI.
+
+**THE AI IS GORDON — LOGAN'S OWN MODEL — AND ANTHROPIC IS THE FALLBACK.**
+Decided 23 Aug 2026. The self-hosted Ollama model on Logan's desktop is the
+intended primary provider; Anthropic covers the gap when that desktop is asleep
+or unreachable, automatically (`S.settings.aiFallback`, on by default). Both
+paths stay — a scan must never simply fail because a machine at home went to
+sleep — but **the default direction of travel is local, and new work should not
+add Anthropic-first assumptions.**
+
+Two things this does NOT mean, both easy to get wrong:
+
+- **"Gordon" is not a provider.** `aiName()` returns `ASSISTANT_NAME`; it is
+  the assistant's display name whichever model answers, and it has been since
+  v9.7. Code and docs must keep saying *which model* — the real name shows in
+  Settings and in each event's `aiSource`, and that honesty is the point.
+- **Anthropic is not deprecated.** It is the reason the app works at 11pm with
+  the desktop off. Removing it is a feature removal (rule 1) and was explicitly
+  rejected on 23 Aug.
+
+`S.settings.aiProvider` still DEFAULTS to `'anthropic'` for a fresh install,
+because `localBaseUrl` defaults to empty and a default of `'local'` with no URL
+would give a new install nothing but "No local model URL saved." Flipping that
+default is a real change with a worse first-run, not a one-line edit — see
+HANDOFF.md.
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.28 · **Tests:** 549 passing (`node tests.js`)
+**Current version:** v9.30 · **Tests:** 561 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -218,16 +240,21 @@ having checked it.
    had hand-entry; events did not, and nobody noticed because every developer
    test starts with a key. When adding a create path, check the other two ways
    in still work with `aiEnabled()` false and no key.
-23. Run `node tests.js` before every deploy; add a regression test with every
+23. A NEW SETTINGS CONTROL MUST BE ADDED TO `mustSurvive` THE DAY IT SHIPS.
+   That list is an ALLOWLIST — adding a control never breaks it — so a control
+   left out gets **no** protection from the one test that exists to stop
+   controls vanishing in a reorganisation. Registering it is itself a guard, so
+   mutation-test the registration.
+24. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.
 
 ## Verification tooling
 
-- `node tests.js` — 549 tests: data safety, migrations, inline-handler
+- `node tests.js` — 561 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
-- `node tools/a11y-audit.js` — ALL 37 screens in the RENDERED DOM: accessible
+- `node tools/a11y-audit.js` — ALL 39 screens in the RENDERED DOM: accessible
   names, tap targets, ARIA state, horizontal overflow, exactly one `<h1>`.
   The source tests cannot see a name that computes to nothing at runtime;
   this found exactly that in v9.1, and a 24px back button in v9.15.
