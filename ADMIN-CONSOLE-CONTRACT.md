@@ -1,6 +1,6 @@
 # FlyerSnap — a walkthrough for whoever builds the admin console
 
-**Written:** August 22, 2026 · **Against build:** v9.18 · **Purpose:** so the
+**Written:** August 22, 2026 · **Against build:** v9.18 · **Revised:** v9.25 · **Purpose:** so the
 admin console can be designed against what FlyerSnap actually does, not against
 an assumption about it.
 
@@ -59,6 +59,7 @@ Exactly three outbound destinations, plus one that deserves its own note.
 | 1 | `https://api.anthropic.com/v1/messages` | `index.html:3029, 3460` | flyer text/images, event context, **and the API key** |
 | 2 | `<localBaseUrl>/chat/completions` | `index.html:3403` | the same content, to the self-hosted model |
 | 3 | `<localBaseUrl>/models` | `index.html:7162` | nothing; a capability check |
+| 4 | `<localBaseUrl>/../api/ps` | v9.25, `probeLocalContext()` | nothing; asks the local server how big a context window it allocated. Best-effort — any failure reads as "unknown" and changes nothing |
 
 **Plus the Gmail watcher, which is JSONP, not `fetch`** (`index.html:4949-4955`).
 It injects a `<script>` pointing at the Apps Script URL with the token in the
@@ -133,7 +134,9 @@ Exported from Settings → *When something goes wrong*. Contains:
 
 ```
 kind: 'flyersnap-diagnostics', version, generatedAt,
-app:{ version, provider, model, hasApiKey, aiEnabled, localBaseUrl?, userAgent },
+app:{ version, provider, model, hasApiKey, aiEnabled, localBaseUrl?,
+      localContext,                     // v9.25: the local window, or null
+      userAgent },
 counts:{ events, chores, lists },      // counts, never contents
 aiSummary:{ calls, ok, failed, failureRate, medianMs, slowestMs,
             byErrorType, fellBack, inTokens, outTokens },
@@ -143,6 +146,19 @@ problems:[ { where, message, detail, first, last, count, resolved } ]
 
 **No events, chores, lists, notes, or API key.** `hasApiKey` says *whether*,
 never *what*. Read on a desktop with `node tools/diagnostics.js <file>`.
+
+**v9.25 additions to be aware of when parsing this file.** `app.localContext`
+is the context window the local server reported, or `null` — and `null` covers
+both "not a local setup" and "asked and could not find out", which are
+different problems. Local entries in `aiLog` now carry `inTokens` / `outTokens`
+/ `finish` like the Anthropic ones (they never did before), and `errorType` has
+two new values: `thinking_only` and `context_too_small`. A console that
+switches on `errorType` should treat unknown values as `unknown` rather than
+failing.
+
+**Shared as `.txt` / `text/plain`, not `.json`** (v9.24). The contents are
+byte-identical JSON; iOS filters the share sheet by file type and many mail
+apps do not declare `application/json`. Parse by content, never by extension.
 
 ### 6.3 `flyersnap-router-benchmark-<date>.json`
 

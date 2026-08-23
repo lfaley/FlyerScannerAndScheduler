@@ -194,9 +194,23 @@ const SCREENS = [
       benchState = { running:true, done:false, i:7, total:34, cancelled:false,
         provider:'local', model:'qwen2.5:14b-instruct', startedAt:0, ms:0, error:'', results:[] };
       sub('bench')` },
+  // One passing check with a SHORT detail and one failing check with a very
+  // long one, so the audit sees both branches of the v9.25 collapse: the
+  // "Show all N characters" control and the "show only the failures" filter
+  // only render when there is something to collapse or hide.
   { key:'selfTest',   setup:`
+      selfTestOpen = {}; selfTestFailsOnly = false;
       selfTestResults = [{ name:'Reaches the model', ok:true, detail:'200 OK' },
-                         { name:'Reads an image', ok:false, detail:'no vision support' }];
+                         { name:'Reads an image', ok:false,
+                           detail:'no vision support: ' + 'the model returned an error. '.repeat(12) }];
+      sub('selfTest')` },
+  // ...and the same screen with the failures-only filter engaged, because a
+  // filtered list is a different DOM and has its own way to be inaccessible.
+  { key:'selfTest-filtered', setup:`
+      selfTestOpen = {1:true}; selfTestFailsOnly = true;
+      selfTestResults = [{ name:'Reaches the model', ok:true, detail:'200 OK' },
+                         { name:'Reads an image', ok:false,
+                           detail:'no vision support: ' + 'the model returned an error. '.repeat(12) }];
       sub('selfTest')` },
 ];
 

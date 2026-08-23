@@ -42,15 +42,28 @@ export function reportFingerprint(where, message){
     String(message || '').replace(/\d+/g, 'N').slice(0, 120));
 }
 
+// Newest-first document ids (Logan, 2026-08-22): the Firebase data browser
+// lists by id ASCENDING, so a 13-digit INVERTED timestamp prefix makes the
+// newest report sort to the TOP (digits also sort ahead of the legacy
+// letter-prefixed ids). Same scheme in all three apps.
+export const ID_MAX_TS = 9999999999999; // 13 nines, ~year 2286
+export function newestFirstId(kind, now, rand){
+  const n = Math.min(Math.max(Math.trunc(now) || 0, 0), ID_MAX_TS);
+  return String(ID_MAX_TS - n).padStart(13, '0') + '-' + kind + '-' + String(rand);
+}
+
 /**
  * One Problem Log entry -> one v2-contract report document (plain object).
  * ctx carries the environment: { version, url, userAgent, standalone }.
  */
 export function toReportDoc(problem, ctx){
   const c = ctx || {};
+  const createdAt = Date.parse(problem.first || '') || Date.parse(problem.last || '') || 0;
   const docOut = {
-    reportId: 'fs-' + String(problem.id || 'unknown'),
-    createdAt: Date.parse(problem.first || '') || Date.parse(problem.last || '') || 0,
+    // Deterministic per problem (same problem re-queued -> same id -> the
+    // 409 on redelivery dedups it server-side), newest-first sortable.
+    reportId: newestFirstId('fs', createdAt, String(problem.id || 'unknown')),
+    createdAt: createdAt,
     type: 'problem',
     message: redact(String(problem.where || 'App') + ': ' + String(problem.message || '')).slice(0, 2000),
     app: ERROR_REPORT_APP,

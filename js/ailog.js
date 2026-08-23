@@ -57,6 +57,16 @@ export function classifyError(err, status){
   if(status === 429 || /rate.?limit|too many requests|overloaded/.test(msg))                  return 'rate_limit';
   if(status && status >= 500)                                                                 return 'provider_error';
   if(/abort|timeout|timed out/.test(msg))                                                     return 'timeout';
+  // A "thinking" model that spent its whole token budget reasoning and emitted
+  // no answer. Logan hit this twice with qwen3-vl:8b and it logged as
+  // "unknown", which is the least useful thing a classifier can say about a
+  // failure it can name exactly. The app already asks for think:false; some
+  // builds ignore it.
+  if(/only reasoning|produced only reasoning|no answer/.test(msg))                            return 'thinking_only';
+  // Raised by the app itself, before any request goes out: the prompt plus a
+  // usable answer will not fit the window the server allocated.
+  if(/^CONTEXT_TOO_SMALL/.test(String(err && err.message || ''))
+     || /context_too_small/.test(msg))                                                       return 'context_too_small';
   if(/failed to fetch|networkerror|load failed|connection|unreachable|econnrefused/.test(msg))return 'network';
   if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
   if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
@@ -77,7 +87,7 @@ export function classifyError(err, status){
  * `detail` is deliberately NOT included: it is the provider's raw string and
  * belongs in the diagnostics file, not in an alert.
  */
-export function explainError(errorType, provider){
+export function explainError(errorType, provider, detail){
   const who = provider === 'local' ? 'your local model' : 'Anthropic';
   switch(errorType){
     case 'network':
@@ -99,6 +109,20 @@ export function explainError(errorType, provider){
     case 'unsupported_input':
       return 'Your local model cannot read PDFs or fetched links — only photos and text.\n\n'
         + 'Photograph the page instead, or turn on "Fall back to Anthropic" in Settings.';
+    case 'thinking_only':
+      // Named precisely on purpose. In Ollama the bare `qwen3-vl:8b` tag IS the
+      // Thinking edition -- Logan's own server log says
+      // `renderer=qwen3-vl-thinking parser=qwen3-vl-thinking` -- so "switch to
+      // another model" is wrong advice. It is the same model, one tag over.
+      return 'Your local model spent its whole answer thinking and never replied.\n\n'
+        + 'Plain qwen3-vl:8b is the Thinking edition. Pull the Instruct one instead:\n'
+        + 'ollama pull qwen3-vl:8b-instruct\n\n'
+        + 'Also check its context length — Ollama defaults to 4096 tokens, and a '
+        + 'photo prompt fills most of that before the answer even starts.';
+    case 'context_too_small':
+      // The detail carries the three numbers that decide this, and without
+      // them the reader cannot tell which one to change.
+      return detail || 'The local model\'s context window is too small for this job.';
     case 'bad_response':
       return `${who} replied with something this app could not read.\n\n`
         + 'Often a clearer photo fixes it. If it keeps happening, export diagnostics from Settings.';
@@ -187,6 +211,10 @@ export function buildDiagnostics(state, meta){
       hasApiKey: !!(s.settings && s.settings.apiKey),   // whether, never what
       aiEnabled: !(s.settings && s.settings.aiEnabled === false),
       localBaseUrl: m.includeLocalUrl ? redact((s.settings || {}).localBaseUrl || '') : null,
+      // The context window the local server actually allocated, when the app
+      // managed to ask. Null covers both "not a local setup" and "asked and
+      // could not find out" -- different problems, but neither is a number.
+      localContext: m.localContext == null ? null : m.localContext,
       userAgent: m.userAgent ? String(m.userAgent).slice(0, 200) : null,
     },
     counts: {

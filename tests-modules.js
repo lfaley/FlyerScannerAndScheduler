@@ -2548,7 +2548,7 @@ module.exports = async function runModuleTests(test){
     const d = er.toReportDoc(p, { version:'v9.24', url:'https://x/y', userAgent:'UA', standalone:true });
     assert.strictEqual(d.app, 'flyersnap');
     assert.strictEqual(d.type, 'problem');
-    assert.strictEqual(d.reportId, 'fs-abc123');
+    assert.ok(/^\d{13}-fs-abc123$/.test(d.reportId), 'newest-first id shape: ' + d.reportId);
     assert.ok(d.message.length > 0 && d.message.length <= 2000);
     assert.ok(Object.keys(d).length <= 24, 'rules cap: at most 24 keys, got ' + Object.keys(d).length);
     assert.strictEqual(d.createdAt, Date.parse(p.first));
@@ -2570,6 +2570,13 @@ module.exports = async function runModuleTests(test){
       er.reportFingerprint('App', 'Timeout after 9999ms'));
     assert.notStrictEqual(er.reportFingerprint('App', 'Timeout'),
       er.reportFingerprint('Scanning', 'Timeout'));
+  });
+
+  test('ids sort newest-FIRST in the Firebase data browser (ascending id order)', () => {
+    const earlier = er.newestFirstId('fs', 1787000000000, 'a');
+    const later = er.newestFirstId('fs', 1787000005000, 'a');
+    assert.ok(later < earlier, 'later time must sort first: ' + later + ' vs ' + earlier);
+    assert.ok(er.newestFirstId('fs', Date.now(), 'a') < 'fs-abc', 'must sort ahead of legacy ids');
   });
 
   test('REST encoding types every field the way Firestore expects', () => {

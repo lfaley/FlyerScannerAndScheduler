@@ -264,3 +264,19 @@
      they wrap instead of pushing the input off the screen. */
   .suggest{display:flex;flex-wrap:wrap;gap:var(--s2);margin-bottom:var(--s3)}
   .suggest .chip{margin:0}
+  /* Long diagnostic text, shortened until asked for.
+     The self-test prints raw error strings, model lists and JSON fragments,
+     and one bad call can be a full screen of it -- which pushes the check
+     that FAILED off the top and buries the "Run again" button. Clamped to
+     three lines with an explicit control, never truncated permanently: the
+     text is the whole point of a diagnostic, so it must always be one tap
+     away. -webkit-line-clamp is the only reliable multi-line clamp in
+     Safari, which is where this app actually runs. */
+  .clamp3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+    overflow:hidden}
+  /* A plain text control, not a .btn: it sits inside a card row and a
+     44px-tall button per result would be taller than the text it reveals.
+     The tap target is met by padding rather than by height alone. */
+  .morebtn{background:none;border:0;color:var(--accent);font:inherit;
+    font-size:var(--t-cap);font-weight:700;padding:var(--s2) 0;cursor:pointer;
+    min-height:var(--tap);display:inline-flex;align-items:center}

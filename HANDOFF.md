@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.24 · **Tests:** 488 passing
+**Updated:** August 22, 2026 · **Live version:** v9.25 · **Tests:** 489 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -85,6 +85,7 @@ a per-version progress log.
 | v9.22 | Settings became a six-page hub: 5,794px of scroll down to a 590px menu |
 | v9.23 | Failures say what to do about them; diagnostics send in one tap |
 | v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — js/errorReport.js + ERROR-REPORTING-PLAN.md |
+| v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a

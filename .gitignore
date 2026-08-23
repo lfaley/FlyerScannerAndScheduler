@@ -1,1 +1,10 @@
 .vs/
+
+# Scratch an agent could not delete itself. device_bash cannot rm on this
+# machine, so working files get moved here instead of removed -- and without
+# this line a 400KB dump of a previous index.html would be committed with the
+# next release. Safe to delete the folder at any time.
+_to_delete/
+
+# Node, if it ever gets installed here for tooling.
+node_modules/

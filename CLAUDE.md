@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.24 · **Tests:** 488 passing (`node tests.js`)
+**Current version:** v9.25 · **Tests:** 489 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -362,7 +362,9 @@ REMOTE ERROR REPORTING (v9.24, `js/errorReport.js` + glue beside logProblem;
 plan: ERROR-REPORTING-PLAN.md). Every NEW problem logged by `logProblem` is
 also queued to the shared Firestore `errorReports` collection (the recipe
 app's project), where the ADMIN CONSOLE lists it under a `flyersnap` badge.
-Delivery is a plain `fetch` POST to the Firestore REST API — no SDK, nothing
+Report ids lead with an INVERTED 13-digit timestamp so the Firebase data
+browser (which lists by id ascending) shows newest first — same scheme in all
+three apps. Delivery is a plain `fetch` POST to the Firestore REST API — no SDK, nothing
 at boot (rule 4 holds), localStorage outbox (`flyersnap-error-outbox`) so a
 killed page still leaves a record, delivered next launch. Text passes through
 `redact()` — the AI-log privacy rule applies unchanged: no event content, no

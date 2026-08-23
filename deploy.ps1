@@ -1,161 +1,142 @@
-# FlyerSnap deploy helper.
+# FlyerSnap deploy.
 #
-#   .\deploy.ps1 75
+#   .\deploy.ps1 "what changed"
+#   .\deploy.ps1 "what changed" -DryRun     # check everything, push nothing
 #
-# Finds the zip, extracts it, verifies the version stamp changed, runs the
-# tests, and pushes only if everything passes. One command, checked at each
-# step, so a half-finished deploy cannot reach GitHub.
+# Files now arrive one at a time and get dropped straight into the repo folder,
+# so there is no zip to find or extract. Save the files, then run this.
+#
+# It checks the things that have actually gone wrong on this project, and
+# pushes only if every one of them passes:
+#
+#   * the tests do not end "N passed, 0 failed"
+#   * index.html changed but APP_VERSION did not   <- installed phones would
+#   * APP_VERSION moved but sw.js CACHE did not    <- keep the old app forever
+#   * gmail-watcher.gs changed and nobody re-pasted it at script.google.com
+#   * the push succeeded but the live site never picked it up
+#
+# v9.25 rewrite. The previous version hunted for a zip in Downloads and
+# extracted it into FlyerAndScheduler\flyersnap-pwa -- a path that has not
+# existed since the repo moved, so it could not have worked.
 
 param(
-  [Parameter(Mandatory=$true)][string]$Version,
-  [string]$Message = ""
+  [Parameter(Position=0)][string]$Message = "",
+  [string]$Repo = "C:\Users\Logan\Desktop\Repos\FlyerSnap",
+  [switch]$DryRun,
+  [switch]$NoVerify
 )
 
-# NOTE: deliberately NOT setting $ErrorActionPreference = "Stop".
-# On Windows PowerShell 5.1, redirecting a native command's stderr (2>&1) wraps
-# that output in NativeCommandError records, and with Stop in force ANY stderr
-# line aborts the script -- even a harmless one. node prints
-# "save blocked: data is locked pending recovery" during a PASSING test, which
-# killed this script twice. PowerShell 7.1 changed this behaviour; 5.1 did not.
-# Every step below checks its own result instead.
+# NOT "Stop". On Windows PowerShell 5.1, a native command writing ANY line to
+# stderr becomes a terminating error under Stop -- node prints
+# "save blocked: data is locked pending recovery" during a PASSING test run,
+# and that alone killed the old script twice. Every step checks its own result.
 $ErrorActionPreference = "Continue"
-$repo = "C:\Users\Logan\Desktop\Repos\FlyerSnap"
 
-Write-Host ""
-Write-Host "FlyerSnap deploy - v$Version" -ForegroundColor Cyan
-Write-Host ""
+$LIVE    = "https://lfaley.github.io/FlyerScannerAndScheduler/"
+$ACTIONS = "https://github.com/lfaley/FlyerScannerAndScheduler/actions"
 
-# ---------------------------------------------------------------------------
-# 1. Find the zip. Browsers rename duplicates to "name (1).zip" and sometimes
-#    save outside Downloads, which has caused failed deploys before -- so look
-#    properly rather than assuming one exact path.
-# ---------------------------------------------------------------------------
-$zip = $null
+function Ok   ($t) { Write-Host "OK  $t" -ForegroundColor Green }
+function Warn ($t) { Write-Host "!   $t" -ForegroundColor Yellow }
+function Bad  ($t) { Write-Host "X   $t" -ForegroundColor Red }
+function Say  ($t) { Write-Host "    $t" }
+function Step ($n, $t) { Write-Host ""; Write-Host "$n. $t" -ForegroundColor Cyan }
 
-$candidates = Get-ChildItem -Path (Join-Path $HOME "Downloads") `
-                -Filter "flyersnap-v$Version*.zip" -ErrorAction SilentlyContinue |
-              Sort-Object LastWriteTime -Descending
-
-if ($candidates) {
-  $zip = $candidates[0]
-  if ($candidates.Count -gt 1) {
-    Write-Host "!  $($candidates.Count) copies found; using the newest:" -ForegroundColor Yellow
-    Write-Host "   $($zip.Name)  ($($zip.LastWriteTime))" -ForegroundColor Yellow
-  }
-} else {
-  Write-Host "   Not in Downloads - searching the rest of your user folder..." -ForegroundColor Yellow
-  $zip = Get-ChildItem -Path $HOME -Filter "flyersnap-v$Version*.zip" -Recurse `
-           -ErrorAction SilentlyContinue |
-         Sort-Object LastWriteTime -Descending | Select-Object -First 1
-}
-
-if (-not $zip) {
-  Write-Host "X  Could not find flyersnap-v$Version.zip anywhere under $HOME" -ForegroundColor Red
-  Write-Host "   The download did not complete. Click the zip link again, then re-run this."
+function Stop-Here ($why) {
+  Write-Host ""
+  Bad $why
+  Bad "Nothing was committed and nothing was pushed."
+  Write-Host ""
   exit 1
 }
 
-Write-Host "OK Found: $($zip.FullName)" -ForegroundColor Green
-
-# ---------------------------------------------------------------------------
-# 1b. Self-update. Fixes to this script travel inside the zip, but the copy
-#     PowerShell is executing was loaded from disk before extraction -- so a
-#     fixed script would not take effect until the NEXT deploy. Pull just
-#     deploy.ps1 out first, and if it differs, replace ourselves and re-run.
-# ---------------------------------------------------------------------------
-$self = $MyInvocation.MyCommand.Path
-if (-not $env:FLYERSNAP_DEPLOY_RELAUNCHED) {
-  try {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
-    $entry = $archive.Entries | Where-Object { $_.Name -eq "deploy.ps1" } | Select-Object -First 1
-    if ($entry) {
-      $tmp = Join-Path $env:TEMP "flyersnap-deploy-new.ps1"
-      if (Test-Path $tmp) { Remove-Item $tmp -Force }
-      [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $tmp, $true)
-      $archive.Dispose()
-
-      $newHash = (Get-FileHash $tmp -Algorithm SHA256).Hash
-      $oldHash = if (Test-Path $self) { (Get-FileHash $self -Algorithm SHA256).Hash } else { "" }
-
-      if ($newHash -ne $oldHash) {
-        Write-Host "!  deploy.ps1 has been updated - switching to the new one" -ForegroundColor Yellow
-        Copy-Item $tmp $self -Force
-        Remove-Item $tmp -Force
-        $env:FLYERSNAP_DEPLOY_RELAUNCHED = "1"
-        & $self @PSBoundParameters
-        $code = $LASTEXITCODE
-        Remove-Item Env:FLYERSNAP_DEPLOY_RELAUNCHED -ErrorAction SilentlyContinue
-        exit $code
-      }
-      Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    } else {
-      $archive.Dispose()
-    }
-  } catch {
-    Write-Host "!  Could not check for a script update ($($_.Exception.Message)) - carrying on" -ForegroundColor Yellow
-  }
+# Pull one captured group out of some text. Returns $null when the pattern is
+# absent, so a renamed constant fails loudly instead of quietly comparing two
+# empty strings and calling them equal.
+function Get-Match ($text, $pattern) {
+  $m = [regex]::Match($text, $pattern)
+  if ($m.Success) { return $m.Groups[1].Value }
+  return $null
 }
 
-# Refuse a zip that is obviously incomplete rather than extracting garbage.
-if ($zip.Length -lt 20000) {
-  Write-Host "X  That file is only $($zip.Length) bytes - the download was truncated." -ForegroundColor Red
-  Write-Host "   Delete it and download again."
-  exit 1
-}
-
-# ---------------------------------------------------------------------------
-# 2. Extract, remembering the version we had so we can prove it changed.
-# ---------------------------------------------------------------------------
-Set-Location $repo
-
-$before = ""
-if (Test-Path index.html) {
-  $m = Select-String -Path index.html -Pattern "FlyerSnap v[0-9.]+" | Select-Object -First 1
-  if ($m) { $before = $m.Matches.Value }
-}
-
-$watcherBefore = ""
-if (Test-Path gmail-watcher.gs) {
-  $watcherBefore = (Get-FileHash gmail-watcher.gs -Algorithm SHA256).Hash
-}
-
-Expand-Archive -Path $zip.FullName -DestinationPath . -Force
-Write-Host "OK Extracted" -ForegroundColor Green
-
-$watcherChanged = $false
-if (Test-Path gmail-watcher.gs) {
-  $watcherAfter = (Get-FileHash gmail-watcher.gs -Algorithm SHA256).Hash
-  $watcherChanged = ($watcherBefore -ne $watcherAfter)
-}
-
-$after = (Select-String -Path index.html -Pattern "FlyerSnap v[0-9.]+" |
-          Select-Object -First 1).Matches.Value
-
-if ($before -eq $after) {
-  Write-Host "!  Version is still $after - the extract may not have changed anything." -ForegroundColor Yellow
-  Write-Host "   If you expected v$Version, check you downloaded the right zip." -ForegroundColor Yellow
-} else {
-  Write-Host "OK $before  ->  $after" -ForegroundColor Green
-}
-
-# ---------------------------------------------------------------------------
-# 3. Tests gate the push.
-# ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "Running tests..." -ForegroundColor Cyan
+Write-Host "FlyerSnap deploy" -ForegroundColor Cyan
 
-# node prints ordinary progress lines to stderr -- notably
-# "save blocked: data is locked pending recovery", which is a PASSING test
-# proving a locked app refuses to overwrite good data.
-#
-# On Windows PowerShell 5.1 any stderr REDIRECTION (2>&1 or 2>file) wraps that
-# output in NativeCommandError records; combined with a Stop preference, one
-# harmless line aborts the whole script. PowerShell 7.1 changed this; 5.1 did
-# not. So we do not redirect at all: Start-Process writes each stream straight
-# to its own file, which never touches PowerShell's error stream.
-$outFile = Join-Path $env:TEMP "flyersnap-tests-out.txt"
-$errFile = Join-Path $env:TEMP "flyersnap-tests-err.txt"
+# ---------------------------------------------------------------------------
+Step 1 "Repo"
+# ---------------------------------------------------------------------------
+if (-not (Test-Path $Repo)) { Stop-Here "No folder at $Repo. Pass -Repo <path>." }
+Set-Location $Repo
+
+git rev-parse --is-inside-work-tree | Out-Null
+if ($LASTEXITCODE -ne 0) { Stop-Here "$Repo is not a git repository." }
+
+$branch = (git rev-parse --abbrev-ref HEAD)
+if ($branch) { $branch = $branch.Trim() }
+Ok "$Repo  (branch: $branch)"
+if ($branch -ne "main") { Warn "Pages deploys from main. This branch will not go live." }
+
+$tracked   = @(git diff --name-only HEAD)
+$untracked = @(git ls-files --others --exclude-standard)
+$all = @(@($tracked) + @($untracked) | Where-Object { $_ })
+
+if ($all.Count -eq 0) {
+  Write-Host ""
+  Ok "Nothing has changed. Already up to date."
+  Write-Host ""
+  exit 0
+}
+
+Say "$($all.Count) file(s) changed:"
+foreach ($f in $all) { Say "  $f" }
+
+# ---------------------------------------------------------------------------
+Step 2 "Version stamps"
+# ---------------------------------------------------------------------------
+# The rule (CLAUDE.md): bump BOTH the version in index.html and CACHE in sw.js
+# with every release. Miss the CACHE bump and every installed phone keeps
+# serving the old app, with no error anywhere -- the most expensive mistake
+# available here, and the easiest one to make.
+$version = ""
+
+if ($all -notcontains "index.html") {
+  Ok "index.html unchanged - no version bump needed"
+} else {
+  $nowHtml = Get-Content index.html -Raw
+  $nowSw   = Get-Content sw.js -Raw
+  $wasHtml = (git show HEAD:index.html) -join "`n"
+  $wasSw   = (git show HEAD:sw.js) -join "`n"
+
+  $vNow = Get-Match $nowHtml "APP_VERSION\s*=\s*'([^']+)'"
+  $vWas = Get-Match $wasHtml "APP_VERSION\s*=\s*'([^']+)'"
+  $cNow = Get-Match $nowSw   "CACHE\s*=\s*'([^']+)'"
+  $cWas = Get-Match $wasSw   "CACHE\s*=\s*'([^']+)'"
+
+  if (-not $vNow) { Stop-Here "Could not find APP_VERSION in index.html." }
+  if (-not $cNow) { Stop-Here "Could not find CACHE in sw.js." }
+
+  if ($vNow -eq $vWas) { Stop-Here "index.html changed but APP_VERSION is still $vNow. Bump it." }
+  Ok "APP_VERSION  $vWas -> $vNow"
+
+  if ($cNow -eq $cWas) {
+    Stop-Here "APP_VERSION moved to $vNow but sw.js CACHE is still $cNow. Installed phones would keep the old app."
+  }
+  Ok "sw.js CACHE  $cWas -> $cNow"
+  $version = $vNow
+}
+
+# ---------------------------------------------------------------------------
+Step 3 "Tests"
+# ---------------------------------------------------------------------------
+Say "node tests.js"
+
+# Start-Process with per-stream files, NOT "2>&1". On 5.1 any stderr
+# REDIRECTION wraps output in NativeCommandError records; Start-Process writes
+# each stream straight to its own file and never touches PowerShell's error
+# stream. This was debugged the hard way -- do not simplify it.
+$tmp = $env:TEMP
+if (-not $tmp) { $tmp = [System.IO.Path]::GetTempPath() }
+$outFile = Join-Path $tmp "flyersnap-tests-out.txt"
+$errFile = Join-Path $tmp "flyersnap-tests-err.txt"
 
 $proc = Start-Process -FilePath "node" -ArgumentList "tests.js" `
           -NoNewWindow -Wait -PassThru `
@@ -166,56 +147,113 @@ $out = @()
 if (Test-Path $outFile) { $out += Get-Content $outFile }
 if (Test-Path $errFile) { $out += Get-Content $errFile }
 
-$line = $out | Select-String -Pattern "passed, .* failed" | Select-Object -Last 1
-$summary = if ($line) { $line.ToString().Trim() } else { "no test summary found" }
+$line = $out | Select-String -Pattern "^\d+ passed, \d+ failed$" | Select-Object -Last 1
 
-if ($exit -ne 0 -and $summary -eq "no test summary found") {
+# Belt and braces. The exit code and the printed summary must AGREE: a runner
+# that dies before printing the summary must not pass, and a summary with
+# failures in it must lose even if the exit code says zero.
+if (-not $line) {
   Write-Host ""
   $out | Select-Object -Last 20
-  Write-Host ""
-  Write-Host "X  node exited with code $exit and produced no summary." -ForegroundColor Red
-  Write-Host "   Nothing was pushed."
-  exit 1
+  Stop-Here "The tests printed no summary line - the run did not finish (node exited $exit)."
 }
+$summary = $line.ToString().Trim()
 
-if ($summary -notmatch "0 failed") {
+if ($summary -notmatch ", 0 failed$") {
   Write-Host ""
-  $out | Select-String -Pattern "FAIL" -Context 0,2
-  Write-Host ""
-  Write-Host "X  $summary" -ForegroundColor Red
-  Write-Host "   Nothing was pushed."
-  exit 1
+  $out | Select-String -Pattern "FAIL" | Select-Object -First 15
+  Stop-Here $summary
 }
-Write-Host "OK $summary" -ForegroundColor Green
+if ($exit -ne 0) { Stop-Here "Tests printed '$summary' but node exited $exit." }
+Ok $summary
 
 # ---------------------------------------------------------------------------
-# 4. Commit and push.
+Step 4 "The part no script can do for you"
 # ---------------------------------------------------------------------------
-if ([string]::IsNullOrWhiteSpace($Message)) { $Message = "deploy $after" }
-
-git add -A
-$status = git status --porcelain
-if ([string]::IsNullOrWhiteSpace($status)) {
-  Write-Host "!  Nothing to commit - the repo already matches this zip." -ForegroundColor Yellow
+if ($all -contains "gmail-watcher.gs") {
+  Warn "gmail-watcher.gs changed - it does NOT deploy with this push."
+  Warn "At script.google.com: open the project, select all, paste the new file,"
+  Warn "save, then Deploy > Manage deployments > pencil > New version > Deploy."
+  Write-Host ""
+  $go = Read-Host "    Type y once that is done (anything else stops here)"
+  if ($go -ne "y") { Stop-Here "Stopped so the watcher can be updated first." }
 } else {
-  git commit -m $Message | Out-Null
-  git push
+  Ok "gmail-watcher.gs unchanged - nothing to re-paste at script.google.com"
+}
+
+# ---------------------------------------------------------------------------
+Step 5 "Commit and push"
+# ---------------------------------------------------------------------------
+if (-not $Message) {
+  if ($version) { $Message = $version } else { $Message = "update" }
+}
+
+if ($DryRun) {
   Write-Host ""
-  Write-Host "OK Pushed. $after will be live in a minute." -ForegroundColor Green
+  Warn "-DryRun: every check above passed. Nothing was committed or pushed."
+  Say "Would commit as: $Message"
+  Write-Host ""
+  exit 0
+}
+
+# -A stages deletions as well. A file removed from the folder must leave the
+# repo too, or a deleted module keeps shipping from the last commit.
+git add -A
+if ($LASTEXITCODE -ne 0) { Stop-Here "git add failed." }
+
+git commit -m $Message | Out-Null
+if ($LASTEXITCODE -ne 0) { Stop-Here "git commit failed." }
+
+$sha = (git rev-parse --short HEAD)
+if ($sha) { $sha = $sha.Trim() }
+Ok "committed $sha - $Message"
+
+git push
+if ($LASTEXITCODE -ne 0) {
+  Write-Host ""
+  Bad "git push failed. The commit is local - fix the remote and push again."
+  Write-Host ""
+  exit 1
+}
+Ok "pushed to $branch"
+
+# ---------------------------------------------------------------------------
+Step 6 "Did it actually go live?"
+# ---------------------------------------------------------------------------
+# A green push is not a deploy. Pages builds afterwards and can lag or fail;
+# without this, the first sign of trouble is the phone quietly showing the old
+# app -- which is exactly the failure this project keeps hitting.
+if ($NoVerify) { Write-Host ""; Warn "-NoVerify: skipping the live check."; Write-Host ""; exit 0 }
+if (-not $version) { Write-Host ""; Ok "index.html unchanged - nothing to verify live."; Write-Host ""; exit 0 }
+
+# curl.exe, not Invoke-WebRequest: on 5.1, IWR without -UseBasicParsing uses
+# Internet Explorer's engine and raises a security prompt on a fresh machine.
+$curl = "curl.exe"
+if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { $curl = "curl" }
+
+Say "Waiting for GitHub Pages (up to 3 minutes)..."
+$found = $false
+for ($i = 1; $i -le 18; $i++) {
+  Start-Sleep -Seconds 10
+  # Cache-bust: Pages sits behind a CDN that would happily serve the old copy
+  # and make a good deploy look broken.
+  $bust = [guid]::NewGuid().ToString("N")
+  $body = & $curl -s "$LIVE`?deploycheck=$bust"
+  $body = $body -join "`n"
+  if ($body -match [regex]::Escape("APP_VERSION = '$version'")) { $found = $true; break }
+  Say "  still the old build ($($i * 10)s)"
 }
 
 Write-Host ""
-Write-Host "Next:" -ForegroundColor Cyan
-if ($watcherChanged) {
-  Write-Host "  1. gmail-watcher.gs CHANGED - this step is required:" -ForegroundColor Yellow
-  Write-Host "     script.google.com > FlyerSnap Watcher > click the code > Ctrl+A > Delete"
-  Write-Host "     Paste the new gmail-watcher.gs from this folder, click save,"
-  Write-Host "     then Deploy > Manage deployments > pencil > New version > Deploy."
-  Write-Host "  2. On your phone: swipe FlyerSnap fully closed, reopen, wait 10s,"
-  Write-Host "     then close and reopen once more. Settings should read $after."
+if ($found) {
+  Ok "$version is live at $LIVE"
+  Write-Host ""
+  Say "On the phone: open FlyerSnap, close it fully, open it again."
+  Say "Since v9.20 the worker paints from cache first, so a new build lands on"
+  Say "the NEXT launch - or take the reload it offers you."
 } else {
-  Write-Host "  gmail-watcher.gs did not change - nothing to do at script.google.com."
-  Write-Host "  On your phone: swipe FlyerSnap fully closed, reopen, wait 10s, then"
-  Write-Host "  close and reopen once more. Settings should read $after."
+  Warn "$version has not appeared after 3 minutes."
+  Warn "The push worked; the Pages build may still be running, or may have failed."
+  Warn "Check $ACTIONS"
 }
 Write-Host ""
