@@ -71,6 +71,19 @@ export function classifyError(err, status){
   if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
   if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
   if(/unsupported_block/.test(msg))                                                           return 'unsupported_input';
+  // The spend cap, before the generic 400. Anthropic returns 400
+  // invalid_request_error "when usage reaches an organization or workspace
+  // spend limit you set", and 400 credit_balance_too_low when the account is
+  // out of credit. Both landed in `request_rejected` -> "Something went wrong
+  // talking to Anthropic", which is useless advice for the one failure whose
+  // fix is a number on a web page.
+  //
+  // callClaude puts the response body in the thrown message and in `detail`,
+  // so the body text is what is matched here. `credit_balance_too_low` is a
+  // confirmed error-type string; the exact spend-limit WORDING is not, so the
+  // phrase match is deliberately loose. A miss just falls through to the old
+  // generic class -- never to a wrong one.
+  if(/spend limit|credit balance|credit_balance_too_low|quota exceeded/.test(msg))            return 'spend_limit';
   if(status && status >= 400)                                                                 return 'request_rejected';
   return 'unknown';
 }
@@ -119,6 +132,16 @@ export function explainError(errorType, provider, detail){
         + 'ollama pull qwen3-vl:8b-instruct\n\n'
         + 'Also check its context length — Ollama defaults to 4096 tokens, and a '
         + 'photo prompt fills most of that before the answer even starts.';
+    case 'spend_limit':
+      // The one failure whose fix is entirely outside the app -- so the message
+      // is the instructions. It also has to say what STILL works: since v9.30
+      // Anthropic is the fallback, not the main path, so a capped key means
+      // "the safety net is out", not "the app is down".
+      return 'Anthropic has hit the spending limit on your account.\n\n'
+        + 'This is the cap you set, not a fault. Raise it at '
+        + 'console.anthropic.com under the workspace this key belongs to, or wait '
+        + 'for it to reset on the 1st of the month.\n\n'
+        + 'Your own model is unaffected — scanning still works whenever the desktop is awake.';
     case 'context_too_small':
       // The detail carries the three numbers that decide this, and without
       // them the reader cannot tell which one to change.

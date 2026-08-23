@@ -2684,66 +2684,6 @@ function isCarriedOver(turns, todayISO){
  * Pure: no DOM, no app state, no clock of its own.
  */
 
-/**
- * AI call logging.
- *
- * Modelled on the OpenTelemetry GenAI semantic conventions, which are the
- * vendor-neutral standard for what to record around a model call. Field names
- * mirror the `gen_ai.*` namespace so the log means the same thing an engineer
- * would expect it to mean:
- *
- *   op            gen_ai.operation.name   what was being done
- *   provider      gen_ai.provider.name    anthropic | local
- *   reqModel      gen_ai.request.model    what we asked for
- *   resModel      gen_ai.response.model   what actually answered (can differ)
- *   inTokens/out  gen_ai.usage.*_tokens
- *   finish        gen_ai.response.finish_reasons
- *   ms            gen_ai.client.operation.duration
- *   errorType     error.type
- *
- * WHAT IS DELIBERATELY NOT LOGGED
- *
- * The conventions exclude prompt and completion bodies from standard
- * attributes because they "routinely contain names, emails, account numbers,
- * or proprietary business logic". That warning lands harder here than in most
- * apps: the prompts ARE children's names, schools, addresses and schedules.
- * So no prompt text, no answer text, and never the API key. `redact()` below
- * is the last line of defence for error strings, which are the one place a
- * provider can hand back something sensitive without being asked.
- *
- * Pure: no DOM, no app state, no clock of its own.
- */
-
-/**
- * AI call logging.
- *
- * Modelled on the OpenTelemetry GenAI semantic conventions, which are the
- * vendor-neutral standard for what to record around a model call. Field names
- * mirror the `gen_ai.*` namespace so the log means the same thing an engineer
- * would expect it to mean:
- *
- *   op            gen_ai.operation.name   what was being done
- *   provider      gen_ai.provider.name    anthropic | local
- *   reqModel      gen_ai.request.model    what we asked for
- *   resModel      gen_ai.response.model   what actually answered (can differ)
- *   inTokens/out  gen_ai.usage.*_tokens
- *   finish        gen_ai.response.finish_reasons
- *   ms            gen_ai.client.operation.duration
- *   errorType     error.type
- *
- * WHAT IS DELIBERATELY NOT LOGGED
- *
- * The conventions exclude prompt and completion bodies from standard
- * attributes because they "routinely contain names, emails, account numbers,
- * or proprietary business logic". That warning lands harder here than in most
- * apps: the prompts ARE children's names, schools, addresses and schedules.
- * So no prompt text, no answer text, and never the API key. `redact()` below
- * is the last line of defence for error strings, which are the one place a
- * provider can hand back something sensitive without being asked.
- *
- * Pure: no DOM, no app state, no clock of its own.
- */
-
 const AI_LOG_MAX = 200;          // rolling window; oldest dropped first
 
 // Anything shaped like a key must never reach storage, a file, or a screen.
@@ -2787,6 +2727,19 @@ function classifyError(err, status){
   if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
   if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
   if(/unsupported_block/.test(msg))                                                           return 'unsupported_input';
+  // The spend cap, before the generic 400. Anthropic returns 400
+  // invalid_request_error "when usage reaches an organization or workspace
+  // spend limit you set", and 400 credit_balance_too_low when the account is
+  // out of credit. Both landed in `request_rejected` -> "Something went wrong
+  // talking to Anthropic", which is useless advice for the one failure whose
+  // fix is a number on a web page.
+  //
+  // callClaude puts the response body in the thrown message and in `detail`,
+  // so the body text is what is matched here. `credit_balance_too_low` is a
+  // confirmed error-type string; the exact spend-limit WORDING is not, so the
+  // phrase match is deliberately loose. A miss just falls through to the old
+  // generic class -- never to a wrong one.
+  if(/spend limit|credit balance|credit_balance_too_low|quota exceeded/.test(msg))            return 'spend_limit';
   if(status && status >= 400)                                                                 return 'request_rejected';
   return 'unknown';
 }
@@ -2835,6 +2788,16 @@ function explainError(errorType, provider, detail){
         + 'ollama pull qwen3-vl:8b-instruct\n\n'
         + 'Also check its context length — Ollama defaults to 4096 tokens, and a '
         + 'photo prompt fills most of that before the answer even starts.';
+    case 'spend_limit':
+      // The one failure whose fix is entirely outside the app -- so the message
+      // is the instructions. It also has to say what STILL works: since v9.30
+      // Anthropic is the fallback, not the main path, so a capped key means
+      // "the safety net is out", not "the app is down".
+      return 'Anthropic has hit the spending limit on your account.\n\n'
+        + 'This is the cap you set, not a fault. Raise it at '
+        + 'console.anthropic.com under the workspace this key belongs to, or wait '
+        + 'for it to reset on the 1st of the month.\n\n'
+        + 'Your own model is unaffected — scanning still works whenever the desktop is awake.';
     case 'context_too_small':
       // The detail carries the three numbers that decide this, and without
       // them the reader cannot tell which one to change.
@@ -3910,7 +3873,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.30';
+const APP_VERSION = 'v9.31';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }

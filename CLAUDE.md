@@ -25,6 +25,37 @@ Two things this does NOT mean, both easy to get wrong:
   the desktop off. Removing it is a feature removal (rule 1) and was explicitly
   rejected on 23 Aug.
 
+**WHERE THIS IS HEADING (23 Aug 2026): Gordon SHIPS WITH THE APP, behind a
+login that gates GORDON — not the app.** The local model stops being something
+each user points at and becomes something the app comes with, so that not just
+anyone can spend Logan's GPU. **The app itself still opens for anyone who has
+it**: events, chores, lists and hand-typed events (v9.28) work with no account
+and no network. Sign-in unlocks scanning and Ask.
+
+That scope was chosen on the kid question — children need to SEE their
+schedule, not to scan; a hard gate would show a login form to a child standing
+outside school. Full reasoning in SECURITY-PLAN.md §1a. Three consequences bind
+anyone working here before it lands:
+
+- **`Authorization: 'Bearer local'` is a hardcoded constant** (`index.html:4064`,
+  `:4112`, `:8334`), identical in every copy. It is safe only because
+  `localBaseUrl` is a private Tailscale address — the URL's secrecy IS the
+  security. Publishing that URL with the app makes the constant worthless.
+  **Anything built toward shipped-Gordon replaces it.**
+- **The gate is on a SESSION, never on Firebase being reachable.** The SDK
+  cannot be inlined without a build step, so gating on "can I reach Firebase"
+  reproduces the v8.1–v8.5 blank screen. The check is a `localStorage` read
+  answered offline; the SDK is fetched only for the sign-in itself. Boot still
+  fetches nothing. See SECURITY-PLAN.md §1a.
+- **KIDS SEEING THEIR EVENTS IS A SYNC PROBLEM, NOT A LOGIN PROBLEM.** There is
+  no sync — every install is an island of `localStorage`, so a child who
+  installs the app gets an empty one. What works TODAY is Share Events
+  (`index.html:6374`): tick events, send a calendar file. The per-person
+  machinery for a future read-only sync already exists (`personIds`,
+  `eventFilter` at `:3560-3562`); the missing piece is sync. If it is ever
+  built, **kids are read-only** — otherwise every child on the allowlist can
+  spend the GPU the login exists to protect.
+
 `S.settings.aiProvider` still DEFAULTS to `'anthropic'` for a fresh install,
 because `localBaseUrl` defaults to empty and a default of `'local'` with no URL
 would give a new install nothing but "No local model URL saved." Flipping that
@@ -33,7 +64,7 @@ HANDOFF.md.
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.30 · **Tests:** 561 passing (`node tests.js`)
+**Current version:** v9.31 · **Tests:** 562 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -250,7 +281,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 561 tests: data safety, migrations, inline-handler
+- `node tests.js` — 562 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.

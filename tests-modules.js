@@ -2331,6 +2331,15 @@ module.exports = async function runModuleTests(test){
       // "unknown" -- the least useful thing a classifier can say about a
       // failure it can name exactly.
       [new Error('the model produced only reasoning and no answer'), null, 'thinking_only'],
+      // The spend cap, which Anthropic reports as an ORDINARY 400. Logan set a
+      // capped workspace key on 23 Aug, so this is now a failure he can
+      // actually hit — and "Something went wrong talking to Anthropic" is
+      // useless advice for the one failure whose fix is a number on a web page.
+      [new Error('API error 400: {"error":{"type":"invalid_request_error","message":"This request would exceed your organization spend limit"}}'), 400, 'spend_limit'],
+      [new Error('API error 400: {"error":{"type":"credit_balance_too_low"}}'), 400, 'spend_limit'],
+      // ...but an ordinary bad request must NOT be mistaken for it, or the app
+      // would blame a spending cap for a bug in its own request.
+      [new Error('API error 400: {"error":{"type":"invalid_request_error","message":"max_tokens must be positive"}}'), 400, 'request_rejected'],
       [null, 400, 'request_rejected'],
       [new Error('something new'), null, 'unknown'],
     ];
@@ -2341,6 +2350,21 @@ module.exports = async function runModuleTests(test){
 
   test('status beats message: a 429 is rate_limit even when the body says "error"', () => {
     assert.strictEqual(ailog.classifyError(new Error('error'), 429), 'rate_limit');
+  });
+
+  test('a spend cap explains itself, and says what still works', () => {
+    // Everything about fixing this is outside the app, so the message has to
+    // BE the instructions. And since v9.30 Anthropic is the FALLBACK, not the
+    // main path — a capped key means "the safety net is out", not "the app is
+    // down", and saying so is the difference between a shrug and a panic.
+    const msg = ailog.explainError('spend_limit', 'anthropic');
+    assert.ok(/spending limit/i.test(msg), msg);
+    assert.ok(/console\.anthropic\.com/.test(msg), 'does not say where to raise it: ' + msg);
+    assert.ok(/1st of the month|resets?/i.test(msg), 'does not say it resets: ' + msg);
+    assert.ok(/cap you set|not a fault/i.test(msg),
+      'reads like a fault rather than a limit the user chose: ' + msg);
+    assert.ok(/your own model is unaffected/i.test(msg),
+      'does not say the local model still works, which is the whole point since v9.30');
   });
 
   test('thinking_only names the fix, because the fix is not in the app', () => {

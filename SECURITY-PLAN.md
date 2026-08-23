@@ -8,6 +8,11 @@
 > reading before the console is designed. See **ADMIN-CONSOLE-CONTRACT.md**
 > for what FlyerSnap exposes to a console.
 >
+> **Updated 23 Aug (v9.30): §1 IS NOW WRONG — read §1a first.** Gordon is to
+> ship with the app, which makes "stopping strangers" a goal, and Logan has
+> chosen a login that gates the WHOLE app. §1a records the decision, the
+> `Bearer local` finding, and the boot-rule collision it creates.
+>
 > **Updated 23 Aug (v9.26).** Part of this is no longer hypothetical. FlyerSnap
 > has been writing to the shared Firestore project `meal-planner-f7f2f` since
 > v9.24 (`errorReports`), and per `ERROR-LOGGING-HANDOFF.md` that same database
@@ -38,7 +43,8 @@ Asked directly, and the answers change the doc's ordering:
 - **The Anthropic key on the phone.** ✅
 - **Preparing for cloud sync.** ✅
 - **The local model endpoint.** ✅
-- Stopping strangers using the public URL. ❌ *not a goal*
+- ~~Stopping strangers using the public URL. ❌ *not a goal*~~
+  **→ ✅ A GOAL AS OF 23 AUG 2026. See §1a.**
 
 And two constraints:
 
@@ -50,6 +56,141 @@ FlyerSnap has no server and no cloud data: a stranger opening the public URL
 gets an empty app. **A login gate protects nothing that exists yet**, while the
 key exposure is real right now. So the doc's ordering — gate the app first — is
 backwards here, and this plan inverts it.
+
+## 1a. The premise that changed: Gordon ships WITH the app (23 Aug 2026)
+
+Logan's direction: **the local model stops being something each user points at,
+and becomes something the app comes with.** The login screen exists so that "not
+just anyone can use it."
+
+That inverts this document's own §1. The reason "stopping strangers" was not a
+goal is stated there: a stranger opening the public URL got an **empty app** —
+nothing to steal. Once Gordon ships with the app, a stranger gets **Logan's GPU,
+electricity and bandwidth**, on a machine in his house. The gate stops being
+about data and starts being about compute.
+
+### The endpoint has no real auth today — verified
+
+Three call sites send a hardcoded constant:
+
+```js
+headers: { 'Authorization': 'Bearer local' }   // index.html:4064, :4112, :8334
+```
+
+It is identical in every copy of the app. That is safe **only** because
+`localBaseUrl` is a private Tailscale address nobody else knows — the secrecy of
+the URL is the whole security model. Publish the URL with the app and
+`Bearer local` protects nothing. **Anything built here replaces that constant.**
+
+### The decision, and why it changed within the hour
+
+Asked directly on 23 Aug and given both options with their costs, Logan first
+chose a **hard gate** — nothing before sign-in. Then he asked the question that
+reversed it: *"how would that work if I want to share this with my kids so they
+can see their events?"*
+
+**Recommended design, recorded 23 Aug: gate GORDON, not the app.**
+
+- The app opens for anyone who has it. Events, chores, lists, meal plan, and
+  typing an event in by hand (v9.28) all work with no network and no account.
+- **Sign-in gates the two things that spend Logan's GPU: scanning and Ask.**
+  Signed out, they show the "needs setting up" state that already exists.
+
+Three reasons, in the order they matter:
+
+1. **Kids need to SEE, not to SCAN.** Under a hard gate, a child's session
+   expires, they open the app before school, and they get a login form instead
+   of their schedule. Under a Gordon gate their app always opens and shows what
+   it has. The thing being protected is compute; the thing they need is
+   read-only.
+2. **If accounts unlock Gordon, every kid can spend the GPU.** Kids almost
+   certainly want to be read-only, which is "gate Gordon, not the app" with
+   roles on top — the same design arrived at from a different direction.
+3. **It keeps the boot rule free rather than merely survivable** (below).
+
+The hard gate is not wrong, and the shape that would have survived is kept
+below because it is the right design for the sign-in flow either way.
+
+### Why the gate must be on a SESSION, not on Firebase being reachable
+
+This matters under EITHER design, and it is the whole of §3.5 applied.
+
+The Firebase SDK cannot be inlined without a build step. Gating on "is Firebase
+reachable" makes it a **boot dependency**, and the installed app goes blank when
+the CDN is not — the v8.1–v8.5 incident in a new costume. The resolution:
+
+1. **Boot is unchanged.** `index.html` still fetches nothing. It renders its own
+   sign-in screen from its own inlined code — drawing a form needs no SDK.
+2. **The gate is answered offline.** On launch the app asks one local question:
+   *do I hold a session that has not expired?* That is a `localStorage` read.
+   Yes → the app opens, with no network call at all. No → the sign-in screen.
+3. **The SDK is fetched only to SIGN IN**, which is the one moment the user
+   necessarily has network anyway. It stays a *feature* dependency, never a
+   *boot* dependency — exactly the distinction §3.5 draws.
+4. **Sessions are long.** 30 days or more. An expiring session must not mean a
+   parent standing in a school car park unable to see today's pickup time.
+
+**The cost a hard gate cannot design away** — and the reason the recommendation
+moved: *expired session + no network = locked out of your own calendar.* A
+parent in a school car park who cannot see today's pickup time. **A Gordon-only
+gate cannot do that**, because the app opens regardless; the worst case is that
+scanning is unavailable until you sign in again, which is exactly when you have
+signal anyway.
+
+If the hard gate is ever revisited, the mitigations are a long expiry, a visible
+"signs out in N days" warning, and degrading an expired session to READ-ONLY
+rather than to nothing.
+
+### What still holds from this document
+
+- **Email + password only** (§3.2). Magic link, `signInWithPopup` and
+  `signInWithRedirect` all fail in an installed iOS PWA. A hard gate makes this
+  more critical, not less: it is now the only door.
+- **Same origin as the recipe app** (§3.3), so one sign-in covers both — and a
+  compromise of either reaches the other. With a hard gate that is a bigger
+  consequence than when it was written.
+- **The allowlist** decides who, and it is already shared with the console.
+
+### Sharing with the kids — three different projects, and only one exists
+
+Asked on 23 Aug: *"how would that work if I want to share this with my kids so
+they can see their events?"* The honest answer starts with a constraint that has
+nothing to do with login: **there is no sync.** Every install is an island of
+`localStorage`. A kid who installs FlyerSnap today gets an empty app, and no
+amount of signing in changes that — there is nothing to sign in *to* yet.
+
+What exists today is **Share Events** (`renderShareEvents`, `index.html:6374`):
+tick events, send them as a calendar file or a text list. Its own help text says
+*"no access to anything in this app."* One-way export, not shared access.
+
+| Option | Cost | What the kid gets |
+|---|---|---|
+| **a. Calendar export** — works today | Nothing to build | Their events in the phone calendar they already use. No account, no sync, no login. **Probably the right permanent answer for younger kids.** |
+| **b. Read-only sync** | The real build — P3 below | The app, their events, live. Needs accounts, the allowlist, and Firestore. |
+| **c. Shared family device** | Small | A per-kid view on one household device. No accounts at all. |
+
+The per-person machinery for (b) already exists and is not the hard part: events
+carry `personIds`, and `eventFilter` already filters the list by person
+(`index.html:3560-3562`). The missing piece is sync, not filtering.
+
+**Roles, if (b) is ever built:** kids read-only, adults able to scan. Otherwise
+every child on the allowlist can spend the GPU the login exists to protect.
+
+### Ordering this changes
+
+**The first step does not depend on any of this.** `Authorization: 'Bearer local'`
+is a hardcoded constant at three sites. Replacing it with a per-device token —
+entered once, stored on the phone, revocable server-side — is small, useful on
+its own, and needs no login design to land first. It is also exactly the interim
+control P1 already describes.
+
+P1 (get the Anthropic key off the phone) was the priority because the key was
+the live exposure. Logan has since capped it with a workspace key, and Anthropic
+is now the **fallback** rather than the primary path (v9.30). Meanwhile shipping
+Gordon creates a NEW exposure that does not exist yet. **When that work starts,
+auth stops being P2 and becomes the gate on the whole thing.**
+
+---
 
 ## 2. The exposure, exactly
 

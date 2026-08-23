@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 23, 2026 · **Live version:** v9.30 · **Tests:** 561 passing
+**Updated:** August 23, 2026 · **Live version:** v9.31 · **Tests:** 562 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -134,6 +134,7 @@ a per-version progress log.
 | v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — `js/errorReport.js` + ERROR-REPORTING-PLAN.md |
 | v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
 | v9.24 | Diagnostics share as text so Gmail appears; the fallback toast stopped blaming Anthropic |
+| v9.31 | A hit spending cap says so, instead of "something went wrong" |
 | v9.30 | Gordon (Logan's own model) is the primary AI; Anthropic is the automatic fallback |
 | v9.29 | An API key can be removed; a keyless user is told why scanning fails; error reporting has an off switch |
 | v9.28 | An event can be typed in by hand — the app's primary object no longer requires AI to exist; toast stopped covering the FAB |
@@ -164,6 +165,89 @@ declare; the file now goes as `.txt` / `text/plain`, byte-identical inside
 added beside **Save to Files** so a share sheet that will not list your mail
 app is never the only way out. All three routes now build through one
 `buildDiagnosticsFile()`, so they cannot drift apart.
+
+**v9.31 — the spending cap now explains itself.** Logan set up a capped
+Anthropic workspace key on 23 Aug, which makes hitting that cap a failure he can
+actually reach. Anthropic reports it as an **ordinary 400**
+(`invalid_request_error` "when usage reaches an organization or workspace spend
+limit you set"; `credit_balance_too_low` when the account is out of credit), so
+it landed in `request_rejected` and produced *"Something went wrong talking to
+Anthropic."* — useless advice for the one failure whose fix is a number on a web
+page.
+
+`spend_limit` is now its own class. The message is the instructions: raise it at
+console.anthropic.com under the workspace the key belongs to, or wait for the
+1st. And it says what still works — **since v9.30 Anthropic is the fallback, so
+a capped key means the safety net is out, not that the app is down.**
+
+Two things kept deliberately narrow. The match is on the response BODY, which
+`callClaude` already puts into the thrown message and into `detail` — and
+`credit_balance_too_low` is a confirmed error-type string while the exact
+spend-limit wording is not, so the phrase match is loose on purpose. **A miss
+falls through to the old generic class, never to a wrong one.** And an ordinary
+malformed-request 400 must NOT be read as a cap: a test asserts
+`max_tokens must be positive` still classifies as `request_rejected`, and a
+mutation that treats every 400 as a spend limit kills it. Blaming the user's
+spending cap for a bug in the app's own request would be worse than the generic
+message it replaces.
+
+**THE DIRECTION, RECORDED 23 AUG: GORDON SHIPS WITH THE APP, BEHIND A LOGIN.**
+Logan's plan is for the local model to stop being something each user configures
+and become something the app comes with — with a login screen so that not just
+anyone can use it. No code yet; the design constraints are in
+**SECURITY-PLAN.md §1a**, which had to be rewritten because this inverts its own
+§1.
+
+Three things worth knowing before anyone starts:
+
+1. **It makes "stopping strangers" a goal.** SECURITY-PLAN §1 recorded that it
+   was NOT one, and gave the reason: a stranger opening the public URL got an
+   empty app. Ship Gordon with it and a stranger gets Logan's GPU. The gate
+   stops being about data and becomes about compute.
+2. **The endpoint has no real auth today.** Three sites send
+   `Authorization: 'Bearer local'` — a hardcoded constant, the same in every
+   copy (`index.html:4064`, `:4112`, `:8334`). Safe only because the base URL is
+   a private Tailscale address; the URL's secrecy is the entire security model.
+3. **The scope was decided twice.** Logan first chose a HARD gate — nothing
+   before sign-in. Then he asked *"how would that work if I want to share this
+   with my kids so they can see their events?"*, and that reversed it. The
+   recorded design is now **gate Gordon, not the app**: the app opens for
+   anyone, sign-in unlocks scanning and Ask.
+
+   Why the kid question settles it: under a hard gate a child's session
+   expires, they open the app before school, and they get a login form instead
+   of their schedule. Under a Gordon gate their app always opens. The thing
+   being protected is compute; the thing a child needs is read-only. And if
+   accounts unlocked Gordon, every kid could spend the GPU — so kids want to be
+   read-only anyway, which is the same design reached from the other side.
+
+**The hard gate walks at the boot rule, and the resolution is specific.** The
+Firebase SDK cannot be inlined without a build step, so a naive gate makes it a
+BOOT dependency and the app goes blank when the CDN is unreachable — v8.1–v8.5
+in a new costume. It survives if the gate is on a **session** rather than on
+Firebase being reachable: boot renders the app's own sign-in screen from inlined
+code, asks one `localStorage` question (*is my session still valid?*), and
+fetches the SDK only for the sign-in itself — the one moment network is required
+anyway.
+
+**And sharing with the kids is a SYNC problem, not a login problem.** There is
+no sync — every install is an island of `localStorage`, so a child who installs
+the app today gets an empty one, signed in or not. What works now is Share
+Events (`index.html:6374`): tick events, send a calendar file, and it lands in
+the phone calendar they already use. No account, no sync, no login — and for
+younger kids that is probably the right permanent answer. A real read-only sync
+is P3, and the per-person filtering it would need already exists
+(`personIds`, `eventFilter`).
+
+> **The first step depends on none of this:** `Authorization: 'Bearer local'` is
+> a hardcoded constant at three sites. Replacing it with a per-device token is
+> small, useful on its own, and needs no login design to land first.
+
+Also worth noting: this reorders the plan. P1 (get the Anthropic key off the
+phone) was top because the key was the live exposure; it is now capped and
+Anthropic is only the fallback. **Shipping Gordon creates a new exposure that
+does not exist yet**, so when that work starts, auth is not P2 — it is the gate
+on the whole thing.
 
 **v9.30 — GORDON IS THE PRIMARY AI; ANTHROPIC IS THE FALLBACK.** Logan's
 decision, 23 Aug. The self-hosted Ollama model on his desktop is the intended
