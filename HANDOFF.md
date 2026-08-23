@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 23, 2026 · **Live version:** v9.26 · **Tests:** 536 passing
+**Updated:** August 23, 2026 · **Live version:** v9.26 · **Tests:** 537 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -171,6 +171,21 @@ is the source of truth and `index.html` is a build artifact.** Both sessions'
 drift and collision guards then proved the rebuild was complete — they fail the
 moment a `js/` file is present but not inlined, which is exactly the state
 `e867988` was committed in. **That commit does not pass its own test suite.**
+
+**`deploy.ps1` now catches this before the tests do.** Step 3 compares every
+changed file's mtime against the last commit's timestamp. A file you are about
+to commit whose contents predate the commit you are sitting on was written
+against a different base — so it almost certainly lacks what that commit added,
+and committing it reverts the difference. It refuses by name, lists the files
+with both timestamps, and says to merge at the `js/` layer rather than re-run.
+Verified by reproducing the incident in a scratch repo: session A writes at
+04:00, session B commits at 14:02, session A's deploy is refused.
+
+The guard's own test was wrong first: it asserted `LastWriteTimeUtc` and
+`git log --format=%cI` were present, and passed happily with the comparison
+replaced by `if ($false)`. It now pins `$m -lt $headStamp` itself. That is the
+third guard on this project to read the vocabulary around the logic instead of
+the logic — see CLAUDE.md rule 21.
 
 > **The rule, learned twice in one day:** one agent at a time per repo. If a
 > second one has to run, it must re-read the files from disk immediately before

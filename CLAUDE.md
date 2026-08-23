@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.26 · **Tests:** 536 passing (`node tests.js`)
+**Current version:** v9.26 · **Tests:** 537 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -204,12 +204,19 @@ having checked it.
    **`js/` is the source of truth and `index.html` is a build artifact**: merge
    at the `js/` layer and re-inline, never pick one `index.html` over another.
    A second session must re-read from disk immediately before writing.
-21. Run `node tests.js` before every deploy; add a regression test with every
+21. A GUARD THAT READS THE WORDS NEXT TO THE LOGIC IS NOT READING THE LOGIC.
+   The first version of the stale-build test asserted `LastWriteTimeUtc` and
+   `git log --format=%cI` were present — and passed with the comparison itself
+   replaced by `if ($false)`. Text guards on files the suite cannot execute
+   (`deploy.ps1`) must pin the OPERATIVE EXPRESSION, and every one of them must
+   be mutation-tested. Third time this project has shipped a guard that read
+   prose or vocabulary instead of code.
+22. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.
 
 ## Verification tooling
 
-- `node tests.js` — 536 tests: data safety, migrations, inline-handler
+- `node tests.js` — 537 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.

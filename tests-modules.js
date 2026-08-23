@@ -2697,6 +2697,28 @@ module.exports = async function runModuleTests(test){
     assert.ok(!/\|\?\?|\?\s*:\s*\$/.test(psCode), 'ternary and ?? are 7.x only');
   });
 
+  test('it refuses a build older than the commit it would sit on', () => {
+    // The two-session collision, 23 Aug. The tests catch the RESULT of it (a
+    // js/ file present but not inlined); this catches the CAUSE by name, and
+    // says what to do instead of "re-run and hope".
+    // These are TEXT assertions on a file `node tests.js` cannot execute, so
+    // they pin the operative line rather than merely the vocabulary around it.
+    // The first version of this test passed happily with the comparison
+    // replaced by `if ($false)` -- it was reading the words next to the logic
+    // instead of the logic. Same mistake as the guards that read a comment.
+    assert.ok(/\$m -lt \$headStamp/.test(psCode),
+      'the staleness comparison itself is gone, whatever else remains');
+    assert.ok(/LastWriteTimeUtc/.test(psCode), 'no mtime is read');
+    assert.ok(/git log -1 --format=%cI/.test(psCode), 'does not read the commit time');
+    assert.ok(/Stop-Here "Stale build refused/.test(psCode),
+      'a stale build is detected and then not refused');
+    assert.ok(/OLDER than the last commit/.test(psCode), 'the refusal does not say why');
+    assert.ok(/Test-Path \$f/.test(psCode),
+      'a staged deletion has no mtime and would crash the check');
+    assert.ok(/merge at the js\/ layer|Merge at the js\/ layer/i.test(psCode),
+      'refuses without saying how to recover');
+  });
+
   test('the tests gate the push, on BOTH the exit code and the printed summary', () => {
     assert.ok(/node.*tests\.js|"tests\.js"/.test(psCode), 'never runs the tests');
     assert.ok(/0 failed/.test(psCode), 'does not check the summary line');

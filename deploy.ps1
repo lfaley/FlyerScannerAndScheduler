@@ -12,6 +12,8 @@
 #   * the tests do not end "N passed, 0 failed"
 #   * index.html changed but APP_VERSION did not   <- installed phones would
 #   * APP_VERSION moved but sw.js CACHE did not    <- keep the old app forever
+#   * a changed file is OLDER than the last commit  <- another session wrote
+#     it against a different base; committing it reverts what that commit added
 #   * gmail-watcher.gs changed and nobody re-pasted it at script.google.com
 #   * the push succeeded but the live site never picked it up
 #
@@ -125,7 +127,47 @@ if ($all -notcontains "index.html") {
 }
 
 # ---------------------------------------------------------------------------
-Step 3 "Tests"
+Step 3 "Is this build newer than the last commit?"
+# ---------------------------------------------------------------------------
+# 23 Aug 2026: two agent sessions wrote to this folder within minutes of each
+# other. Each had its own working copy, neither could see the other's, and each
+# overwrote index.html with a build made from its own base. The deploy passed at
+# 529 tests, then failed at 486 with three drift errors and no edit in between,
+# because the files underneath had changed. Two commits both called themselves
+# v9.25.
+#
+# The tests catch the RESULT (a js/ file present but not inlined). This catches
+# the CAUSE, earlier and by name: a file you are about to commit whose contents
+# are older than the commit you are committing on top of was written against a
+# different base, and almost certainly does not contain what is already in HEAD.
+$headTime = git log -1 --format=%cI
+if ($headTime) {
+  $headStamp = [datetime]::Parse($headTime).ToUniversalTime()
+  $stale = @()
+  foreach ($f in $all) {
+    if (-not (Test-Path $f)) { continue }        # a deletion has no mtime
+    $m = (Get-Item $f).LastWriteTimeUtc
+    if ($m -lt $headStamp) { $stale += ("{0}  (written {1}, HEAD is {2})" -f $f, $m.ToString("HH:mm:ss"), $headStamp.ToString("HH:mm:ss")) }
+  }
+  if ($stale.Count) {
+    Write-Host ""
+    Bad "These files are OLDER than the last commit:"
+    foreach ($x in $stale) { Bad "  $x" }
+    Write-Host ""
+    Warn "Something committed after these were written -- another agent session,"
+    Warn "another window, or a git operation. Committing them would silently"
+    Warn "revert whatever that commit added."
+    Warn ""
+    Warn "Do NOT just re-run. Merge at the js/ layer and re-inline index.html:"
+    Warn "  git log --oneline -3"
+    Warn "  git diff HEAD -- <file>"
+    Stop-Here "Stale build refused."
+  }
+  Ok "every changed file is newer than $(git log -1 --format=%h) ($($headStamp.ToString('HH:mm:ss')) UTC)"
+}
+
+# ---------------------------------------------------------------------------
+Step 4 "Tests"
 # ---------------------------------------------------------------------------
 Say "node tests.js"
 
@@ -168,7 +210,7 @@ if ($exit -ne 0) { Stop-Here "Tests printed '$summary' but node exited $exit." }
 Ok $summary
 
 # ---------------------------------------------------------------------------
-Step 4 "The part no script can do for you"
+Step 5 "The part no script can do for you"
 # ---------------------------------------------------------------------------
 if ($all -contains "gmail-watcher.gs") {
   Warn "gmail-watcher.gs changed - it does NOT deploy with this push."
@@ -182,7 +224,7 @@ if ($all -contains "gmail-watcher.gs") {
 }
 
 # ---------------------------------------------------------------------------
-Step 5 "Commit and push"
+Step 6 "Commit and push"
 # ---------------------------------------------------------------------------
 if (-not $Message) {
   if ($version) { $Message = $version } else { $Message = "update" }
@@ -218,7 +260,7 @@ if ($LASTEXITCODE -ne 0) {
 Ok "pushed to $branch"
 
 # ---------------------------------------------------------------------------
-Step 6 "Did it actually go live?"
+Step 7 "Did it actually go live?"
 # ---------------------------------------------------------------------------
 # A green push is not a deploy. Pages builds afterwards and can lag or fail;
 # without this, the first sign of trouble is the phone quietly showing the old
