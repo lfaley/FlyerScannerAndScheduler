@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 23, 2026 · **Live version:** v9.26 · **Tests:** 537 passing
+**Updated:** August 23, 2026 · **Live version:** v9.27 · **Tests:** 541 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -77,6 +77,9 @@ stale and named three files that are not here):
 | **SECURITY-PLAN.md** | **ON HOLD** pending the admin console. §3 findings still valid. |
 | **ADMIN-CONSOLE-CONTRACT.md** | What FlyerSnap exposes to the console being built. |
 | **ERROR-REPORTING-PLAN.md** | The Firestore problem-backlog design that shipped in v9.24. |
+| **ERROR-LOGGING-HANDOFF.md** | Written by the Admin Console session, 23 Aug. The three-app arrangement and the rules for agents touching it. Not authoritative — see below. |
+| **ERROR-LOGGING-FINDINGS.md** | This session's reply to it: two findings. **Both accepted.** |
+| **ERROR-LOGGING-RULINGS-REPLY.md** | The Admin Console session's rulings on those findings, and the authorisation for the v9.27 change. |
 | **GMAIL-WATCHER-SETUP.md** | Apps Script setup for the watcher. |
 | **DEPLOY.md** | Historical one-time GitHub Pages setup. |
 
@@ -126,6 +129,7 @@ a per-version progress log.
 | v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — `js/errorReport.js` + ERROR-REPORTING-PLAN.md |
 | v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
 | v9.24 | Diagnostics share as text so Gmail appears; the fallback toast stopped blaming Anthropic |
+| v9.27 | Automatic error reports are diagnostics-only — the email subject stops leaving the device (ruling 2026-08-23) |
 | v9.26 | The app measures the local context window and plans against it; thinking actually turned off; router scorer stopped failing names the app resolves; refusals say why; a wrong-day event is no longer called a hallucination; self-test collapses |
 
 **v9.24 — two bugs that were both about wording.** Logan reported "multiple
@@ -152,6 +156,88 @@ declare; the file now goes as `.txt` / `text/plain`, byte-identical inside
 added beside **Save to Files** so a share sheet that will not list your mail
 app is never the only way out. All three routes now build through one
 `buildDiagnosticsFile()`, so they cannot drift apart.
+
+**THE SHARED DATABASE IS NOW REAL, AND IT IS GROWING INTO SIGN-IN.**
+`ERROR-LOGGING-HANDOFF.md` (Admin Console session, 23 Aug) documents what
+FlyerSnap joined in v9.24: the `errorReports` collection in the recipe app's
+Firestore project `meal-planner-f7f2f`. Three apps write to it, Logan reads it
+in the Admin Console's Logs tab under a `flyersnap` badge, and the same database
+is expected to carry **sign-in** later.
+
+**Where authority lives, because it is not here.** The contract is
+`ERROR-LOGGING-STANDARD.md` in `C:\Users\Logan\Desktop\Repos\AdminConsole`.
+The Firestore rules are in the RECIPE APP's repo. This repo holds an
+implementation and a summary. A shape change made here that the standard does
+not know about fails as a **403 on a user's phone**, silently — the outbox
+treats 403 as permanent and drops the report.
+
+Verified against the caps that doc states (anyone may create; ≤24 keys; message
+≤4000): a maximal FlyerSnap report is **13 keys**, and `redact()` caps `message`
+at **400** characters. Both have wide margin. This also settles a question
+SECURITY-PLAN.md left open — the anonymous-create posture is now documented, if
+still not read from the rules file itself.
+
+### Two places that doc and the code disagree
+
+Both verified by running the code, not by reading it.
+
+1. **`occurrenceCount` can never be sent.** ACCEPTED; the console now counts by
+   `fingerprint` and shows a ×N badge per bug group. **No FlyerSnap change was
+   wanted** — threshold re-queues were explicitly rejected, and the field stays
+   optional and advisory. The doc lists it in the report
+   shape. `logProblem` queues a report only in the `else` branch for a NEW
+   problem (`index.html:5824`), where `count` is always 1; `toReportDoc` sets
+   the field only `if(problem.count > 1)` (`js/errorReport.js:78`). A repeat
+   increments `hit.count` and never re-queues — and the deterministic
+   `reportId` means a later delivery would 409 anyway. **A bug that recurs 50
+   times reports as one occurrence, forever.**
+
+2. **"no event content, ever" is not what ships.** `index.html:6221` sets
+   `label` to the email's subject line, and `:6236`/`:6240`/`:6245` pass it as
+   `logProblem`'s `detail`, which becomes the report's `description`. `redact()`
+   scrubs API keys and email addresses only, so the SENDER is redacted and the
+   SUBJECT is not. Run against a realistic school email, what leaves the device
+   is:
+
+   ```
+   message    : Email: [redacted]: No dates found in this email
+   description: Braelyn's Field Trip Permission Slip - Maple Elementary
+   ```
+
+   A child's name and school, posted automatically to a shared database, with
+   no opt-out UI (`S.settings.errorReportsOff` is read at `index.html:5872` and
+   `:5889` and assigned nowhere — the handoff doc notes this is deliberate,
+   since adding one touches the settings-hub tests). The local Problem Log and
+   the diagnostics file carry the same text, but those are shared one tap at a
+   time, by Logan, to a recipient he picks.
+
+   **RESOLVED in v9.27.** Raised in the AdminConsole repo first, per Logan;
+   both findings were accepted and the standard now records them
+   (`ERROR-LOGGING-RULINGS-REPLY.md`).
+
+   **The ruling: every field of an AUTOMATIC report is diagnostics-only.**
+   Third-party or processed content never leaves the device automatically;
+   `description` is for model names and status codes, never for the thing being
+   processed. A deliberately user-filed report is the exception, on the one-tap
+   consent model — FlyerSnap has no such path, so nothing is exempt.
+
+   Implemented at the boundary, not the call sites, so the split is:
+
+   | | email subject |
+   |---|---|
+   | Automatic Firestore report | **withheld** |
+   | Local Problem Log | kept — it is the only thing saying WHICH email failed |
+   | Diagnostics file | kept — shared one tap at a time, by Logan |
+
+   Verified through the real `logProblem` → outbox path in a browser: two
+   problems queued, no name or school in the payload, `qwen3-vl:8b-instruct-q8_0`
+   still present.
+
+   **The question I could not answer from here was the important one.** The
+   recipe app had the same exposure *and wider* — its click-tracker recorded
+   button labels verbatim (recipe titles, list items) and shipped them in
+   `actionTrail` on every automatic report. Fixed on that side the same day.
+   Asking beat assuming: one app's bug was three apps' bug.
 
 **TWO AGENT SESSIONS WERE EDITING THIS REPO AT ONCE, and it cost two rebuilds.**
 On 23 Aug both a Cowork session and a second Claude session wrote to

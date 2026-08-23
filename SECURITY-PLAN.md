@@ -7,6 +7,17 @@
 > Tailwind's token layer would invert the theme) stay valid and are worth
 > reading before the console is designed. See **ADMIN-CONSOLE-CONTRACT.md**
 > for what FlyerSnap exposes to a console.
+>
+> **Updated 23 Aug (v9.26).** Part of this is no longer hypothetical. FlyerSnap
+> has been writing to the shared Firestore project `meal-planner-f7f2f` since
+> v9.24 (`errorReports`), and per `ERROR-LOGGING-HANDOFF.md` that same database
+> is expected to carry **sign-in**. So §4's P2 is no longer "adopt Firebase" —
+> the project, the anonymous-create posture and the three-app arrangement are
+> already in production. What is still true and still unbuilt: the SDK must load
+> **lazily** (§3.5), email+password is the only sign-in that works in an
+> installed iOS PWA (§3.2), and both apps share an origin so one sign-in covers
+> both (§3.3). Open question 3 is now partly answered — the two apps already
+> share a Firestore project, so their security is already coupled.
 
 **Written:** August 22, 2026 · **Against build:** v9.17 · **Sequence:** Research → Plan → Scaffold → Code → Verify
 

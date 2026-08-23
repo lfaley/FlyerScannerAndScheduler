@@ -1,6 +1,6 @@
 # FlyerSnap — a walkthrough for whoever builds the admin console
 
-**Written:** August 22, 2026 · **Against build:** v9.18 · **Revised:** v9.25 · **Purpose:** so the
+**Written:** August 22, 2026 · **Against build:** v9.18 · **Revised:** v9.27 · **Purpose:** so the
 admin console can be designed against what FlyerSnap actually does, not against
 an assumption about it.
 
@@ -60,6 +60,7 @@ Exactly three outbound destinations, plus one that deserves its own note.
 | 2 | `<localBaseUrl>/chat/completions` | `index.html:3403` | the same content, to the self-hosted model |
 | 3 | `<localBaseUrl>/models` | `index.html:7162` | nothing; a capability check |
 | 4 | `<localBaseUrl>/../api/ps` | v9.25, `probeLocalContext()` | nothing; asks the local server how big a context window it allocated. Best-effort — any failure reads as "unknown" and changes nothing |
+| 5 | `firestore.googleapis.com/v1/projects/meal-planner-f7f2f/.../errorReports` | v9.24, `flushErrorReports()` | one problem-log entry per NEW problem: `where`/`message`/`detail` through `redact()`, app version, URL, user agent. **No SDK, nothing at boot**, localStorage outbox, offline-safe |
 
 **Plus the Gmail watcher, which is JSONP, not `fetch`** (`index.html:4949-4955`).
 It injects a `<script>` pointing at the Apps Script URL with the token in the
@@ -127,6 +128,37 @@ exclude prompt bodies because they "routinely contain names, emails, account
 numbers" — and here the prompts *are* children's names, schools and schedules.
 `redact()` scrubs error strings. **If the admin console ever wants prompt
 content, that is a new decision, not an extension of this one.**
+
+### 6.1b The shared `errorReports` collection — THIS REPO IS NOT THE AUTHORITY
+
+FlyerSnap is one of three writers to `errorReports` in the recipe app's project
+`meal-planner-f7f2f`. The console reads it; FlyerSnap only creates.
+
+- **Contract:** `ERROR-LOGGING-STANDARD.md` in the AdminConsole repo.
+- **Rules:** in the RECIPE APP's repo — anyone may CREATE a shape-valid report
+  (**≤24 keys, message ≤4000**), only the admin may read or manage. Read from
+  `firestore.rules` and confirmed 23 Aug: `isValidErrorReport` requires
+  reportId/type/message strings and `data.keys().size() <= 24`; anonymous
+  `create` only; admin-only read/list/update/delete; deny-by-default elsewhere.
+- **What FlyerSnap actually sends:** 13 keys at most — `reportId`, `createdAt`,
+  `type`, `message`, `app`, `appVersion`, `severity`, `fingerprint`,
+  `standalone`, `url`, `userAgent`, plus `description` when a detail exists and
+  `occurrenceCount` when the count exceeds 1. Both caps have wide margin;
+  `redact()` holds `message` to 400 characters.
+- **`description` is withheld for email problems** (v9.27, ruling 2026-08-23).
+  An automatic report is diagnostics-only, so a problem whose `where` starts
+  `Email:` sends no `description` at all. The console should expect that field
+  to be absent, not empty. The subject line stays in the phone's Problem Log and
+  in the diagnostics file, both of which Logan shares deliberately.
+- **`occurrenceCount` never arrives in practice** — reports are queued only for
+  a NEW problem, when the count is 1. A console that groups by it will see
+  every report as a single occurrence. Group by `fingerprint` instead.
+- **`reportId` is deterministic per problem**, so a redelivery 409s and dedups
+  server-side. The console should expect 409 to mean "already have it", not an
+  error.
+- **A shape change made in this repo alone fails as a 403 on a phone**, and the
+  outbox treats 403 as permanent and drops the report. Additive only,
+  coordinated through the standard.
 
 ### 6.2 `flyersnap-diagnostics-<date>.json`
 

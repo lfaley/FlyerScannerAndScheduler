@@ -3195,6 +3195,68 @@ module.exports = async function runModuleTests(test){
     assert.ok(u.indexOf('/documents/errorReports?documentId=fs-1') !== -1, u);
   });
 
+  test('an automatic report never carries what the app was PROCESSING', () => {
+    // RULING 2026-08-23 (ERROR-LOGGING-STANDARD.md §6, ERROR-LOGGING-RULINGS-REPLY.md):
+    // every field of an automatic report is DIAGNOSTICS-ONLY. The case that
+    // forced it: the Gmail watcher passes the email SUBJECT as logProblem's
+    // `detail` (index.html:6221 -> :6236/:6240/:6245), so a child's name and
+    // school were reaching the shared database. redact() scrubs API keys and
+    // email ADDRESSES only, so the sender was covered and the subject was not.
+    const doc = er.toReportDoc({
+      id:'x', where:'Email: office@mapleelementary.org',
+      message:'No dates found in this email',
+      detail:"Braelyn's Field Trip Permission Slip - Maple Elementary",
+      first:'2026-08-23T02:00:00Z', count:1 }, { version:'v9.27' });
+    const json = JSON.stringify(doc);
+    assert.strictEqual(doc.description, undefined, 'the subject line is still sent');
+    assert.ok(!/Braelyn|Maple/.test(json), 'processed content reached the report: ' + json);
+    // The sender must still be scrubbed by redact() -- this guard is IN ADDITION
+    // to that, not a replacement for it.
+    assert.ok(!/office@/.test(json), 'the sender address is no longer redacted');
+  });
+
+  test('...but diagnostics still travel, or the reports become useless', () => {
+    // The failure mode on the other side of the ruling: withholding everything
+    // would satisfy the privacy rule and leave Logan unable to tell WHICH model
+    // or WHICH screen failed. Every non-email call site must keep its detail.
+    const keep = [['Local model', 'qwen3-vl:8b-instruct-q8_0'],
+                  ['Scanning', 'recipe box'],
+                  ['App', 'TypeError: x is not a function'],
+                  ['Assistant', 'router timeout']];
+    keep.forEach(([where, detail]) => {
+      const d = er.toReportDoc({ id:'x', where, message:'m', detail,
+        first:'2026-08-23T02:00:00Z', count:1 }, {});
+      assert.strictEqual(d.description, detail, where + ' lost its diagnostics');
+    });
+  });
+
+  test('the "Email:" prefix is pinned on BOTH sides, because it is a convention', () => {
+    // My own caveat, which the ruling required be tested: the guard keys on a
+    // string prefix rather than a type, so renaming it in index.html would stop
+    // the guard firing SILENTLY. Pin the classifier AND the call sites that
+    // depend on it -- either half drifting has to fail the build.
+    assert.strictEqual(er.isThirdPartyContent('Email: someone@x.com'), true);
+    assert.strictEqual(er.isThirdPartyContent('Email: unknown'), true);
+    assert.strictEqual(er.isThirdPartyContent('Local model'), false);
+    assert.strictEqual(er.isThirdPartyContent(''), false);
+    assert.strictEqual(er.isThirdPartyContent(null), false);
+
+    // ...and the watcher must still be producing that exact prefix.
+    const src = fs.readFileSync('index.html', 'utf8').replace(/\/\/[^\n]*/g, '');
+    const sites = src.match(/logProblem\(\s*'Email: '/g) || [];
+    assert.ok(sites.length >= 3,
+      'the watcher no longer labels problems "Email: ..." -- the content guard ' +
+      'is now dead and nothing else would have noticed. Found ' + sites.length);
+  });
+
+  test('the guard is one rule in one place, not a condition sprinkled about', () => {
+    // A second content source must be added to isThirdPartyContent, not as
+    // another `if` further down -- otherwise the next one gets missed.
+    const fn = er.toReportDoc.toString();
+    assert.ok(/isThirdPartyContent/.test(fn),
+      'toReportDoc no longer routes through the single classifier');
+  });
+
   test('logProblem queues a remote report for a NEW problem (guard reads code, not comments)', () => {
     const src = fs.readFileSync('index.html', 'utf8');
     const m = src.match(/function logProblem\([\s\S]*?\n\}/);

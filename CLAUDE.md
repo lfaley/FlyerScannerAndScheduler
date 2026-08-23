@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.26 · **Tests:** 537 passing (`node tests.js`)
+**Current version:** v9.27 · **Tests:** 541 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -216,7 +216,7 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 537 tests: data safety, migrations, inline-handler
+- `node tests.js` — 541 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -435,7 +435,42 @@ also queued to the shared Firestore `errorReports` collection (the recipe
 app's project), where the ADMIN CONSOLE lists it under a `flyersnap` badge.
 Report ids lead with an INVERTED 13-digit timestamp so the Firebase data
 browser (which lists by id ascending) shows newest first — same scheme in all
-three apps. Delivery is a plain `fetch` POST to the Firestore REST API — no SDK, nothing
+three apps.
+
+**THIS IS A THREE-APP ARRANGEMENT, AND THIS REPO IS NOT ITS AUTHORITY.** The
+collection is `errorReports` in the recipe app's project `meal-planner-f7f2f`;
+the Firestore rules live in the RECIPE APP's repo; the contract lives in
+`ERROR-LOGGING-STANDARD.md` in `C:\Users\Logan\Desktop\Repos\AdminConsole`;
+this repo's participation is summarised in `ERROR-LOGGING-HANDOFF.md` and
+planned in `ERROR-REPORTING-PLAN.md`. The rules allow ANYONE to create a
+shape-valid report — **≤24 keys, message ≤4000 chars** — and only Logan to read
+or manage. (Read from `firestore.rules` by the Admin Console session and
+confirmed: `isValidErrorReport` requires reportId/type/message strings,
+`data.keys().size() <= 24`; anonymous `create` only, admin-only
+read/list/update/delete, deny-by-default elsewhere.) Measured against the cap: a maximal FlyerSnap report is **13 keys**,
+and `redact()` caps `message` at **400** chars, so both limits have wide margin.
+Consequences for anyone editing this:
+
+- **AN AUTOMATIC REPORT IS DIAGNOSTICS-ONLY** (ruling 2026-08-23,
+  `ERROR-LOGGING-STANDARD.md` §6). Model names, status codes and versions: yes.
+  The thing the app was PROCESSING: never, not automatically. A deliberately
+  user-filed report is the one exception, on the one-tap consent model —
+  FlyerSnap has no such path today, so nothing is exempt. `redact()` does NOT
+  give you this for free: it scrubs API keys and email ADDRESSES only, so the
+  Gmail watcher's `where` was covered and the email SUBJECT it passed as
+  `detail` was not. `toReportDoc` routes every detail through
+  `isThirdPartyContent(where)`; **a new content source is added to THAT
+  function**, never as a second condition somewhere else.
+- **Shape changes are ADDITIVE ONLY**, and coordinated through the standard doc
+  — the server-side cap is enforced from a repo that is not this one, so a
+  breaking change here fails silently as a 403 on a user's phone.
+- **New failure paths belong in `logProblem`**, the single funnel. Remote
+  reporting then happens for free; a bespoke reporting path bypasses the
+  privacy rule, the outbox and the guards.
+- **The reporter must NEVER call `logProblem`** — a failing reporter reporting
+  itself is a loop. Everything in that section is try/catch-silent.
+- The database is expected to carry **sign-in** later, not just error reports.
+  Anything done to it now should assume that. Delivery is a plain `fetch` POST to the Firestore REST API — no SDK, nothing
 at boot (rule 4 holds), localStorage outbox (`flyersnap-error-outbox`) so a
 killed page still leaves a record, delivered next launch. Text passes through
 `redact()` — the AI-log privacy rule applies unchanged: no event content, no

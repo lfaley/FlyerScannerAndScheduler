@@ -53,6 +53,21 @@ export function newestFirstId(kind, now, rand){
 }
 
 /**
+ * Does this problem's `detail` carry something the app was PROCESSING rather
+ * than something about the app itself?
+ *
+ * Keyed on the `where` prefix, which is a string convention rather than a type
+ * (`logProblem('Email: ' + sender, ...)`), so renaming that prefix would
+ * silently stop the guard from firing. A test pins both halves: the prefix and
+ * the withholding. Named and exported so the rule is one thing in one place --
+ * a second content source gets added HERE, not as a second condition somewhere
+ * further down.
+ */
+export function isThirdPartyContent(where){
+  return /^Email:/.test(String(where || ''));
+}
+
+/**
  * One Problem Log entry -> one v2-contract report document (plain object).
  * ctx carries the environment: { version, url, userAgent, standalone }.
  */
@@ -74,7 +89,27 @@ export function toReportDoc(problem, ctx){
     url: String(c.url || ''),
     userAgent: String(c.userAgent || '').slice(0, 500),
   };
-  if(problem.detail) docOut.description = redact(String(problem.detail)).slice(0, 400);
+  // RULING 2026-08-23 (ERROR-LOGGING-STANDARD.md §6, via ERROR-LOGGING-RULINGS-REPLY.md):
+  // every field of an AUTOMATIC report is DIAGNOSTICS-ONLY. Third-party or
+  // processed content never leaves the device automatically; `description` is
+  // for model names and status codes, never for the thing being processed.
+  // A deliberately user-filed report is the exception, on the one-tap consent
+  // model -- FlyerSnap has no such path today, so nothing here is exempt.
+  //
+  // The case that forced the ruling: the Gmail watcher passes the email SUBJECT
+  // as logProblem's `detail` (index.html:6221, used at :6236/:6240/:6245), so
+  // "Braelyn's Field Trip Permission Slip - Maple Elementary" was reaching the
+  // shared database. redact() scrubs API keys and email ADDRESSES only, so the
+  // sender was redacted and the subject was not. The recipe app had the same
+  // exposure and wider (button labels in actionTrail); fixed there the same day.
+  //
+  // Withheld here at the BOUNDARY rather than at the three call sites, so the
+  // subject still reaches the local Problem Log -- where it is the only thing
+  // identifying WHICH email failed -- and the diagnostics file, which Logan
+  // shares one tap at a time to a recipient he picks.
+  if(problem.detail && !isThirdPartyContent(problem.where)){
+    docOut.description = redact(String(problem.detail)).slice(0, 400);
+  }
   if(problem.count > 1) docOut.occurrenceCount = problem.count;
   return docOut;
 }
