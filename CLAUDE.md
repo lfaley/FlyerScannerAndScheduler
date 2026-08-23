@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.25 · **Tests:** 489 passing (`node tests.js`)
+**Current version:** v9.26 · **Tests:** 536 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -28,7 +28,8 @@ synced copies, and **tests fail the build if they drift**:
 - `js/format.js`, `js/matching.js`, `js/prompts.js`, `js/migrate.js`,
   `js/icons.js`, `js/conflicts.js`, `js/intents.js`, `js/router.js`,
   `js/assistant-actions.js`, `js/ai-actions.js`, `js/conversation.js`,
-  `js/theme.js`, `js/ailog.js`, `js/errorReport.js` — pure logic modules,
+  `js/theme.js`, `js/ailog.js`, `js/errorReport.js`, `js/local-limits.js` —
+  pure logic modules,
   individually tested. Inlined by hand
   into index.html's script (guard: "the inlined copies match js/ exactly").
 - `css/tokens.css` (all design tokens, light + dark), `css/components.css` —
@@ -140,16 +141,79 @@ having checked it.
    outside the dispatch and silently does nothing, leaving the app permanently
    stale with no error anywhere. The handler must never be `async`.), and the iOS 26 short-viewport
    bug (nav::after paints white below the nav on purpose).
-12. Run `node tests.js` before every deploy; add a regression test with every
+12. iOS filters the SHARE SHEET BY FILE TYPE. A `File` typed
+   `application/json` is offered to almost nothing — Gmail among the apps that
+   never declare it — and the sheet looks broken rather than picky (v9.24:
+   "the export only has Outlook as an option"). Ship anything meant to be
+   emailed as `text/plain` with a `.txt` name; the bytes are unchanged and
+   `tools/diagnostics.js` parses by content, never extension. Always offer a
+   **Copy** route as well: a share sheet that will not list the user's mail app
+   must not be the only way out.
+13. WORDING OF FALLBACK MESSAGES IS A CORRECTNESS PROBLEM. "Local model
+   unavailable — using Anthropic" produced a bug report saying Anthropic could
+   not be reached, on runs where Anthropic answered every time. Lead with the
+   outcome, name the thing that failed second, and never put a working
+   provider's name next to the word that describes the failure.
+14. THE LOCAL MODEL'S CONTEXT WINDOW IS NOT OURS TO SET, so the app measures
+   it instead (`js/local-limits.js`, v9.25). Ollama defaults to **4096 tokens**
+   on any machine with under 24 GiB of VRAM, a flyer prompt measures ~2,300,
+   and this app asks for up to 4,000 of answer — so the request was nearly
+   double the window and could not have succeeded from any model. Ollama's own
+   OpenAI-compatibility docs say *"the OpenAI API does not have a way of
+   setting context size"*, so `num_ctx` must never be sent on `/v1`; detect via
+   `/api/ps`, clamp the ask to what is left, and name `OLLAMA_CONTEXT_LENGTH`
+   in the message. **A detection failure must always read as "unknown" and
+   change nothing** — a probe that can ground a working call is worse than no
+   probe.
+15. ON `/v1/chat/completions`, THINKING IS DISABLED BY `reasoning_effort`,
+   NOT BY `think`. `think` is a native `/api/chat` field and is absent from
+   Ollama's supported-field list for the OpenAI endpoint, so it was silently
+   ignored on every call this app ever made — which is why a thinking model
+   kept thinking with `think:false` sitting in the request. Keep sending
+   `think` and `chat_template_kwargs` for native proxies; they are free.
+16. A BENCHMARK THAT CRIES WOLF GETS IGNORED. The router scorer compared
+   entity names with string equality while the app resolves them by
+   containment (`resolveEntity`), so "the bins" for a chore called "Bins"
+   scored as a failure. Seven of eight parameter failures in Logan's first q8
+   run were the scorer, not the model — 56% reported where 76% was true. Score
+   a parameter the way the app CONSUMES it, and prove the loosened rule can
+   still fail (`namesSameThing` rejects a value that is the whole sentence).
+17. A REFUSAL MUST SAY WHY. `validateRoute` rejects for four distinct
+   reasons and they need four distinct fixes; `unknown` alone cannot tell them
+   apart. `scoreCase` carries `why`, `summarise` groups it as
+   `byRefusalReason`, and both the export and the results screen show it.
+18. DEPLOY WITH `.\deploy.ps1 "what changed"`, not by hand. It gates on the
+   tests, refuses a push where `index.html` changed without `APP_VERSION`
+   moving or `APP_VERSION` moved without `sw.js` `CACHE` moving, stops for
+   `gmail-watcher.gs`, and polls the live URL afterwards — a green push is not
+   a deploy. `-DryRun` checks everything and pushes nothing. Written for
+   PowerShell **5.1**; guard tests forbid `&&`, `Invoke-WebRequest`, and
+   `$ErrorActionPreference = "Stop"` in it, because none of those fail on the
+   7.x that a test run would use.
+19. AN AGENT'S WORKING COPY IS NOT THE REPO. v9.25 was built on a copy that
+   predated `dd75b80`, so its `index.html` had no inlined `errorReport.js` and
+   writing it over the repo would have silently removed a shipping feature.
+   Before dropping files in, diff against `HEAD`: **a file missing from the
+   copy looks exactly like a file that was deleted on purpose.** The drift and
+   collision guards caught this one — do not weaken them, and never "fix" them
+   by deleting the js/ file they are complaining about.
+20. ONE AGENT AT A TIME PER REPO. On 23 Aug two sessions wrote to this folder
+   within minutes; each overwrote the other's `index.html`, producing a deploy
+   that passed at 529 tests and then failed at 486 with no edit in between.
+   Two commits both called themselves v9.25. Recovery worked only because
+   **`js/` is the source of truth and `index.html` is a build artifact**: merge
+   at the `js/` layer and re-inline, never pick one `index.html` over another.
+   A second session must re-read from disk immediately before writing.
+21. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.
 
 ## Verification tooling
 
-- `node tests.js` — 482 tests: data safety, migrations, inline-handler
+- `node tests.js` — 536 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
-- `node tools/a11y-audit.js` — ALL 25 screens in the RENDERED DOM: accessible
+- `node tools/a11y-audit.js` — ALL 36 screens in the RENDERED DOM: accessible
   names, tap targets, ARIA state, horizontal overflow, exactly one `<h1>`.
   The source tests cannot see a name that computes to nothing at runtime;
   this found exactly that in v9.1, and a 24px back button in v9.15.

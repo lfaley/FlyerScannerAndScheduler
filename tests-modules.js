@@ -802,7 +802,86 @@ module.exports = async function runModuleTests(test){
       [EV({title:'Picture Day', date:'2026-09-10'})]);
     assert.strictEqual(r.matched, 0);
     assert.strictEqual(r.missed.length, 1);
-    assert.strictEqual(r.invented.length, 1, 'the wrong-day event counts as invented');
+    // The SCORE is unchanged -- a wrong day still costs precision and recall in
+    // full. What changed in v9.25 is only the NAME of the failure.
+    assert.strictEqual(r.precision, 0);
+    assert.strictEqual(r.recall, 0);
+    assert.strictEqual(r.misdated.length, 1, 'the wrong-day event is a date error');
+    assert.strictEqual(r.misdated[0].expectedDate, '2026-09-09',
+      'the report must say which day it should have been');
+    assert.strictEqual(r.invented.length, 0,
+      'calling this a hallucination overstates it -- the event was in the paperwork');
+  });
+
+  test('a misdated event is never allowed to soften the score', () => {
+    // The risk of naming this failure more precisely is that it starts to feel
+    // forgivable. It is not: this app exists to get dates right.
+    const wrongDay = sc.scoreExtraction(
+      [EV({title:'Picture Day', date:'2026-09-09'})],
+      [EV({title:'Picture Day', date:'2026-09-10'})]);
+    const missedEntirely = sc.scoreExtraction(
+      [EV({title:'Picture Day', date:'2026-09-09'})], []);
+    assert.strictEqual(wrongDay.f1, 0);
+    assert.ok(wrongDay.recall <= missedEntirely.recall,
+      'getting the day wrong must not score better than not finding it at all');
+  });
+
+  test('one absence can excuse only one stray copy', () => {
+    // A timetable repeats the same class on several days. Matching leftovers by
+    // title alone would let a single missing Ballet explain every stray Ballet,
+    // and real hallucinations would vanish into the misdated column.
+    const r = sc.scoreExtraction(
+      [EV({title:'Ballet', date:'2026-09-14'}), EV({title:'Ballet', date:'2026-09-15'})],
+      [EV({title:'Ballet', date:'2026-09-14'}), EV({title:'Ballet', date:'2026-09-16'}),
+       EV({title:'Ballet', date:'2026-09-17'})]);
+    assert.strictEqual(r.misdated.length, 1);
+    assert.strictEqual(r.invented.length, 1, 'the second stray is still unexplained');
+  });
+
+  test("Logan's grid failure is one shifted cell, not two failures", () => {
+    // schedule-grid, from the first q8 run. "Mini Jazz (Austin)" was read out
+    // of the Monday column into Tuesday's. Reported as 1 missed + 1 invented,
+    // under a headline calling invention the worst thing the app can do.
+    const r = sc.scoreExtraction(
+      [EV({title:'Ballet (Marla)', date:'2026-09-14', time:'09:00'}),
+       EV({title:'Mini Jazz (Austin)', date:'2026-09-14', time:'10:30'})],
+      [EV({title:'Ballet (Marla)', date:'2026-09-14', time:'09:00'}),
+       EV({title:'Mini Jazz (Austin)', date:'2026-09-15', time:'10:30'})]);
+    assert.strictEqual(r.invented.length, 0, 'nothing was invented');
+    assert.strictEqual(r.misdated.length, 1);
+    assert.strictEqual(r.matched, 1);
+  });
+
+  test('a real hallucination is still called one', () => {
+    // The guard against the split becoming an excuse. A title that appears
+    // nowhere in the paperwork has no missed event to explain it.
+    const r = sc.scoreExtraction(
+      [EV({title:'Picture Day', date:'2026-09-09'})],
+      [EV({title:'Pizza Party', date:'2026-09-09'})]);
+    assert.strictEqual(r.invented.length, 1);
+    assert.strictEqual(r.misdated.length, 0);
+  });
+
+  test('the screen and the export report a wrong day as its own thing', () => {
+    // The whole point of the split. If the UI keeps folding misdated into the
+    // invented headline, the scorer's new precision changes nothing that anyone
+    // actually reads.
+    const fn = script.split('function renderExtractionBench(')[1].split('\nfunction ')[0];
+    assert.ok(/on the wrong day/.test(fn), 'the screen never names a misdated event');
+    assert.ok(/r\.misdated/.test(fn), 'the per-case list does not show which ones');
+    assert.ok(/expectedDate/.test(fn), 'it does not say which day it should have been');
+    const ex = script.split('function exportExtractionBenchmark(')[1].split('\nfunction ')[0];
+    assert.ok(/misdated/.test(ex), 'the exported file drops it');
+  });
+
+  test('the aggregate reports the two separately', () => {
+    const rows = [
+      sc.scoreExtraction([EV({title:'A', date:'2026-09-09'})], [EV({title:'A', date:'2026-09-10'})]),
+      sc.scoreExtraction([EV({title:'B', date:'2026-09-09'})], [EV({title:'Zebra', date:'2026-09-09'})]),
+    ];
+    const agg = sc.aggregateExtraction(rows);
+    assert.strictEqual(agg.misdatedTotal, 1);
+    assert.strictEqual(agg.inventedTotal, 1);
   });
 
   test('an invented event is counted as invented, not merely as poor precision', () => {
@@ -2243,6 +2322,10 @@ module.exports = async function runModuleTests(test){
       [new Error('NO_API_KEY'), null, 'no_api_key'],
       [new Error('Could not read that document.'), null, 'bad_response'],
       [new Error('UNSUPPORTED_BLOCK:document'), null, 'unsupported_input'],
+      // Logan's exact failure, twice, from qwen3-vl:8b. This used to land in
+      // "unknown" -- the least useful thing a classifier can say about a
+      // failure it can name exactly.
+      [new Error('the model produced only reasoning and no answer'), null, 'thinking_only'],
       [null, 400, 'request_rejected'],
       [new Error('something new'), null, 'unknown'],
     ];
@@ -2253,6 +2336,22 @@ module.exports = async function runModuleTests(test){
 
   test('status beats message: a 429 is rate_limit even when the body says "error"', () => {
     assert.strictEqual(ailog.classifyError(new Error('error'), 429), 'rate_limit');
+  });
+
+  test('thinking_only names the fix, because the fix is not in the app', () => {
+    // Nothing FlyerSnap can do repairs this one: the remedy is a different
+    // model or a bigger token budget on the desktop. So the message has to
+    // carry it, or the user is told only that something went wrong.
+    // Verified against Logan's own Ollama server log, which reports
+    // `renderer=qwen3-vl-thinking` for the bare `qwen3-vl:8b` tag: the Thinking
+    // and Instruct editions are one tag apart, so the message must name the
+    // TAG. "Try a different model" would send him after the wrong thing.
+    const msg = ailog.explainError('thinking_only', 'local');
+    assert.ok(/thinking/i.test(msg), msg);
+    assert.ok(/qwen3-vl:8b-instruct/.test(msg),
+      'does not name the tag that actually fixes it: ' + msg);
+    assert.ok(/4096|context/i.test(msg),
+      'does not mention the context length, which was the other half: ' + msg);
   });
 
   test('an entry never carries prompt or answer text', () => {
@@ -2399,12 +2498,494 @@ module.exports = async function runModuleTests(test){
     assert.ok(!/JSON\.stringify\(S\)/.test(fn), 'the diagnostics file must never be the whole state');
   });
 
+  test('every route out of the phone builds the file the same way', () => {
+    // Share, Copy and Save must not be able to disagree about what
+    // "diagnostics" contains. One builder, three consumers.
+    ['shareDiagnostics', 'copyDiagnostics', 'exportDiagnostics'].forEach((name) => {
+      const fn = script.split('function ' + name + '(')[1].split('\nfunction ')[0];
+      assert.ok(/buildDiagnosticsFile\(\)/.test(fn), name + ' builds its own file');
+    });
+  });
+
+  test('the shared file is text/plain, because iOS filters the share sheet by type', () => {
+    // Logan's sheet offered Outlook and not Gmail. application/json is a type
+    // many mail apps never declare support for; text/plain is accepted almost
+    // everywhere, and the bytes inside are unchanged.
+    const fn = script.split('function shareDiagnostics(')[1].split('\nfunction ')[0];
+    const code = fn.replace(/\/\/[^\n]*/g, '');   // a guard that reads prose reads nothing
+    assert.ok(/type:\s*'text\/plain'/.test(code), 'the shared file is not text/plain');
+    assert.ok(!/type:\s*'application\/json'/.test(code), 'still shares as application/json');
+    assert.ok(/\.replace\(\/\\\.json\$\/,\s*'\.txt'\)/.test(code),
+      'the shared file still has a .json extension');
+  });
+
+  test('copy is offered as well as share, and cannot be reached only from a share sheet', () => {
+    assert.ok(/async function copyDiagnostics\(\)/.test(script), 'no copy function');
+    assert.ok(/onclick="copyDiagnostics\(\)"/.test(script), 'no button reaches it');
+    const fn = script.split('function copyDiagnostics(')[1].split('\nfunction ')[0];
+    assert.ok(/clipboard\.writeText/.test(fn), 'copy does not use the clipboard');
+    assert.ok(/catch/.test(fn) && /alert\(/.test(fn),
+      'a clipboard denied by the browser must say so, not fail silently');
+  });
+
+  test('the fallback toast names the outcome first, not the provider that failed', () => {
+    // THE BUG. "Local model unavailable — using Anthropic" was read on a phone
+    // as "Anthropic ... unavailable", and Logan reported Anthropic being
+    // unreachable on runs where the log shows it succeeding every time.
+    const code = script.replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/toast\([^)]*Local model unavailable/s.test(code),
+      'the toast that caused the false report is still shipping');
+    assert.ok(/Read by Anthropic instead/.test(code),
+      'the fallback toast does not lead with what actually happened');
+    // Whatever the wording becomes, the failing thing must not be the first
+    // name in the sentence.
+    for(const line of code.split('\n')){
+      if(!/toast\(/.test(line) || !/Anthropic/.test(line)) continue;
+      const m = line.match(/'([^']*Anthropic[^']*)'/);
+      if(m) assert.ok(!/^\s*(Local model|Anthropic)\b.*(unavailable|could not|failed)/i.test(m[1]),
+        'toast leads with the failure, not the outcome: ' + m[1]);
+    }
+  });
+
   test('the inlined copy of ailog.js has not drifted from the source', () => {
     const source = fs.readFileSync('./js/ailog.js', 'utf8');
     for(const m of source.matchAll(/export function (\w+)\(/g)){
       assert.ok(script.includes('function ' + m[1] + '('), 'not inlined: ' + m[1]);
     }
     assert.ok(script.includes("const AI_LOG_MAX = 200"), 'AI_LOG_MAX not inlined');
+  });
+
+  console.log('\nRouter scoring — entity names are resolved, not spelled (v9.25)');
+
+  const rs25 = await import('./js/route-score.js');
+
+  test('the scorer accepts what the app would resolve', () => {
+    // Every one of these is a real failure from Logan's first q8 run, and
+    // every one of them resolves correctly inside the app: resolveEntity
+    // matches by containment either way. Scoring them wrong measured the
+    // scorer, not the model.
+    const real = [
+      ['shopping', 'shopping list'],
+      ['Costco', 'Costco list'],
+      ['bins', 'the bins'],
+      ['bins', 'the bins chore'],
+      ['ice cream signup', 'the ice cream signup'],
+      ['dentist appointment', 'the dentist appointment'],
+    ];
+    real.forEach(([want, got]) =>
+      assert.ok(rs25.namesSameThing(want, got), `${want} vs ${got}`));
+  });
+
+  test('and still fails a value that names nothing in particular', () => {
+    // The guard against turning the scorer into a rubber stamp. This one WAS
+    // a genuine failure in the same run: an event parameter that is the whole
+    // sentence risks matching several events at once.
+    assert.ok(!rs25.namesSameThing('recital', 'Move the recital to the 12th'));
+    assert.ok(!rs25.namesSameThing('bins', 'dishes'));
+    assert.ok(!rs25.namesSameThing('bins', ''));
+    assert.ok(!rs25.namesSameThing('shopping', 'shopping list for the school trip'));
+  });
+
+  test('loosened scoring applies to entity names only, never to values', () => {
+    // A date or a time is not resolved by anything -- "the 12th" is either
+    // right or wrong -- so the loose rule must not reach them.
+    const meta = { consequenceOf: () => 'write', isDestructive: () => false };
+    const strict = rs25.scoreCase(
+      { id:'t', intent:'add_event', params:{ date:'2026-09-12' } },
+      { ok:true, intent:'add_event', params:{ date:'2026-09-12 or so' } }, meta);
+    assert.strictEqual(strict.wrongValue.length, 1,
+      'a fuzzy date must still be wrong');
+
+    const loose = rs25.scoreCase(
+      { id:'t', intent:'complete_chore', params:{ chore:'bins' } },
+      { ok:true, intent:'complete_chore', params:{ chore:'the bins' } }, meta);
+    assert.deepStrictEqual(loose.wrongValue, [], 'an entity name may carry filler');
+    assert.strictEqual(loose.pass, true);
+  });
+
+  console.log('\nSelf-test screen — long output can be shrunk (v9.25)');
+
+  // renderSelfTest is followed by an `async function`, so splitting on
+  // "\nfunction " alone runs straight past the end of it and reads the next
+  // function's code -- which is how the first version of these guards
+  // "found" a slice() that renderSelfTest does not contain.
+  const selfTestFn = () => {
+    const after = script.split('function renderSelfTest(')[1];
+    const ends = [after.indexOf('\nfunction '), after.indexOf('\nasync function ')]
+      .filter(i => i >= 0);
+    return after.slice(0, Math.min.apply(null, ends));
+  };
+
+  test('a long detail is clamped, a short one is left alone', () => {
+    const fn = selfTestFn();
+    assert.ok(/DETAIL_CLAMP_AT/.test(fn), 'no length threshold');
+    assert.ok(/clamp3/.test(fn), 'nothing is ever clamped');
+    // The control must be conditional. Offering "Show all 12 characters" on
+    // "200 OK" is a control that lies about having work to do.
+    assert.ok(/long\s*\?/.test(fn) || /long\s*&&/.test(fn),
+      'the expander is rendered unconditionally');
+  });
+
+  test('nothing is truncated permanently — the text is the diagnostic', () => {
+    // A self-test detail IS the error message. Hiding it for good would make
+    // the screen tidier and useless, so every clamp must be one tap from full.
+    const fn = selfTestFn();
+    assert.ok(!/\.slice\(0,\s*\d+\)/.test(fn), 'a detail is cut with slice() and cannot be recovered');
+    assert.ok(!/…'|\.\.\.'/.test(fn), 'an ellipsis suggests text that no control can reveal');
+    assert.ok(/toggleSelfTestDetail/.test(fn), 'no way to open a clamped detail');
+  });
+
+  test('the collapse state is indexed against the full list, not the filtered view', () => {
+    // Filtering to failures renumbers the visible rows. Keying the open-state
+    // by visible position would make hiding the passing checks silently open
+    // or close a DIFFERENT detail.
+    const fn = selfTestFn();
+    assert.ok(/selfTestResults\.map\(\(r, i\)/.test(fn),
+      'indexes are taken after filtering');
+    assert.ok(/\.filter\(x =>/.test(fn), 'the filter is not applied after indexing');
+  });
+
+  test('both controls announce their state to a screen reader', () => {
+    const fn = selfTestFn();
+    assert.ok(/aria-expanded=/.test(fn), 'the expander has no aria-expanded');
+    assert.ok(/aria-controls=/.test(fn), 'aria-expanded with nothing to control');
+    assert.ok(/aria-pressed=/.test(fn), 'the filter toggle has no pressed state');
+  });
+
+  test('the filter is only offered when it would do something', () => {
+    const fn = selfTestFn();
+    assert.ok(/if\(failed && pass\)/.test(fn),
+      'a "hide passing" control on an all-passing or all-failing run does nothing');
+  });
+
+  test('the view preference never reaches the save file', () => {
+    // It is one screen's state for one run. Putting it in S would migrate it,
+    // back it up, and ship it in the diagnostics export.
+    assert.ok(/^let selfTestOpen = \{\};$/m.test(script), 'not a module-level let');
+    assert.ok(!/S\.settings\.selfTest/.test(script), 'stored in app state');
+    assert.ok(!/selfTestFailsOnly.*localStorage|localStorage.*selfTestFailsOnly/.test(script));
+  });
+
+  test('the collapsed and filtered screens are both audited', () => {
+    const { SCREENS } = require('./tools/a11y-audit.js');
+    const keys = SCREENS.map(s => s.key);
+    assert.ok(keys.includes('selfTest'), 'the self-test screen is not audited');
+    assert.ok(keys.includes('selfTest-filtered'),
+      'the filtered list is a different DOM and needs its own audit row');
+    const filtered = SCREENS.find(s => s.key === 'selfTest-filtered');
+    assert.ok(/selfTestFailsOnly = true/.test(filtered.setup),
+      'the filtered row does not actually engage the filter');
+    const plain = SCREENS.find(s => s.key === 'selfTest');
+    assert.ok(/repeat\(/.test(plain.setup),
+      'the audit fixture has no detail long enough to clamp, so it never sees the control');
+  });
+
+  console.log('\ndeploy.ps1 — the one script nothing else can test (v9.25)');
+
+  const ps = fs.readFileSync('./deploy.ps1', 'utf8');
+  const psCode = ps.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+
+  test('it is written for Windows PowerShell 5.1, which is what Logan runs', () => {
+    // Every one of these has broken a deploy on this project before, and none
+    // of them can be caught by running the script on a newer PowerShell --
+    // 7.x accepts all three happily.
+    assert.ok(!/&&/.test(psCode), 'uses && , which 5.1 does not have');
+    assert.ok(!/Invoke-WebRequest/.test(psCode),
+      'Invoke-WebRequest without -UseBasicParsing raises an IE security prompt on 5.1');
+    assert.ok(!/ErrorActionPreference\s*=\s*"Stop"/.test(psCode),
+      'under Stop, one stderr line from a PASSING node run aborts the script');
+    assert.ok(!/\|\?\?|\?\s*:\s*\$/.test(psCode), 'ternary and ?? are 7.x only');
+  });
+
+  test('the tests gate the push, on BOTH the exit code and the printed summary', () => {
+    assert.ok(/node.*tests\.js|"tests\.js"/.test(psCode), 'never runs the tests');
+    assert.ok(/0 failed/.test(psCode), 'does not check the summary line');
+    assert.ok(/ExitCode|LASTEXITCODE/.test(psCode), 'does not check an exit code');
+  });
+
+  test('it refuses a release that would strand every installed phone', () => {
+    // The rule from CLAUDE.md: bump BOTH. Missing the CACHE bump leaves every
+    // installed phone on the old app with no error anywhere.
+    assert.ok(/APP_VERSION/.test(psCode), 'no version check');
+    assert.ok(/CACHE/.test(psCode), 'no service-worker cache check');
+  });
+
+  test('it names the live URL and the repo that actually exist', () => {
+    assert.ok(/lfaley\.github\.io\/FlyerScannerAndScheduler/.test(psCode));
+    assert.ok(/Repos\\FlyerSnap/.test(psCode), 'wrong repo path');
+    assert.ok(!/flyersnap-pwa/.test(psCode),
+      'points at the pre-move repo path, which is dead');
+  });
+
+  test('gmail-watcher.gs cannot ride along unnoticed', () => {
+    // It does not deploy with the push -- it has to be re-pasted at
+    // script.google.com -- and a silent deploy is how the watcher ends up a
+    // version behind the app that talks to it.
+    assert.ok(/gmail-watcher\.gs/.test(psCode), 'never mentions the watcher');
+    assert.ok(/script\.google\.com/.test(psCode), 'does not say where to paste it');
+  });
+
+  console.log('\nRouter benchmark — a refusal says why (v9.25)');
+
+  const rsw = await import('./js/route-score.js');
+  const rtw = await import('./js/router.js');
+
+  test('every refusal the validator can produce reaches the scored case', () => {
+    // Four different bugs wear the same face -- "got: unknown" -- and Logan's
+    // first run had six of them with no way to tell which. Each is checked
+    // through the REAL validator, so a reason string that changes there
+    // cannot silently stop being reported here.
+    const meta = { consequenceOf: () => 'draft', isDestructive: () => false };
+    const seen = [
+      ['no JSON at all',        rtw.validateRoute(null)],
+      ['an unknown intent id',  rtw.validateRoute({ intent:'do_a_backflip', confidence:0.9 })],
+      ['below the floor',       rtw.validateRoute({ intent:'add_event', confidence:0.2,
+                                                    params:{ title:'x' } })],
+      ['a dropped requirement', rtw.validateRoute({ intent:'add_event', confidence:0.9,
+                                                    params:{ date:'next Tuesday' } })],
+    ].map(([label, route]) => {
+      const scored = rsw.scoreCase({ id:label, intent:'add_event', params:{} }, route, meta);
+      assert.ok(scored.why, label + ' produced no reason');
+      return scored.why;
+    });
+    assert.strictEqual(new Set(seen).size, 4,
+      'the four failures must be distinguishable, got: ' + JSON.stringify(seen));
+  });
+
+  test('a relative date is dropped rather than coerced, and that is reported', () => {
+    // "Dentist for Braelyn next Tuesday at 3" is add_event's OWN example and
+    // came back unknown. One candidate cause is exactly this: the model
+    // answers "next Tuesday", the date type refuses it, and with `title` also
+    // absent the whole route is rejected. Coercing would be far worse -- that
+    // is how a guessed date becomes a real calendar entry.
+    const r = rtw.validateRoute({ intent:'add_event', confidence:0.9,
+      params:{ title:'Dentist', date:'next Tuesday', person:'Braelyn' } });
+    assert.strictEqual(r.ok, true, 'date is optional, so the route still stands');
+    assert.strictEqual(r.params.date, undefined, 'an unparseable date must not survive');
+    assert.strictEqual(r.params.title, 'Dentist');
+  });
+
+  test('a success carries no reason, so the field means something', () => {
+    const meta = { consequenceOf: () => 'draft', isDestructive: () => false };
+    const ok = rsw.scoreCase(
+      { id:'t', intent:'add_event', params:{ title:'Dentist' } },
+      rtw.validateRoute({ intent:'add_event', confidence:0.9, params:{ title:'Dentist' } }),
+      meta);
+    assert.strictEqual(ok.why, null);
+    assert.strictEqual(ok.pass, true);
+  });
+
+  test('the summary groups refusals so one glance says which bug it is', () => {
+    const meta = { consequenceOf: () => 'draft', isDestructive: () => false };
+    const rows = [
+      rsw.scoreCase({ id:'a', intent:'add_event', params:{} }, rtw.validateRoute(null), meta),
+      rsw.scoreCase({ id:'b', intent:'add_event', params:{} }, rtw.validateRoute(null), meta),
+      rsw.scoreCase({ id:'c', intent:'add_event', params:{} },
+        rtw.validateRoute({ intent:'add_event', confidence:0.1, params:{ title:'x' } }), meta),
+    ];
+    const s = rsw.summarise(rows);
+    assert.strictEqual(s.byRefusalReason['no JSON in the reply'], 2);
+    assert.strictEqual(s.byRefusalReason['below the confidence floor'], 1);
+  });
+
+  test('the reason survives into the exported file and onto the screen', () => {
+    const fn = script.split('function exportBenchmark(')[1].split('\nfunction ')[0];
+    assert.ok(/why: r\.why/.test(fn), 'the export drops the reason');
+    assert.ok(/refused because/.test(script), 'the results screen never shows it');
+  });
+
+  console.log('\nLocal context window — the fit check (v9.25)');
+
+  const lim = await import('./js/local-limits.js');
+
+  test('the ps endpoint is derived from the OpenAI base, not guessed at', () => {
+    // Ollama's native API sits beside the OpenAI one: .../v1 -> .../api/ps.
+    assert.strictEqual(lim.psUrlFrom('https://host.ts.net/v1'), 'https://host.ts.net/api/ps');
+    assert.strictEqual(lim.psUrlFrom('https://host.ts.net/v1/'), 'https://host.ts.net/api/ps');
+    assert.strictEqual(lim.psUrlFrom('https://host.ts.net'), 'https://host.ts.net/api/ps');
+    assert.strictEqual(lim.psUrlFrom(''), '', 'no URL means no probe, not a broken one');
+  });
+
+  test('an unreported context window reads as null, never as a number', () => {
+    // The whole feature is advice. Advice from a made-up number is worse than
+    // no advice, so every unknown has to survive as an unknown.
+    assert.strictEqual(lim.contextFromPs({ models: [] }, 'm'), null);
+    assert.strictEqual(lim.contextFromPs({}, 'm'), null);
+    assert.strictEqual(lim.contextFromPs(null, 'm'), null);
+    assert.strictEqual(lim.contextFromPs({ models: [{ model: 'm' }] }, 'm'), null,
+      'older Ollama builds omit context_length entirely');
+    assert.strictEqual(lim.contextFromPs({ models: [{ model: 'm', context_length: 0 }] }, 'm'), null);
+  });
+
+  test('the window is read for the model actually chosen', () => {
+    const ps = { models: [
+      { model: 'qwen2.5:14b-instruct', context_length: 32768 },
+      { model: 'qwen3-vl:8b-instruct-q8_0', context_length: 4096 },
+    ]};
+    assert.strictEqual(lim.contextFromPs(ps, 'qwen3-vl:8b-instruct-q8_0'), 4096);
+    assert.strictEqual(lim.contextFromPs(ps, 'qwen2.5:14b-instruct'), 32768);
+    // A tag the server spells differently still resolves on the family name,
+    // because Ollama reports what is loaded, not what was typed in Settings.
+    assert.strictEqual(lim.contextFromPs(ps, 'qwen3-vl:8b'), 4096);
+  });
+
+  test('with nothing measured, the plan changes nothing', () => {
+    // A server that will not report its window must not have its calls
+    // grounded -- that would break every setup this feature cannot see into.
+    for(const o of [{ ctx:null, promptTokens:2400, want:4000 },
+                    { ctx:4096, promptTokens:null, want:4000 },
+                    { want:4000 }]){
+      const p = lim.planBudget(o);
+      assert.strictEqual(p.ok, true, JSON.stringify(o));
+      assert.strictEqual(p.maxTokens, 4000, JSON.stringify(o));
+      assert.strictEqual(p.clamped, false);
+    }
+  });
+
+  test("Logan's exact numbers become a request that could have worked", () => {
+    // From his server.log and diagnostics: n_ctx 4096, prompt 2327, app asking
+    // for 4000 tokens of answer -- nearly double the window, so the request was
+    // refused or truncated before any model quality mattered.
+    //
+    // The fix is NOT to give up. Anthropic answered those same two pages in
+    // 243 and 687 output tokens, so the answer always fitted; only the ASK did
+    // not. Clamped to what is left, the identical call is winnable.
+    const p = lim.planBudget({ ctx:4096, promptTokens:2327, want:4000 });
+    assert.strictEqual(p.ok, true);
+    assert.strictEqual(p.clamped, true);
+    assert.strictEqual(p.maxTokens, 4096 - 2327 - lim.CTX_MARGIN);
+    assert.ok(p.maxTokens > 687,
+      'clamped below what those pages actually needed: ' + p.maxTokens);
+  });
+
+  test('a window with no room left refuses, carrying the three numbers', () => {
+    // The other side of it: when the prompt itself nearly fills the window
+    // there is no ask small enough, and pretending otherwise wastes minutes.
+    const p = lim.planBudget({ ctx:4096, promptTokens:3800, want:4000 });
+    assert.strictEqual(p.ok, false);
+    assert.strictEqual(p.reason, 'too_small');
+    assert.ok(/3800/.test(p.detail) && /4096/.test(p.detail),
+      'the refusal must carry the numbers that decided it: ' + p.detail);
+  });
+
+  test('a tight-but-usable window clamps the ask instead of failing it', () => {
+    // The important case. 8192 - 2400 leaves plenty; the request is simply
+    // made smaller rather than abandoned, because a smaller ask succeeds.
+    const p = lim.planBudget({ ctx:8192, promptTokens:2400, want:4000 });
+    assert.strictEqual(p.ok, true);
+    assert.strictEqual(p.maxTokens, 4000, 'room to spare should not clamp');
+
+    const q = lim.planBudget({ ctx:4096, promptTokens:2000, want:4000 });
+    assert.strictEqual(q.ok, true, '1968 tokens of answer is worth attempting');
+    assert.strictEqual(q.clamped, true);
+    assert.strictEqual(q.maxTokens, 4096 - 2000 - lim.CTX_MARGIN);
+    assert.ok(q.maxTokens < 4000);
+  });
+
+  test('the clamp never asks for more than fits, at any size', () => {
+    for(let ctx = 2048; ctx <= 32768; ctx += 1024){
+      for(const prompt of [200, 1200, 2327, 5000]){
+        const p = lim.planBudget({ ctx, promptTokens: prompt, want: 4000 });
+        if(!p.ok) continue;
+        assert.ok(prompt + p.maxTokens <= ctx,
+          `ctx ${ctx}, prompt ${prompt}: planned ${p.maxTokens} does not fit`);
+      }
+    }
+  });
+
+  test('prompt size comes from calls that happened, not from an estimate', () => {
+    const log = [
+      { op:'extract.image', provider:'local',     inTokens: 1900 },
+      { op:'extract.image', provider:'local',     inTokens: 2327 },
+      { op:'extract.image', provider:'anthropic', inTokens: 9000 },
+      { op:'ask',           provider:'local',     inTokens: 400  },
+      { op:'extract.image', provider:'local' },              // failed: no usage
+    ];
+    const m = lim.observedPromptTokens(log, 'extract.image', 'local');
+    // The worst flyer, not the average one: the question is whether the window
+    // survives the hardest case, and averaging hides exactly that.
+    assert.strictEqual(m.tokens, 2327);
+    assert.strictEqual(m.exact, true);
+    assert.strictEqual(m.samples, 2);
+
+    // Never run locally: Anthropic's measurement of the same job stands in,
+    // and says so.
+    const only = lim.observedPromptTokens(
+      [{ op:'extract.image', provider:'anthropic', inTokens: 2241 }], 'extract.image', 'local');
+    assert.strictEqual(only.tokens, 2241);
+    assert.strictEqual(only.exact, false, 'a stand-in must be flagged as one');
+
+    assert.strictEqual(lim.observedPromptTokens([], 'extract.image', 'local'), null);
+  });
+
+  test('the advice names the setting, because nothing in the app can change it', () => {
+    // Ollama's OpenAI-compatibility docs: "the OpenAI API does not have a way
+    // of setting context size." So the app can only ever detect and explain.
+    const p = lim.planBudget({ ctx:4096, promptTokens:2327, want:4000 });
+    const msg = lim.contextAdvice(p);
+    assert.ok(/OLLAMA_CONTEXT_LENGTH=\d+/.test(msg), msg);
+    assert.ok(/4096/.test(msg), 'does not mention the default that bit him: ' + msg);
+    assert.ok(/restart/i.test(msg), 'a changed env var does nothing until restart: ' + msg);
+    const asked = Number((msg.match(/OLLAMA_CONTEXT_LENGTH=(\d+)/) || [])[1]);
+    assert.ok(asked >= 2327 + 2000, 'suggests a window too small to help: ' + asked);
+  });
+
+  console.log('\nLocal context window — wired into the app');
+
+  test('the local call plans its budget before spending three minutes on it', () => {
+    const fn = script.split('async function callLocalModel(')[1].split('\nasync function ')[0];
+    const code = fn.replace(/\/\/[^\n]*/g, '');
+    assert.ok(/planBudget\(/.test(code), 'the call does not consult the plan');
+    assert.ok(/CONTEXT_TOO_SMALL/.test(code), 'an impossible call is still attempted');
+    assert.ok(/maxTokens = plan\.maxTokens/.test(code),
+      'the plan is computed and then ignored, which is worse than not computing it');
+    // Order matters: the check is worthless after the request has gone out.
+    assert.ok(code.indexOf('planBudget(') < code.indexOf('fetch('),
+      'the budget is planned after the request is sent');
+  });
+
+  test('thinking is disabled with the field this endpoint actually accepts', () => {
+    // `think` is a native /api/chat field and is NOT in Ollama's list of
+    // supported /v1/chat/completions fields -- it was ignored on every call
+    // this app has ever made, which is why a thinking model kept thinking.
+    // `reasoning_effort` is on that list, with 'none' among its values.
+    const fn = script.split('async function callLocalModel(')[1].split('\nasync function ')[0];
+    const code = fn.replace(/\/\/[^\n]*/g, '');
+    assert.ok(/reasoning_effort:\s*'none'/.test(code),
+      'the only field that turns thinking off here is missing');
+  });
+
+  test('a failed probe cannot ground a call that would have worked', () => {
+    const fn = script.split('async function probeLocalContext(')[1].split('\n}')[0];
+    assert.ok(/catch/.test(fn), 'the probe can throw into the call path');
+    assert.ok(/return null/.test(fn), 'a probe failure must read as "unknown"');
+    assert.ok(/AbortController|setTimeout/.test(fn),
+      'an unreachable /api/ps would hang every AI call in the app');
+  });
+
+  test('local calls record what they cost, or the fit check stays blind forever', () => {
+    // planBudget reads prompt sizes out of the AI log. Until v9.25 the local
+    // path logged no token counts at all, so this feature would have had
+    // nothing to plan against on any phone.
+    const fn = script.split('async function callLocalModel(')[1].split('\nasync function ')[0];
+    assert.ok(/usage && json\.usage\.prompt_tokens/.test(fn), 'prompt tokens are not captured');
+    assert.ok(/lastLocalUsage/.test(fn));
+    assert.ok(/inTokens: lastLocalUsage\.inTokens/.test(script),
+      'captured usage never reaches recordAiCall');
+  });
+
+  test('the self-test checks the window, and says what to set when it is short', () => {
+    const fn = script.split('async function runLocalSelfTest(')[1].split('\n}\n')[0];
+    assert.ok(/Context window big enough/.test(fn), 'no window check in the self-test');
+    assert.ok(/OLLAMA_CONTEXT_LENGTH/.test(fn), 'the check does not say how to fix it');
+    assert.ok(/cannot check/.test(fn),
+      'a server that will not report its window must be reported as unknown, not as a failure');
+  });
+
+  test('the window reaches the diagnostics file', () => {
+    assert.ok(/localContext:/.test(script), 'not in the file');
+    const fn = script.split('function buildDiagnosticsFile(')[1].split('\n}')[0];
+    assert.ok(/localContext/.test(fn), 'the shared file does not carry it');
   });
 
   console.log('\nTheme — dark ships by default');

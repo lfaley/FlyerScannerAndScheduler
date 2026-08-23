@@ -106,8 +106,50 @@ export function scoreExtraction(expected, actual){
   }
 
   const missed = pairs.filter(p => !p.actual).map(p => p.expected);
-  const invented = act.filter(x => !takenA.has(x.i)).map(x => x.a);
+  const leftover = act.filter(x => !takenA.has(x.i)).map(x => x.a);
   const matched = pairs.filter(p => p.actual);
+
+  // v9.25. A SECOND PASS OVER THE LEFTOVERS, and it changes what the headline
+  // number means.
+  //
+  // The first pass refuses to pair across dates ("wrong day is never a match"),
+  // which is correct for precision and recall -- an event on the wrong day is
+  // wrong. But it also means one misplaced event is reported as BOTH a miss and
+  // an invention, and the results screen leads with "an event that was never in
+  // the paperwork is the worst thing this can do". That framing is true of a
+  // hallucination and false of a date error.
+  //
+  // Logan's first q8 run is the case in point. `schedule-grid` scored 1 missed
+  // + 1 invented, which reads as two failures including the alarming kind. What
+  // actually happened: the timetable is a 2-D grid, and "Mini Jazz (Austin)"
+  // was read out of the Monday column into Tuesday's. One cell, shifted. Every
+  // field was right, "Lunch" was correctly left out of both days, and the empty
+  // Monday slot was correctly left alone. Nothing was invented.
+  //
+  // So the leftovers are split. `invented` now means a title that appears
+  // nowhere in what was expected -- a real hallucination. `misdated` means the
+  // right event on the wrong day, named as its own failure. Precision, recall
+  // and F1 are untouched: both are still errors, and both still cost the score.
+  const claimed = new Set();
+  const misdated = [];
+  const invented = [];
+  for(const a of leftover){
+    // By index, and each missed event can explain at most one leftover: a
+    // timetable repeats the same class on several days, and matching by value
+    // would let one absence excuse every stray copy of it.
+    let idx = -1;
+    for(let i = 0; i < missed.length; i++){
+      if(claimed.has(i)) continue;
+      if(titleMatch(missed[i].title, a.title) >= 0.8){ idx = i; break; }
+    }
+    if(idx >= 0){
+      claimed.add(idx);
+      // Both dates, because "wrong day" is only useful if you can see which.
+      misdated.push(Object.assign({}, a, { expectedDate: missed[idx].date || null }));
+    }else{
+      invented.push(a);
+    }
+  }
 
   const fields = {};
   for(const f of FIELDS){
@@ -126,6 +168,7 @@ export function scoreExtraction(expected, actual){
     matched: tp,
     missed,
     invented,
+    misdated,
     precision: act.length ? tp / act.length : (exp.length ? 0 : 1),
     recall: exp.length ? tp / exp.length : 1,
     f1: (tp && (act.length + exp.length)) ? (2 * tp) / (act.length + exp.length) : (exp.length || act.length ? 0 : 1),
@@ -154,6 +197,10 @@ export function aggregateExtraction(results){
     f1: (returned + expected) ? (2 * tp) / (returned + expected) : 1,
     missedTotal: sum(r => r.missed.length),
     inventedTotal: sum(r => r.invented.length),
+    // Reported beside inventions, never folded into them: the right event on
+    // the wrong day is a date bug, not a hallucination, and the two need
+    // different fixes.
+    misdatedTotal: sum(r => (r.misdated || []).length),
     fields,
   };
 }

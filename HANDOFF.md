@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 22, 2026 · **Live version:** v9.25 · **Tests:** 489 passing
+**Updated:** August 23, 2026 · **Live version:** v9.26 · **Tests:** 536 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -18,37 +18,76 @@ option alongside Anthropic.
 
 ## Deploying — Logan pushes, agents never do
 
+Save the files into the repo folder, then:
+
+```powershell
+cd C:\Users\Logan\Desktop\Repos\FlyerSnap
+.\deploy.ps1 "what changed"
+```
+
+`deploy.ps1` was rewritten in v9.25 for this workflow — the old one hunted for
+a zip in Downloads and extracted it into `FlyerAndScheduler\flyersnap-pwa`, a
+path that has not existed since the repo moved, so it could not have worked.
+The new one checks the five things that have actually gone wrong here and
+pushes only if every one passes:
+
+1. **Tests** must end `N passed, 0 failed` — and the exit code and the printed
+   summary must agree, so a runner that dies before printing cannot pass.
+2. **`index.html` changed but `APP_VERSION` did not** — refuses.
+3. **`APP_VERSION` moved but `sw.js` `CACHE` did not** — refuses. This is the
+   one that silently leaves every installed phone on the old app.
+4. **`gmail-watcher.gs` changed** — stops and waits, because that file does not
+   deploy with the push; it must be re-pasted at script.google.com
+   (Deploy → Manage deployments → pencil → New version → Deploy).
+5. **The push worked but the site never updated** — after pushing it polls the
+   live URL for up to three minutes (cache-busted, since Pages sits behind a
+   CDN) and only then calls the deploy done.
+
+Flags: `-DryRun` runs every check and pushes nothing; `-NoVerify` skips the
+live poll; `-Repo <path>` for a different folder. Written for Windows
+PowerShell 5.1 — no `&&`, no `Invoke-WebRequest` without `-UseBasicParsing`,
+and `$ErrorActionPreference` deliberately left at `Continue` (under `Stop`, one
+harmless stderr line from a PASSING node run aborts the script; that killed the
+old version twice).
+
+Manual equivalent, if the script is ever in the way:
+
 ```powershell
 cd C:\Users\Logan\Desktop\Repos\FlyerSnap
 node tests.js
-git add -A
-git commit -m "<what changed>"
-git push
+if ($LASTEXITCODE -eq 0) { git add -A; git commit -m "<what changed>"; git push }
 ```
-
-Tests must end `N passed, 0 failed` before committing. Pushing to `main`
-triggers the GitHub Pages deploy. Bump BOTH the version stamp in `index.html`
-and `CACHE` in `sw.js` with every release, or installed phones keep the old
-copy. If `gmail-watcher.gs` changed, say so explicitly — it must be re-pasted
-at script.google.com (Deploy → Manage deployments → new version). If it did
-not change, say that too.
-
-`deploy.ps1` (the older zip-based flow) still works and self-updates from the
-zip; it is only needed when work arrives as a downloaded zip rather than
-written straight into the folder.
 
 ## Current state — August 2026
 
 The repo moved from `FlyerAndScheduler\flyersnap-pwa` to `Repos\FlyerSnap`;
 older docs may still name the old path, which is dead.
 
-Docs in the repo: **CLAUDE.md** (architecture + rules, read first),
-**HANDOFF.md** (this file), **EXPERT-QA.md** (presentation prep — also the
-clearest single summary of what this project is and where it is weak),
-**UI-MODERNIZATION-PLAN.md** (the design work),
-**GMAIL-WATCHER-SETUP.md**, **LOCAL-MODEL-PLAN.md**, **VISION-MODEL-SETUP.md**,
-**RETIRED-CODE-REFERENCE.md**, the RECIPE-APP-*.md integration notes, and
-**DEPLOY.md** (historical one-time Pages setup).
+Docs in the repo, as they ACTUALLY exist (checked v9.25 — the list below was
+stale and named three files that are not here):
+
+| File | What it is |
+|---|---|
+| **CLAUDE.md** | Architecture and the rules. Read first. |
+| **HANDOFF.md** | This file — state of play, per-version log, open items. |
+| **EXPERT-QA.md** | Presentation prep; the clearest single summary of the project and where it is weak. |
+| **UI-MODERNIZATION-PLAN.md** | The six-phase design work, with a progress log. |
+| **AI-INTEGRATION-PLAN.md**, **ASSISTANT-PLAN.md**, **ASSISTANT-ACTIONS-PLAN.md** | How the AI features and the acting assistant were designed. |
+| **FORM-UI-REVIEW.md** | The form-usability research behind v9.12. |
+| **SECURITY-PLAN.md** | **ON HOLD** pending the admin console. §3 findings still valid. |
+| **ADMIN-CONSOLE-CONTRACT.md** | What FlyerSnap exposes to the console being built. |
+| **ERROR-REPORTING-PLAN.md** | The Firestore problem-backlog design that shipped in v9.24. |
+| **GMAIL-WATCHER-SETUP.md** | Apps Script setup for the watcher. |
+| **DEPLOY.md** | Historical one-time GitHub Pages setup. |
+
+Also present: **AI-INTEGRATION-PLAN.md**, **ARCHITECTURE-PLAN.md**,
+**LOCAL-MODEL-PLAN.md**, **VISION-MODEL-SETUP.md**,
+**RETIRED-CODE-REFERENCE.md**, and the **RECIPE-APP-\*.md** integration notes.
+
+> An earlier draft of this table claimed four of those files did not exist.
+> They do. The claim came from a working copy that was missing them, and it is
+> recorded here because it is the same root cause as the v9.25 near-miss below:
+> **a stale working copy looks exactly like a deleted file.**
 
 A UI modernization is in flight, driven by an upcoming presentation to
 industry experts. See **UI-MODERNIZATION-PLAN.md** for the six-phase plan and
@@ -84,8 +123,196 @@ a per-version progress log.
 | v9.21 | Ask reachable from all 28 screens, returning you exactly where you were |
 | v9.22 | Settings became a six-page hub: 5,794px of scroll down to a 590px menu |
 | v9.23 | Failures say what to do about them; diagnostics send in one tap |
-| v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — js/errorReport.js + ERROR-REPORTING-PLAN.md |
+| v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — `js/errorReport.js` + ERROR-REPORTING-PLAN.md |
 | v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
+| v9.24 | Diagnostics share as text so Gmail appears; the fallback toast stopped blaming Anthropic |
+| v9.26 | The app measures the local context window and plans against it; thinking actually turned off; router scorer stopped failing names the app resolves; refusals say why; a wrong-day event is no longer called a hallucination; self-test collapses |
+
+**v9.24 — two bugs that were both about wording.** Logan reported "multiple
+alerts that Anthropic couldn't be reached" while uploading two pages. The
+diagnostics file he sent said the opposite: Anthropic answered both times, in
+5.7s and 11.3s. What failed was the *local* model — `qwen3-vl:8b`, twice,
+after 48s and 27s, with "the model produced only reasoning and no answer". The
+toast read *"Local model unavailable — using Anthropic"*, and on a phone that
+scans as "unavailable ... Anthropic". It now leads with the outcome: **"Read by
+Anthropic instead — your local model did not answer"**. Same event, opposite
+impression.
+
+That failure also classified as `unknown`, the least useful thing a classifier
+can say about something it can name exactly. It is now `thinking_only`, and its
+message names the actual fix, which is not in this app: raise the model's token
+limit, or use one that does not reason first (`qwen2.5vl`, `llama3.2-vision`).
+The no-fallback path throws that same explanation instead of a flat "Local
+model unavailable", so the advice appears wherever the failure does.
+
+**And the share sheet.** Logan's sheet offered Outlook and not Gmail. iOS
+filters it by file type and `application/json` is one many mail apps never
+declare; the file now goes as `.txt` / `text/plain`, byte-identical inside
+(`tools/diagnostics.js` parses by content, never by extension). **Copy** was
+added beside **Save to Files** so a share sheet that will not list your mail
+app is never the only way out. All three routes now build through one
+`buildDiagnosticsFile()`, so they cannot drift apart.
+
+**TWO AGENT SESSIONS WERE EDITING THIS REPO AT ONCE, and it cost two rebuilds.**
+On 23 Aug both a Cowork session and a second Claude session wrote to
+`C:\Users\Logan\Desktop\Repos\FlyerSnap` within minutes of each other. Each
+had its own working copy, neither could see the other's, and each overwrote
+`index.html` and `tests-modules.js` with a build derived from its own base. The
+symptom on Logan's machine was a deploy that passed at 529 tests, then failed at
+486 with three drift errors, with no edit in between — because the files under
+it had changed.
+
+Two commits both called themselves v9.25 (`e867988` and this one), which is why
+this release is **v9.26**.
+
+What made it recoverable rather than a merge nightmare: **everything in `js/`
+is the source of truth and `index.html` is a build artifact.** Both sessions'
+`js/` files survived side by side; only the inlined copy had to be rebuilt. The
+drift and collision guards then proved the rebuild was complete — they fail the
+moment a `js/` file is present but not inlined, which is exactly the state
+`e867988` was committed in. **That commit does not pass its own test suite.**
+
+> **The rule, learned twice in one day:** one agent at a time per repo. If a
+> second one has to run, it must re-read the files from disk immediately before
+> writing, not trust the copy it started from. And when two builds collide,
+> merge at the `js/` layer and re-inline — never pick one `index.html` over the
+> other, because each one silently contains work the other lacks.
+
+**v9.25 nearly deleted v9.24's error reporting, and the drift guard stopped it.**
+Two v9.24s existed in parallel: `dd75b80` on `main` (Firestore problem backlog,
+`js/errorReport.js`, 488 tests) and a separate one built in a session whose
+working copy predated it. The second one's `index.html` therefore had no
+inlined `errorReport.js` at all. Writing it over the repo would have removed a
+shipping feature silently — the app would have booted, looked fine, and quietly
+stopped reporting problems.
+
+Nothing subtle caught it. `node tests.js` failed on **"the inlined copies match
+js/ exactly"** and **"no inlined module declares a name the app already uses"**,
+on Logan's machine, before the push — which is the entire reason those two
+guards exist. The fix was a real three-way merge: `git diff 9c5dbed HEAD` gave
+the errorReport change set, which applied to the v9.25 tree with only the two
+version-stamp hunks rejected. 523 + 6 = **529 tests**, both branches intact.
+
+> **The lesson, and it is a process one:** an agent's working copy is not the
+> repo. Before writing files into it, compare against `HEAD` — a file that is
+> merely *missing from the copy* is indistinguishable from a file that was
+> *deliberately deleted*, and only one of those should ever be acted on.
+
+**v9.25 — the three real causes, and the first measured numbers.**
+
+**1. The window, not the model.** Ollama allocates **4,096 tokens** on any
+machine with under 24 GiB of VRAM (his RTX 5060 Ti has 15.9). His flyer prompts
+measured **2,327 and 2,346 tokens**, and FlyerSnap asked for **4,000** tokens of
+answer. Prompt plus ask was nearly double the window: those calls were lost
+before they were sent, and no model would have saved them. `js/local-limits.js`
+now reads the real window from `/api/ps`, reads prompt sizes from the AI log
+(`inTokens` is finally recorded for local calls — it never was), and **clamps
+the ask to what is left**. On his exact numbers that is 1,641 tokens; Anthropic
+answered those same two pages in 243 and 687, so the clamped call was winnable
+all along. When the prompt nearly fills the window it refuses in a second
+instead of burning three minutes, naming `OLLAMA_CONTEXT_LENGTH`. **`num_ctx`
+is never sent** — Ollama's OpenAI-compatibility docs say the OpenAI API has no
+way of setting context size, so this is detect-and-explain, never fix.
+
+**2. Thinking was never off.** The request carried `think: false` from the day
+the local provider shipped. `think` is a native `/api/chat` field and is **not**
+in Ollama's supported-field list for `/v1/chat/completions`, so it was silently
+ignored on **every call this app has ever made**. `reasoning_effort: 'none'` is
+the field that endpoint accepts, and it is now sent. This is why a thinking
+model kept thinking with the switch apparently on.
+
+**3. The benchmark was lying, in the model's disfavour.** His first q8 run
+scored 19/34. Seven of the eight parameter failures were entity names the app
+resolves perfectly — "the bins" for a chore called "Bins", "shopping list" for
+"shopping", "the dentist appointment". `resolveEntity` matches by containment
+either way; the scorer demanded string equality. Corrected (`namesSameThing`),
+the same run is **26/34 (76%)**. The loosened rule still fails a value that
+names nothing in particular — "Move the recital to the 12th" as an event name —
+which was a genuine failure in that run.
+
+### Measured on qwen3-vl:8b-instruct-q8_0 (Aug 23)
+
+| Benchmark | Result |
+|---|---|
+| **Reading** (the app's primary job) | **P 0.92 / R 0.92 / F1 0.92**, 8 cases in 21s. Titles 100%, times 83%, locations 75%. 1 missed and 1 invented, both in `schedule-grid` |
+| **Routing** | intent accuracy **79%** (floor is 85%), 26/34 after the scorer fix |
+
+**Reading is good enough to use.** Routing is not, and the shape of the failure
+is specific: **six over-refusals** — plain write commands ("Dentist for Braelyn
+next Tuesday at 3", "Permission slip is due Friday", "Olivia makes her bed every
+morning for one star") coming back `unknown`. Not dangerous — zero destructive
+escalations, zero missed refusals, zero invented parameters, and the four
+ambiguous cases all correctly refused — but it will feel deaf. Both of those
+runs predate the `reasoning_effort` fix, so **they are worth re-running**: a
+model that was still silently thinking is not the model that ships in v9.25.
+
+**The self-test screen can be shrunk.** One failed check prints its whole raw
+error — a parse failure ran to 731 characters — which pushed the check that
+actually failed off the top and buried the "Run again" button. Long details are
+now clamped to three lines with **"Show all N characters"**, and when a run has
+both passes and failures there is a **"Show only the N that failed"** filter.
+Measured in the browser: 563px → 381px filtered, and 789px → 563px with one
+error collapsed.
+
+Two things it deliberately does NOT do. Nothing is truncated permanently —
+`slice()` and ellipses are forbidden by a guard test, because on this screen the
+text *is* the diagnostic. And the open/filtered state is a module-level `let`,
+never `S`: it is one screen's preference for one run, and in `S` it would be
+migrated, backed up, and shipped inside the diagnostics export. The open-state
+is keyed against the FULL result list, so hiding the passing checks cannot
+renumber the rows and silently open a different detail. Both states are in the
+a11y audit (`selfTest`, `selfTest-filtered`).
+
+**And the routing benchmark now says WHY it refused.** Six over-refusals with
+`got: unknown` and nothing else is four different bugs wearing one face: no JSON
+in the reply, an intent id that does not exist, a confidence below the 0.6
+floor, or a required parameter dropped. `scoreCase` now carries `why` from the
+validator's own reason string, `summarise` groups them under
+`byRefusalReason`, the export keeps it and the results screen prints "refused
+because: …". Guessing between four causes from an aggregate is how a benchmark
+becomes decoration.
+
+**The leading hypothesis, which that field will confirm or kill.** The routing
+call asks for `max_tokens: 300`, and those runs were made while thinking was
+still silently on. 300 tokens is not enough to reason and then emit JSON, so
+`parseRoute` would find no object and `validateRoute` would reject with
+"nothing usable came back". The timing supports it — 34 cases in 17.5s, ~514ms
+each, which is a model stopping at a cap rather than finishing an answer. If
+that is right, `reasoning_effort:'none'` fixes the over-refusals as a side
+effect and the re-run should land well above the 85% floor.
+
+Checked and ruled out first: `quickRoute` returns null for all six sentences,
+so none of them was refused deterministically before the model ever saw it.
+
+> **Next, in order:** re-run both benchmarks on v9.25 — the export will now name
+> the refusal reason; run the reading one against Anthropic for a baseline;
+> then, only if refusals persist, look at write-intent confidence.
+
+**The model advice was wrong, and his own machine proved it.** v9.24 first told
+Logan to switch to `qwen2.5vl` or `llama3.2-vision`. Reading his Ollama install
+directly showed that is not the problem:
+
+- `AppData\Local\Ollama\server.log`: *"template selection
+  model=registry.ollama.ai/library/qwen3-vl:8b **renderer=qwen3-vl-thinking
+  parser=qwen3-vl-thinking**"*, and the manifest layer is inherited
+  `from: qwen3-vl:8b-thinking-bf16`. **The bare `qwen3-vl:8b` tag IS the
+  Thinking edition.** Instruct is one tag away: `qwen3-vl:8b-instruct`.
+- Same log: `llama_context: n_ctx = 4096`, against prompts of **2,327 and
+  2,346 tokens**. Under 1,800 tokens were left for an answer the app asked to
+  be up to 3,000 — the request could not have succeeded even from a model that
+  did not think first. Ollama's default context, not a model property.
+- Hardware, from `inference compute`: **RTX 5060 Ti, 15.9 GiB total / 14.4 GiB
+  usable**, 31.7 GiB system RAM, CUDA 13. The 30B and 32B VL builds are 20–21GB
+  and do not fit; `8b-instruct` is 6.1GB and `8b-instruct-q8_0` is 9.8GB, so
+  both fit with room for a much larger context.
+
+`explainError('thinking_only')` now names the tag and the context default
+instead of sending him after a different model family.
+
+> **Open, app side:** FlyerSnap asks for `maxTokens: 3000` without knowing the
+> server's context length. When `prompt + maxTokens > n_ctx` the call is doomed
+> before it is sent, and nothing in the app notices. The local self-test could
+> read `n_ctx` from `/v1/models` or a probe call and say so.
 
 **v9.2 — locking the door on the blank-screen bug.** Three tests now fail the
 build if the shipped `index.html` ever gains a `<script type="module">`, a

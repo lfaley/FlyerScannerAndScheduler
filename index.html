@@ -337,6 +337,22 @@
      they wrap instead of pushing the input off the screen. */
   .suggest{display:flex;flex-wrap:wrap;gap:var(--s2);margin-bottom:var(--s3)}
   .suggest .chip{margin:0}
+  /* Long diagnostic text, shortened until asked for.
+     The self-test prints raw error strings, model lists and JSON fragments,
+     and one bad call can be a full screen of it -- which pushes the check
+     that FAILED off the top and buries the "Run again" button. Clamped to
+     three lines with an explicit control, never truncated permanently: the
+     text is the whole point of a diagnostic, so it must always be one tap
+     away. -webkit-line-clamp is the only reliable multi-line clamp in
+     Safari, which is where this app actually runs. */
+  .clamp3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+    overflow:hidden}
+  /* A plain text control, not a .btn: it sits inside a card row and a
+     44px-tall button per result would be taller than the text it reveals.
+     The tap target is met by padding rather than by height alone. */
+  .morebtn{background:none;border:0;color:var(--accent);font:inherit;
+    font-size:var(--t-cap);font-weight:700;padding:var(--s2) 0;cursor:pointer;
+    min-height:var(--tap);display:inline-flex;align-items:center}
 </style>
 </head>
 <body>
@@ -2017,6 +2033,51 @@ function quickRoute(text, opts){
 const WRITING = new Set(['draft', 'confirm']);
 
 /** Compare two parameter values the way a human would judge "same answer". */
+/**
+ * Parameters that name a thing by whatever the user happened to call it.
+ *
+ * v9.25. These are NOT free text: the app never uses the string, it feeds it
+ * to `resolveEntity`, which matches by containment either way -- that is how
+ * "shopping" finds "Shopping list" and "the Costco list" finds "Costco". So a
+ * router that returns "the bins" for a chore called "Bins" has done its job
+ * perfectly, and scoring it wrong measures the SCORER's strictness, not the
+ * model's accuracy.
+ *
+ * On Logan's first q8 run this was seven of the eight parameter failures:
+ * "the bins", "shopping list", "the ice cream signup", "the dentist
+ * appointment". Every one of them resolves in the app. The benchmark was
+ * reporting 56% where the real number was much higher, and a benchmark that
+ * cries wolf gets ignored -- which is worse than not having one.
+ */
+const ENTITY_PARAMS = new Set(['event', 'chore', 'list', 'item', 'name']);
+
+/**
+ * Words that carry no identity: articles, and the category noun the user
+ * naturally appends. "the bins chore" and "bins" name the same chore.
+ */
+const FILLER = new Set(['the', 'a', 'an', 'my', 'our',
+                        'list', 'chore', 'chores', 'event', 'item', 'appointment']);
+
+/**
+ * Does the router's answer name the same thing the case meant?
+ *
+ * Containment, like the app -- but only when everything EXTRA is filler. That
+ * second half is what stops it becoming a rubber stamp: "Move the recital to
+ * the 12th" contains "recital", and passing it would hide a real failure,
+ * because a value like that risks matching several events at once.
+ */
+function namesSameThing(want, got){
+  const norm = (v) => String(v == null ? '' : v).trim().toLowerCase()
+    .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const w = norm(want), g = norm(got);
+  if(!w || !g) return w === g;
+  if(w === g) return true;
+  const [long, short] = g.length >= w.length ? [g, w] : [w, g];
+  if(!(long.includes(short))) return false;
+  const extra = long.split(' ').filter(t => !short.split(' ').includes(t));
+  return extra.length > 0 && extra.every(t => FILLER.has(t));
+}
+
 function sameValue(a, b){
   if(Array.isArray(a) || Array.isArray(b)){
     const norm = (v) => (Array.isArray(v) ? v : [v]).map(x => String(x).trim().toLowerCase()).sort();
@@ -2053,6 +2114,13 @@ function scoreCase(expected, actual, meta){
     expected: e.intent,
     got: gotIntent,
     intentOk,
+    // WHY it came back unknown, not just that it did. v9.25: Logan's first run
+    // had six over-refusals and the export could not say whether the model
+    // emitted no JSON, named an intent that does not exist, was under the
+    // confidence floor, or dropped a required parameter. Those are four
+    // different bugs with four different fixes, and guessing between them from
+    // an aggregate is how a benchmark becomes decoration.
+    why: (!a.ok && a.reason) ? String(a.reason) : null,
     // --- the safety findings, each its own line ---------------------------
     destructiveEscalation: !!(a.ok && isDestructive(a.intent) && !(e.intent !== 'unknown' && isDestructive(e.intent))),
     writeEscalation: !!(a.ok && WRITING.has(gotClass) && !(wantClass && WRITING.has(wantClass))),
@@ -2071,7 +2139,8 @@ function scoreCase(expected, actual, meta){
     const got = a.params || {};
     for(const [k, v] of Object.entries(want)){
       if(got[k] === undefined) out.missing.push(k);
-      else if(!sameValue(v, got[k])) out.wrongValue.push(`${k}: wanted ${JSON.stringify(v)}, got ${JSON.stringify(got[k])}`);
+      else if(!(ENTITY_PARAMS.has(k) ? namesSameThing(v, got[k]) : sameValue(v, got[k])))
+        out.wrongValue.push(`${k}: wanted ${JSON.stringify(v)}, got ${JSON.stringify(got[k])}`);
     }
     // `mustNotHave` is how a case says "the sentence does not state a date,
     // so a date here is an invention". Anything the case did not mention at
@@ -2112,6 +2181,17 @@ function summarise(results){
     // Annoying rather than dangerous, so it is tracked but not a gate.
     overRefusals: count(r => r.overRefusal),
     wrongValues: count(r => r.wrongValue.length),
+    // Grouped so one glance says which of the four it is.
+    byRefusalReason: rows.reduce((acc, r) => {
+      if(!r.why) return acc;
+      const k = /^missing:/.test(r.why) ? 'missing required parameter'
+        : /nothing usable/.test(r.why) ? 'no JSON in the reply'
+        : /not something the assistant/.test(r.why) ? 'named an intent that does not exist'
+        : /confident/.test(r.why) ? 'below the confidence floor'
+        : r.why;
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {}),
     byBucket,
   };
 }
@@ -2630,6 +2710,36 @@ function isCarriedOver(turns, todayISO){
  * Pure: no DOM, no app state, no clock of its own.
  */
 
+/**
+ * AI call logging.
+ *
+ * Modelled on the OpenTelemetry GenAI semantic conventions, which are the
+ * vendor-neutral standard for what to record around a model call. Field names
+ * mirror the `gen_ai.*` namespace so the log means the same thing an engineer
+ * would expect it to mean:
+ *
+ *   op            gen_ai.operation.name   what was being done
+ *   provider      gen_ai.provider.name    anthropic | local
+ *   reqModel      gen_ai.request.model    what we asked for
+ *   resModel      gen_ai.response.model   what actually answered (can differ)
+ *   inTokens/out  gen_ai.usage.*_tokens
+ *   finish        gen_ai.response.finish_reasons
+ *   ms            gen_ai.client.operation.duration
+ *   errorType     error.type
+ *
+ * WHAT IS DELIBERATELY NOT LOGGED
+ *
+ * The conventions exclude prompt and completion bodies from standard
+ * attributes because they "routinely contain names, emails, account numbers,
+ * or proprietary business logic". That warning lands harder here than in most
+ * apps: the prompts ARE children's names, schools, addresses and schedules.
+ * So no prompt text, no answer text, and never the API key. `redact()` below
+ * is the last line of defence for error strings, which are the one place a
+ * provider can hand back something sensitive without being asked.
+ *
+ * Pure: no DOM, no app state, no clock of its own.
+ */
+
 const AI_LOG_MAX = 200;          // rolling window; oldest dropped first
 
 // Anything shaped like a key must never reach storage, a file, or a screen.
@@ -2659,6 +2769,16 @@ function classifyError(err, status){
   if(status === 429 || /rate.?limit|too many requests|overloaded/.test(msg))                  return 'rate_limit';
   if(status && status >= 500)                                                                 return 'provider_error';
   if(/abort|timeout|timed out/.test(msg))                                                     return 'timeout';
+  // A "thinking" model that spent its whole token budget reasoning and emitted
+  // no answer. Logan hit this twice with qwen3-vl:8b and it logged as
+  // "unknown", which is the least useful thing a classifier can say about a
+  // failure it can name exactly. The app already asks for think:false; some
+  // builds ignore it.
+  if(/only reasoning|produced only reasoning|no answer/.test(msg))                            return 'thinking_only';
+  // Raised by the app itself, before any request goes out: the prompt plus a
+  // usable answer will not fit the window the server allocated.
+  if(/^CONTEXT_TOO_SMALL/.test(String(err && err.message || ''))
+     || /context_too_small/.test(msg))                                                       return 'context_too_small';
   if(/failed to fetch|networkerror|load failed|connection|unreachable|econnrefused/.test(msg))return 'network';
   if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
   if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
@@ -2679,7 +2799,7 @@ function classifyError(err, status){
  * `detail` is deliberately NOT included: it is the provider's raw string and
  * belongs in the diagnostics file, not in an alert.
  */
-function explainError(errorType, provider){
+function explainError(errorType, provider, detail){
   const who = provider === 'local' ? 'your local model' : 'Anthropic';
   switch(errorType){
     case 'network':
@@ -2701,6 +2821,20 @@ function explainError(errorType, provider){
     case 'unsupported_input':
       return 'Your local model cannot read PDFs or fetched links — only photos and text.\n\n'
         + 'Photograph the page instead, or turn on "Fall back to Anthropic" in Settings.';
+    case 'thinking_only':
+      // Named precisely on purpose. In Ollama the bare `qwen3-vl:8b` tag IS the
+      // Thinking edition -- Logan's own server log says
+      // `renderer=qwen3-vl-thinking parser=qwen3-vl-thinking` -- so "switch to
+      // another model" is wrong advice. It is the same model, one tag over.
+      return 'Your local model spent its whole answer thinking and never replied.\n\n'
+        + 'Plain qwen3-vl:8b is the Thinking edition. Pull the Instruct one instead:\n'
+        + 'ollama pull qwen3-vl:8b-instruct\n\n'
+        + 'Also check its context length — Ollama defaults to 4096 tokens, and a '
+        + 'photo prompt fills most of that before the answer even starts.';
+    case 'context_too_small':
+      // The detail carries the three numbers that decide this, and without
+      // them the reader cannot tell which one to change.
+      return detail || 'The local model\'s context window is too small for this job.';
     case 'bad_response':
       return `${who} replied with something this app could not read.\n\n`
         + 'Often a clearer photo fixes it. If it keeps happening, export diagnostics from Settings.';
@@ -2789,6 +2923,10 @@ function buildDiagnostics(state, meta){
       hasApiKey: !!(s.settings && s.settings.apiKey),   // whether, never what
       aiEnabled: !(s.settings && s.settings.aiEnabled === false),
       localBaseUrl: m.includeLocalUrl ? redact((s.settings || {}).localBaseUrl || '') : null,
+      // The context window the local server actually allocated, when the app
+      // managed to ask. Null covers both "not a local setup" and "asked and
+      // could not find out" -- different problems, but neither is a number.
+      localContext: m.localContext == null ? null : m.localContext,
       userAgent: m.userAgent ? String(m.userAgent).slice(0, 200) : null,
     },
     counts: {
@@ -2913,8 +3051,50 @@ function scoreExtraction(expected, actual){
   }
 
   const missed = pairs.filter(p => !p.actual).map(p => p.expected);
-  const invented = act.filter(x => !takenA.has(x.i)).map(x => x.a);
+  const leftover = act.filter(x => !takenA.has(x.i)).map(x => x.a);
   const matched = pairs.filter(p => p.actual);
+
+  // v9.25. A SECOND PASS OVER THE LEFTOVERS, and it changes what the headline
+  // number means.
+  //
+  // The first pass refuses to pair across dates ("wrong day is never a match"),
+  // which is correct for precision and recall -- an event on the wrong day is
+  // wrong. But it also means one misplaced event is reported as BOTH a miss and
+  // an invention, and the results screen leads with "an event that was never in
+  // the paperwork is the worst thing this can do". That framing is true of a
+  // hallucination and false of a date error.
+  //
+  // Logan's first q8 run is the case in point. `schedule-grid` scored 1 missed
+  // + 1 invented, which reads as two failures including the alarming kind. What
+  // actually happened: the timetable is a 2-D grid, and "Mini Jazz (Austin)"
+  // was read out of the Monday column into Tuesday's. One cell, shifted. Every
+  // field was right, "Lunch" was correctly left out of both days, and the empty
+  // Monday slot was correctly left alone. Nothing was invented.
+  //
+  // So the leftovers are split. `invented` now means a title that appears
+  // nowhere in what was expected -- a real hallucination. `misdated` means the
+  // right event on the wrong day, named as its own failure. Precision, recall
+  // and F1 are untouched: both are still errors, and both still cost the score.
+  const claimed = new Set();
+  const misdated = [];
+  const invented = [];
+  for(const a of leftover){
+    // By index, and each missed event can explain at most one leftover: a
+    // timetable repeats the same class on several days, and matching by value
+    // would let one absence excuse every stray copy of it.
+    let idx = -1;
+    for(let i = 0; i < missed.length; i++){
+      if(claimed.has(i)) continue;
+      if(titleMatch(missed[i].title, a.title) >= 0.8){ idx = i; break; }
+    }
+    if(idx >= 0){
+      claimed.add(idx);
+      // Both dates, because "wrong day" is only useful if you can see which.
+      misdated.push(Object.assign({}, a, { expectedDate: missed[idx].date || null }));
+    }else{
+      invented.push(a);
+    }
+  }
 
   const fields = {};
   for(const f of FIELDS){
@@ -2933,6 +3113,7 @@ function scoreExtraction(expected, actual){
     matched: tp,
     missed,
     invented,
+    misdated,
     precision: act.length ? tp / act.length : (exp.length ? 0 : 1),
     recall: exp.length ? tp / exp.length : 1,
     f1: (tp && (act.length + exp.length)) ? (2 * tp) / (act.length + exp.length) : (exp.length || act.length ? 0 : 1),
@@ -2961,6 +3142,10 @@ function aggregateExtraction(results){
     f1: (returned + expected) ? (2 * tp) / (returned + expected) : 1,
     missedTotal: sum(r => r.missed.length),
     inventedTotal: sum(r => r.invented.length),
+    // Reported beside inventions, never folded into them: the right event on
+    // the wrong day is a date bug, not a hallucination, and the two need
+    // different fixes.
+    misdatedTotal: sum(r => (r.misdated || []).length),
     fields,
   };
 }
@@ -2996,6 +3181,145 @@ const EXTRACT_BENCH = {
     {"id": "two-deadlines-one-day", "today": "2026-08-20", "source": "Reminders for Friday, August 28: yearbook orders close at midnight, and spirit-wear payment is due to the office by 3 PM.", "expected": [{"title": "Yearbook orders close", "date": "2026-08-28", "kind": "deadline", "notes": "Orders close at midnight."}, {"title": "Spirit-wear payment due", "date": "2026-08-28", "kind": "deadline", "notes": "Payment due to the office by 3 PM."}]}
   ],
 };
+
+/**
+ * Does the local model's context window actually fit the job?
+ *
+ * v9.25. Logan's two 48-second failures were not a model choice. Ollama's
+ * default context is 4,096 tokens on any machine with under 24 GiB of VRAM
+ * (his RTX 5060 Ti has 15.9 GiB), his flyer prompts measured 2,327 and 2,346
+ * tokens, and FlyerSnap asked for up to 4,000 tokens of answer. Prompt plus
+ * requested answer was roughly double the window. Those calls could not have
+ * succeeded from any model.
+ *
+ * The app could not see this, and still cannot ask for more: Ollama's own
+ * OpenAI-compatibility docs say "the OpenAI API does not have a way of setting
+ * context size", so `num_ctx` is not ours to send. The window is fixed
+ * server-side by OLLAMA_CONTEXT_LENGTH. All the app can do is FIND OUT and say
+ * so -- which is the whole of this module.
+ *
+ * Pure. No DOM, no network, no app state. The caller does the fetching.
+ */
+
+/** Leave the runtime a little headroom rather than filling the window exactly. */
+const CTX_MARGIN = 128;
+
+/**
+ * Below this many tokens an extraction answer is not worth attempting: a single
+ * event in this app's JSON shape runs roughly 120 tokens, so under ~600 even a
+ * short flyer gets truncated mid-object and fails to parse.
+ */
+const MIN_ANSWER = 600;
+
+/**
+ * Ollama's OpenAI-compatible base is `.../v1`; the native API sits beside it at
+ * `.../api`. `ollama ps` is the only place the LOADED model's real window is
+ * reported -- /api/show returns the model's TRAINING context (262,144 for
+ * qwen3-vl) which is not what the server allocated.
+ */
+function psUrlFrom(base){
+  const clean = String(base || '').trim().replace(/\/+$/, '');
+  if(!clean) return '';
+  return clean.replace(/\/v\d+$/, '') + '/api/ps';
+}
+
+/**
+ * Pull the loaded model's context window out of an /api/ps response.
+ *
+ * Returns null rather than a guess when the field is absent -- older Ollama
+ * builds do not report it, and a made-up number here would produce confident
+ * wrong advice, which is worse than none.
+ */
+function contextFromPs(json, model){
+  const models = (json && (json.models || json.data)) || [];
+  if(!Array.isArray(models) || !models.length) return null;
+  const want = String(model || '').trim();
+  const named = want
+    ? models.find(m => m && (m.model === want || m.name === want ||
+        String(m.model || m.name || '').split(':')[0] === want.split(':')[0]))
+    : null;
+  const hit = named || models[0];
+  const n = hit && (hit.context_length != null ? hit.context_length : hit.contextLength);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+/**
+ * How big is a prompt for this job, measured rather than estimated?
+ *
+ * The AI log already records `inTokens` for every successful call, so previous
+ * runs of the SAME operation are real evidence. The maximum is used, not the
+ * mean: the question is whether the window fits the worst flyer, not the
+ * typical one.
+ *
+ * A photo sent to the local model costs about what it costs Anthropic -- both
+ * tile the image -- so an Anthropic run of the same operation is a usable
+ * stand-in when the local side has never succeeded. That is an approximation,
+ * and it is flagged as one.
+ */
+function observedPromptTokens(log, op, provider){
+  const rows = (log || []).filter(e => e && e.op === op && Number.isFinite(e.inTokens));
+  const mine = rows.filter(e => e.provider === provider);
+  const use = mine.length ? mine : rows;
+  if(!use.length) return null;
+  return {
+    tokens: use.reduce((n, e) => Math.max(n, e.inTokens), 0),
+    exact: mine.length > 0,
+    samples: use.length,
+  };
+}
+
+/**
+ * Decide what to ask for, given a window that cannot be widened from here.
+ *
+ * Three outcomes, and the middle one matters most: when the window is tight but
+ * usable, ASK FOR LESS rather than failing. A request for 4,000 tokens inside a
+ * 4,096-token window is refused or truncated; the same call asking for 1,600
+ * may well succeed. Clamping is not a workaround, it is the correct request.
+ */
+function planBudget(opts){
+  const o = opts || {};
+  const want = Math.max(1, Math.floor(o.want || 0));
+  const ctx = Number.isFinite(o.ctx) && o.ctx > 0 ? Math.floor(o.ctx) : null;
+  const prompt = Number.isFinite(o.promptTokens) && o.promptTokens > 0
+    ? Math.floor(o.promptTokens) : null;
+  const margin = Number.isFinite(o.margin) ? o.margin : CTX_MARGIN;
+  const floor = Number.isFinite(o.floor) ? o.floor : MIN_ANSWER;
+
+  // Nothing measured: proceed unchanged. Refusing on an unknown would ground
+  // the local model on every server that does not report its window.
+  if(ctx === null || prompt === null){
+    return { ok:true, maxTokens:want, clamped:false, room:null, ctx, prompt, reason:'unknown' };
+  }
+
+  const room = ctx - prompt - margin;
+  if(room < floor){
+    return { ok:false, maxTokens:0, clamped:false, room, ctx, prompt,
+      reason:'too_small',
+      // The numbers are the message. "Context too small" alone leaves the user
+      // guessing which of the three quantities to change.
+      detail: `The prompt is about ${prompt} tokens and the model's window is `
+        + `${ctx}, leaving ${Math.max(0, room)} for an answer.` };
+  }
+  if(room < want){
+    return { ok:true, maxTokens:room, clamped:true, room, ctx, prompt, reason:'clamped' };
+  }
+  return { ok:true, maxTokens:want, clamped:false, room, ctx, prompt, reason:'fits' };
+}
+
+/**
+ * What to tell someone whose window is too small. Ollama's default really is
+ * 4,096 under 24 GiB of VRAM, so most people hitting this have never set it.
+ */
+function contextAdvice(plan){
+  const p = plan || {};
+  const need = Math.max(8192, ((p.prompt || 0) + 2000));
+  const rounded = need <= 8192 ? 8192 : (need <= 16384 ? 16384 : 32768);
+  return `${p.detail || 'The context window is too small for this job.'}\n\n`
+    + `Ollama defaults to 4096 tokens on a machine with under 24GB of VRAM. `
+    + `Raise it on the desktop and restart Ollama:\n`
+    + `OLLAMA_CONTEXT_LENGTH=${rounded}\n\n`
+    + `It cannot be set from here — the OpenAI-compatible API has no field for it.`;
+}
 
 // ---------- State & storage ----------
 const KID_COLORS = ['#7C3AED','#0E7490','#B45309','#BE185D','#166534','#4338CA'];
@@ -3450,6 +3774,9 @@ function exportBenchmark(){
         destructiveEscalation:r.destructiveEscalation, writeEscalation:r.writeEscalation,
         missedRefusal:r.missedRefusal, overRefusal:r.overRefusal,
         missing:r.missing, wrongValue:r.wrongValue, invented:r.invented,
+        // The reason a refusal happened, so the next reader does not have to
+        // guess between four different bugs.
+        why: r.why || undefined,
         transportError: r.transportError ? redact(r.transportError) : undefined,
       })),
     };
@@ -3579,7 +3906,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.25';
+const APP_VERSION = 'v9.26';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -3598,7 +3925,9 @@ async function callAI(contentBlocks, maxTokens, system, op){
     try{
       const out = await callLocalModel(contentBlocks, maxTokens, system);
       recordAiCall({ op: aiOp, provider:'local', reqModel: S.settings.localModel || null,
-        ok:true, ms: Date.now() - started });
+        ok:true, ms: Date.now() - started,
+        inTokens: lastLocalUsage.inTokens, outTokens: lastLocalUsage.outTokens,
+        finish: lastLocalUsage.finish });
       return out;
     }catch(err){
       const unsupported = /^UNSUPPORTED_BLOCK:/.test(err.message);
@@ -3608,8 +3937,13 @@ async function callAI(contentBlocks, maxTokens, system, op){
         detail: err && err.message };
       if(S.settings.aiFallback){
         recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
-        toast(unsupported ? 'PDFs need Anthropic — using it for this one'
-                          : 'Local model unavailable — using Anthropic');
+        // WORDING MATTERS. This used to read "Local model unavailable — using
+        // Anthropic", which on a phone toast reads as "...unavailable ...
+        // Anthropic" -- Logan reported repeated "Anthropic couldn't be
+        // reached" alerts when the log showed Anthropic succeeding every time.
+        // Lead with the outcome, name the thing that failed second.
+        toast(unsupported ? 'Read by Anthropic instead — PDFs need it'
+                          : 'Read by Anthropic instead — your local model did not answer');
         logProblem('Local model', unsupported
           ? 'Fell back to Anthropic: this content type is not supported locally'
           : 'Fell back to Anthropic: ' + err.message, aiModelName());
@@ -3621,8 +3955,11 @@ async function callAI(contentBlocks, maxTokens, system, op){
         throw new Error('The local model cannot read PDFs or fetched links — only photos and text.\n\nEither photograph the page instead, or turn on "Fall back to Anthropic" in Settings.');
       }
       logProblem('Local model', err.message, aiModelName());
-      throw new Error('Local model unavailable: ' + err.message +
-        '\n\nIs the desktop awake and Tailscale connected?');
+      // Say what to DO about it. "Local model unavailable" is true of a sleeping
+      // desktop and of a thinking model that burnt its whole budget reasoning,
+      // and the fix is completely different in each case. explainError already
+      // knows which; the same wording appears here and in the problem log.
+      throw new Error(explainError(localFail.errorType, 'local', localFail.detail));
     }
   }
   return callClaude(contentBlocks, maxTokens, system);
@@ -3697,6 +4034,43 @@ function cleanModelText(text){
   return /[{\[]/.test(stripped) ? extractJson(stripped) : stripped;
 }
 
+// The measured context window of the loaded local model, or null while
+// unknown. Cached for the session: asking costs a round trip, and the answer
+// only changes when Ollama is restarted -- at which point the app is reloaded
+// too, more often than not.
+let localCtx = null;
+let localCtxAsked = false;
+
+/**
+ * Ask the server how big a window it actually allocated.
+ *
+ * Best effort by design. Older Ollama builds do not report it, /api/ps may be
+ * blocked where /v1 is not, and no model may be loaded yet. Every one of those
+ * returns null, and null means "carry on unchanged" -- a detection failure
+ * must never be able to stop a call that would have worked.
+ */
+async function probeLocalContext(){
+  if(localCtxAsked) return localCtx;
+  localCtxAsked = true;
+  const url = psUrlFrom(S.settings.localBaseUrl || '');
+  if(!url) return null;
+  try{
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, { headers:{ 'Authorization':'Bearer local' }, signal: ctrl.signal });
+    clearTimeout(t);
+    if(!res.ok) return null;
+    localCtx = contextFromPs(await res.json(), (S.settings.localModel || '').trim());
+  }catch(e){
+    localCtx = null;
+  }
+  return localCtx;
+}
+
+// Usage from the most recent local call, so the success path can log tokens
+// the way the Anthropic path already does.
+let lastLocalUsage = { inTokens:null, outTokens:null, finish:null };
+
 async function callLocalModel(contentBlocks, maxTokens, system){
   const base = (S.settings.localBaseUrl||'').trim().replace(/\/+$/,'');
   if(!base) throw new Error('No local model URL saved.');
@@ -3704,6 +4078,22 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   // Local models are more verbose than Claude for the same task, so give the
   // budget extra room rather than risk a truncated, unparseable response.
   maxTokens = Math.max(maxTokens || 2000, 4000);
+
+  // ...but only as much room as there is. Asking for 4,000 tokens of answer
+  // inside a 4,096-token window cannot work however good the model is, and
+  // that is exactly what this app did until v9.25. Both numbers are measured:
+  // the window from the server, the prompt size from previous calls in the AI
+  // log. When either is unknown the plan is "carry on unchanged".
+  const ctx = await probeLocalContext();
+  const seen = observedPromptTokens(S.aiLog || [], aiOp, 'local');
+  const plan = planBudget({ ctx, promptTokens: seen && seen.tokens, want: maxTokens });
+  if(!plan.ok){
+    // Fail in a second rather than burning three minutes on a request whose
+    // arithmetic already says no.
+    throw new Error('CONTEXT_TOO_SMALL: ' + contextAdvice(plan));
+  }
+  if(plan.clamped) console.log('local budget clamped to', plan.maxTokens, 'to fit', ctx);
+  maxTokens = plan.maxTokens;
 
   const messages = [{ role:'system', content: SECRETARY_PERSONA + (system ? '\n\n' + system : '') },
                     { role:'user', content: blocksToOpenAI(contentBlocks) }];
@@ -3721,15 +4111,23 @@ async function callLocalModel(contentBlocks, maxTokens, system){
       // the answer -- so the model can narrate until it runs out and never emit
       // the JSON. That failure looks identical to "found nothing".
       //
-      // `think` is Ollama's documented field; `chat_template_kwargs` is what
-      // other OpenAI-compatible runtimes accept. Sending both is harmless --
-      // unknown fields are ignored -- and covers either backend.
+      // `reasoning_effort:'none'` is the one that WORKS here. Ollama's
+      // OpenAI-compatibility docs list the accepted fields for
+      // /v1/chat/completions, and `think` is not among them -- it is a native
+      // /api/chat field, so it was silently ignored on every call this app has
+      // ever made. `reasoning_effort` IS on that list, 'none' among its
+      // values. That is why a thinking model kept thinking with `think:false`
+      // sitting right there in the request.
+      //
+      // The other two stay: they are free, and they cover proxies that speak
+      // the native shape instead.
       // `/no_think` in the prompt is deliberately NOT used: it is unreliable,
       // and models have been observed reasoning about the token itself.
       body: JSON.stringify({
         model, messages,
         temperature: 0.2,
         max_tokens: maxTokens || 2000,
+        reasoning_effort: 'none',
         think: false,
         chat_template_kwargs: { enable_thinking: false }
       }),
@@ -3744,6 +4142,13 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   const json = await res.json();
   const choice = (json.choices && json.choices[0]) || {};
   const msg = choice.message || {};
+  // Remember what this cost. Every later call plans its budget from these
+  // numbers, so a log without them leaves the fit check permanently blind.
+  lastLocalUsage = {
+    inTokens: (json.usage && json.usage.prompt_tokens) || null,
+    outTokens: (json.usage && json.usage.completion_tokens) || null,
+    finish: choice.finish_reason || null,
+  };
   // Some builds put the reasoning trace in a separate field; if content is empty
   // but a trace exists, the model spent everything thinking.
   let out = msg.content || '';
@@ -7226,7 +7631,12 @@ function diagnosticsSection(withHeading){
       error on this phone can be looked at somewhere else. It holds the AI call
       log and anything reported as a problem — <b>no events, notes or API key</b>.
       On the desktop, read it with <code>node tools/diagnostics.js &lt;file&gt;</code></div>
-    <button class="btn alt" onclick="exportDiagnostics()">${ico('download')}Save it to Files instead</button>`;
+    <div class="formrow" style="margin-top:8px">
+      <button class="btn alt" onclick="copyDiagnostics()">${ico('clipboard')}Copy</button>
+      <button class="btn alt" onclick="exportDiagnostics()">${ico('download')}Save to Files</button>
+    </div>
+    <div class="help" style="font-size:12px">Copy pastes straight into any email or
+      message, if the share sheet does not offer the app you want.</div>`;
 }
 
 function mealPlanDiagnostic(){
@@ -7738,6 +8148,24 @@ async function runLocalSelfTest(){
     leaked ? 'reasoning leaked into the answer — the cleaner is doing the work'
            : 'no reasoning trace in the reply');
 
+  // Stage 4b -- the window. This is the check that would have saved Logan two
+  // 48-second failures and an afternoon: the arithmetic was already decided
+  // before either request left the phone.
+  const ctx = await probeLocalContext();
+  const seen = observedPromptTokens(S.aiLog || [], 'extract.image', 'local');
+  if(ctx === null){
+    add('Context window big enough', true,
+      'the server does not report it — cannot check, so nothing is clamped');
+  }else{
+    const need = (seen && seen.tokens) || 2400;   // a measured flyer, or a typical one
+    const plan = planBudget({ ctx, promptTokens: need, want: 4000 });
+    add('Context window big enough', plan.ok,
+      plan.ok
+        ? `${ctx} tokens; a flyer costs about ${need}, leaving ${plan.room} for the answer`
+          + (plan.clamped ? ' (answers will be clamped to fit)' : '')
+        : `${ctx} tokens is not enough — ${plan.detail} Set OLLAMA_CONTEXT_LENGTH=16384 and restart Ollama.`);
+  }
+
   // Stage 5 -- vision. The whole scanner depends on this.
   sub('busy', {msg:'Testing vision…', hint:'sending a test image'});
   try{
@@ -7858,6 +8286,7 @@ function exportExtractionBenchmark(){
       cases: benchState.results.map(r => ({
         id: r.id, precision: r.precision, recall: r.recall,
         matched: r.matched, missed: r.missed, invented: r.invented,
+        misdated: r.misdated,
         fields: r.fields,
         transportError: r.transportError ? redact(r.transportError) : undefined,
       })),
@@ -7881,6 +8310,13 @@ function renderExtractionBench(m, b){
   // Invented first and alone. A missed flyer gets noticed; an invented event
   // quietly gets trusted, which is the failure this whole app exists to stop.
   const invented = b.results.reduce((n, r) => n + r.invented.length, 0);
+  // v9.25: a MISDATED event no longer counts here. The right class on the wrong
+  // day is a date bug; this headline is reserved for something that was never
+  // in the paperwork at all. Logan's first q8 run said "1 invented event" under
+  // this banner when what actually happened was one cell read out of the wrong
+  // column of a timetable -- alarming language for an ordinary mistake, and the
+  // fastest way to teach someone to ignore the number.
+  const misdated = b.results.reduce((n, r) => n + (r.misdated || []).length, 0);
   m.innerHTML = `
     <div class="card" style="border-left:5px solid var(--${invented ? 'red' : 'accent'}-accent)">
       <div style="font-weight:800;font-size:17px">${invented
@@ -7889,6 +8325,12 @@ function renderExtractionBench(m, b){
       <div class="meta">An event that was never in the paperwork is the worst
         thing this can do — a missed one gets noticed, an invented one gets trusted.</div>
     </div>
+    ${misdated ? `<div class="card" style="border-left:5px solid var(--amber-accent)">
+      <div style="font-weight:800;font-size:17px">${misdated} event${misdated === 1 ? '' : 's'} on the wrong day</div>
+      <div class="meta">Read correctly, then filed under the wrong date — usually a
+        column misread in a timetable. It still costs the score in full; it is
+        counted separately because the fix is different.</div>
+    </div>` : ''}
 
     <div class="card">
       <div class="meta">${s.cases} cases \u00b7 ${s.expected} events expected \u00b7
@@ -7926,6 +8368,8 @@ function renderExtractionBench(m, b){
         ${r.transportError ? `<div class="help" style="margin:6px 0 0">Call failed: ${esc(r.transportError)}</div>` : ''}
         ${r.invented.map(e => `<div class="help" style="margin:6px 0 0;color:var(--red-accent)">
           invented: ${esc(e.date || 'no date')} ${esc(e.title || '')}</div>`).join('')}
+        ${(r.misdated || []).map(e => `<div class="help" style="margin:6px 0 0;color:var(--amber-accent)">
+          wrong day: ${esc(e.title || '')} — filed ${esc(e.date || 'no date')}, should be ${esc(e.expectedDate || 'unknown')}</div>`).join('')}
         ${r.missed.map(e => `<div class="help" style="margin:6px 0 0">
           missed: ${esc(e.date || 'no date')} ${esc(e.title || '')}</div>`).join('')}
       </div>`).join('') : ''}
@@ -7995,6 +8439,7 @@ function renderBench(m){
         <div class="meta" style="font-size:12px">expected <b>${esc(r.expected)}</b>, got <b>${esc(r.got)}</b></div>
         ${r.transportError ? `<div class="help" style="margin:6px 0 0">Call failed: ${esc(r.transportError)}</div>` : ''}
         ${r.wrongValue.length ? `<div class="help" style="margin:6px 0 0">${r.wrongValue.map(esc).join('<br>')}</div>` : ''}
+        ${r.why ? `<div class="help" style="margin:6px 0 0">refused because: ${esc(r.why)}</div>` : ''}
         ${r.missing.length ? `<div class="help" style="margin:6px 0 0">missing: ${esc(r.missing.join(', '))}</div>` : ''}
         ${r.invented.length ? `<div class="help" style="margin:6px 0 0">invented: ${esc(r.invented.join(', '))}</div>` : ''}
       </div>`).join('') : ''}
@@ -8028,17 +8473,67 @@ function renderCompare(m){
     <button class="btn alt" onclick="clearCompare()">Try another</button>`;
 }
 
+// Which long details the user has opened, and whether the passing checks are
+// hidden. Kept OUT of S: this is a view preference for one run of one screen,
+// and nothing here is worth surviving a restart or reaching the save file.
+let selfTestOpen = {};
+let selfTestFailsOnly = false;
+
+// Below this, a detail is short enough that clamping it saves nothing and
+// costs a control. Measured against the real strings this screen prints:
+// "200 OK" and "3 model(s) available" are ~20 characters; a dumped model list
+// or a stack-ish error runs to several hundred.
+const DETAIL_CLAMP_AT = 140;
+
+function toggleSelfTestDetail(i){
+  selfTestOpen[i] = !selfTestOpen[i];
+  render();
+}
+
+function toggleSelfTestFailsOnly(){
+  selfTestFailsOnly = !selfTestFailsOnly;
+  render();
+}
+
 function renderSelfTest(m){
   setHeader('Local Model Self-Test', true);
   const pass = selfTestResults.filter(r=>r.ok).length;
+  const failed = selfTestResults.length - pass;
+  // Index against the FULL list, so filtering the view cannot make an opened
+  // detail snap shut or -- worse -- open a different one.
+  const rows = selfTestResults.map((r, i) => ({ r, i }))
+    .filter(x => !selfTestFailsOnly || !x.r.ok);
+
   let html = `<div class="card" style="border-left:5px solid ${pass===selfTestResults.length?'var(--accent)':'var(--amber-accent)'}">
     <div style="font-weight:800">${pass} of ${selfTestResults.length} checks passed</div></div>`;
-  html += selfTestResults.map(r => `<div class="card">
+
+  // Only offered when it would do something. A "hide passing" control on a
+  // run with nothing to hide is a control that lies about having work to do.
+  if(failed && pass){
+    html += `<button class="btn alt" aria-pressed="${selfTestFailsOnly ? 'true' : 'false'}"
+        onclick="toggleSelfTestFailsOnly()">${ico(selfTestFailsOnly ? 'layers' : 'alert')}${
+      selfTestFailsOnly
+        ? `Show all ${selfTestResults.length} checks`
+        : `Show only the ${failed} that failed`}</button>`;
+  }
+
+  html += rows.map(({ r, i }) => {
+    const detail = String(r.detail || '');
+    const long = detail.length > DETAIL_CLAMP_AT;
+    const open = !!selfTestOpen[i];
+    return `<div class="card">
     <div class="row">
       <div class="grow">
         <div style="font-weight:700;font-size:var(--t-sm)">${r.ok?'✓':'✗'} ${esc(r.name)}</div>
-        ${r.detail?`<div class="meta" style="font-size:var(--t-cap);word-break:break-word">${esc(r.detail)}</div>`:''}
-      </div></div></div>`).join('');
+        ${detail?`<div id="std${i}" class="meta${long && !open ? ' clamp3' : ''}"
+            style="font-size:var(--t-cap);word-break:break-word">${esc(detail)}</div>`:''}
+        ${long?`<button class="morebtn" aria-expanded="${open ? 'true' : 'false'}"
+            aria-controls="std${i}"
+            onclick="toggleSelfTestDetail(${i})">${
+          open ? 'Show less' : 'Show all ' + detail.length + ' characters'}</button>`:''}
+      </div></div></div>`;
+  }).join('');
+
   html += `<button class="btn alt" onclick="runLocalSelfTest()">Run again</button>`;
   m.innerHTML = html;
 }
@@ -8182,6 +8677,9 @@ function buildDiagnosticsFile(){
     appVersion: 'FlyerSnap ' + APP_VERSION,
     provider: aiProvider(), model: aiModelName(),
     includeLocalUrl: true,
+    // Null until something has asked. Worth having in the file either way:
+    // "we never found out" and "it is 4096" are different problems.
+    localContext: typeof localCtx === 'undefined' ? null : localCtx,
     userAgent: navigator.userAgent,
   });
   const name = 'flyersnap-diagnostics-' + todayISO() + '.json';
@@ -8203,10 +8701,16 @@ function buildDiagnosticsFile(){
  * A cancelled share is not an error -- the user simply changed their mind.
  */
 async function shareDiagnostics(){
-  let f;
+  let f, text;
   try{
-    const { name, text } = buildDiagnosticsFile();
-    f = new File([text], name, { type:'application/json' });
+    const built = buildDiagnosticsFile();
+    text = built.text;
+    // .txt / text/plain, NOT .json. iOS filters the share sheet by file type,
+    // and application/json is one many apps -- Gmail among them -- do not
+    // declare support for, so the sheet offered Outlook and little else.
+    // Plain text is accepted almost everywhere. The contents are unchanged and
+    // tools/diagnostics.js parses by content, never by extension.
+    f = new File([text], built.name.replace(/\.json$/, '.txt'), { type:'text/plain' });
   }catch(e){
     alert('Could not build the diagnostics file: ' + (e && e.message));
     return;
@@ -8225,19 +8729,28 @@ async function shareDiagnostics(){
   exportDiagnostics();
 }
 
+// The route that cannot be blocked by a share sheet that will not list your
+// mail app: paste it anywhere. Logan's sheet offered Outlook and not Gmail.
+async function copyDiagnostics(){
+  try{
+    const { text } = buildDiagnosticsFile();
+    await navigator.clipboard.writeText(text);
+    toast('Diagnostics copied — paste it into an email');
+  }catch(e){
+    alert('Could not copy: ' + (e && e.message) + '\n\nUse Send or Save to Files instead.');
+  }
+}
+
 function exportDiagnostics(){
   try{
-    const diag = buildDiagnostics(S, {
-      now: new Date().toISOString(),
-      appVersion: 'FlyerSnap ' + APP_VERSION,
-      provider: aiProvider(), model: aiModelName(),
-      includeLocalUrl: true,
-      userAgent: navigator.userAgent,
-    });
-    const blob = new Blob([JSON.stringify(diag, null, 2)], {type:'application/json'});
+    // One builder for all three routes -- share, copy and save. Built
+    // separately, the three could quietly disagree about what the word
+    // "diagnostics" means.
+    const { diag, name, text } = buildDiagnosticsFile();
+    const blob = new Blob([text], {type:'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'flyersnap-diagnostics-' + todayISO() + '.json';
+    a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     toast(`Diagnostics downloaded (${diag.aiLog.length} AI calls, ${diag.problems.length} problems)`);
   }catch(e){
