@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.23 · **Tests:** 482 passing (`node tests.js`)
+**Current version:** v9.24 · **Tests:** 488 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -28,7 +28,7 @@ synced copies, and **tests fail the build if they drift**:
 - `js/format.js`, `js/matching.js`, `js/prompts.js`, `js/migrate.js`,
   `js/icons.js`, `js/conflicts.js`, `js/intents.js`, `js/router.js`,
   `js/assistant-actions.js`, `js/ai-actions.js`, `js/conversation.js`,
-  `js/theme.js`, `js/ailog.js` — pure logic modules,
+  `js/theme.js`, `js/ailog.js`, `js/errorReport.js` — pure logic modules,
   individually tested. Inlined by hand
   into index.html's script (guard: "the inlined copies match js/ exactly").
 - `css/tokens.css` (all design tokens, light + dark), `css/components.css` —
@@ -357,6 +357,19 @@ latency, cost and the chance of being wrong. Keep it that way.
 FOLDER RULE: everything in `js/` SHIPS (it gets inlined into index.html).
 Tooling-only code belongs in `eval/` or `tools/`. The drift test enforces
 this — if it fails on a new file, the file is probably in the wrong folder.
+
+REMOTE ERROR REPORTING (v9.24, `js/errorReport.js` + glue beside logProblem;
+plan: ERROR-REPORTING-PLAN.md). Every NEW problem logged by `logProblem` is
+also queued to the shared Firestore `errorReports` collection (the recipe
+app's project), where the ADMIN CONSOLE lists it under a `flyersnap` badge.
+Delivery is a plain `fetch` POST to the Firestore REST API — no SDK, nothing
+at boot (rule 4 holds), localStorage outbox (`flyersnap-error-outbox`) so a
+killed page still leaves a record, delivered next launch. Text passes through
+`redact()` — the AI-log privacy rule applies unchanged: no event content, no
+prompt text, no API key, ever. The glue must NEVER call `logProblem` (loop).
+Opt-out: `S.settings.errorReportsOff = true` (no UI yet — adding one touches
+the settings-hub tests). Rules-side contract: ERROR-LOGGING-STANDARD.md in
+the AdminConsole repo; `firestore.rules` lives in the recipe-app repo.
 
 ## Deploying
 

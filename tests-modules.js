@@ -2536,4 +2536,62 @@ module.exports = async function runModuleTests(test){
     }
     assert.deepStrictEqual(raw, [], 'raw colors that must become tokens: ' + raw.join(' | '));
   });
+
+  console.log('\nRemote error reporting');
+
+  const er = await import('./js/errorReport.js');
+
+  test('a problem becomes a v2 report the shared rules will accept', () => {
+    const p = { id:'abc123', where:'Scanning', message:'Fetch failed with 500',
+      detail:'watcher said 500', first:'2026-08-22T10:00:00.000Z',
+      last:'2026-08-22T10:00:00.000Z', count:1, done:false };
+    const d = er.toReportDoc(p, { version:'v9.24', url:'https://x/y', userAgent:'UA', standalone:true });
+    assert.strictEqual(d.app, 'flyersnap');
+    assert.strictEqual(d.type, 'problem');
+    assert.strictEqual(d.reportId, 'fs-abc123');
+    assert.ok(d.message.length > 0 && d.message.length <= 2000);
+    assert.ok(Object.keys(d).length <= 24, 'rules cap: at most 24 keys, got ' + Object.keys(d).length);
+    assert.strictEqual(d.createdAt, Date.parse(p.first));
+    assert.strictEqual(d.standalone, true);
+    assert.strictEqual(d.severity, 'error');
+  });
+
+  test('reports are redacted: an address or token in the problem text never ships', () => {
+    const p = { id:'x', where:'Email: parent@school.org', message:'auth Bearer abc.def-123 failed',
+      detail:'from logan@example.com', first:'2026-08-22T10:00:00.000Z', count:1 };
+    const d = er.toReportDoc(p, {});
+    assert.ok(!/parent@school\.org/.test(d.message), d.message);
+    assert.ok(!/Bearer abc/.test(d.message), d.message);
+    assert.ok(!/logan@example\.com/.test(d.description), d.description);
+  });
+
+  test('fingerprints group repeats: digits vary, the group does not', () => {
+    assert.strictEqual(er.reportFingerprint('App', 'Timeout after 3000ms'),
+      er.reportFingerprint('App', 'Timeout after 9999ms'));
+    assert.notStrictEqual(er.reportFingerprint('App', 'Timeout'),
+      er.reportFingerprint('Scanning', 'Timeout'));
+  });
+
+  test('REST encoding types every field the way Firestore expects', () => {
+    const f = er.toRestFields({ a:'s', b:7, c:true });
+    assert.deepStrictEqual(f.a, { stringValue:'s' });
+    assert.deepStrictEqual(f.b, { integerValue:'7' });
+    assert.deepStrictEqual(f.c, { booleanValue:true });
+  });
+
+  test('the endpoint targets the shared project and only the errorReports path', () => {
+    const u = er.reportRestUrl('fs-1');
+    assert.ok(u.indexOf('/projects/meal-planner-f7f2f/') !== -1, u);
+    assert.ok(u.indexOf('/documents/errorReports?documentId=fs-1') !== -1, u);
+  });
+
+  test('logProblem queues a remote report for a NEW problem (guard reads code, not comments)', () => {
+    const src = fs.readFileSync('index.html', 'utf8');
+    const m = src.match(/function logProblem\([\s\S]*?\n\}/);
+    assert.ok(m, 'logProblem not found in index.html');
+    const code = m[0].replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(code.indexOf('queueErrorReport(') !== -1,
+      'logProblem no longer queues remote reports');
+  });
+
 };

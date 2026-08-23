@@ -3579,7 +3579,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.23';
+const APP_VERSION = 'v9.24';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5294,6 +5294,94 @@ async function saveSenders(list){
 let watchedSenders = null;
 let lastEmailProblems = [];
 
+// --- inlined from js/errorReport.js (drift-checked; edit the source file, then re-inline) ---
+// errorReport.js — remote error reporting, the PURE half (v9.24).
+//
+// Implements FlyerSnap's side of the cross-app error-logging standard
+// (ERROR-LOGGING-STANDARD.md in the AdminConsole repo): every problem that
+// lands in the local Problem Log is also queued as a small text-only document
+// to the shared Firestore `errorReports` collection, where the admin console
+// lists it under the `flyersnap` badge. Firestore rules allow anonymous
+// CREATE of a shape-valid report and nothing else — no read, no update.
+//
+// This module holds only pure builders so `node tests.js` can exercise them:
+// no fetch, no storage, no S. The I/O glue (outbox + lazy REST delivery)
+// lives in index.html next to logProblem, and NEVER runs at boot — the app
+// must keep working with no network and must not fetch anything to start.
+//
+// PRIVACY (non-negotiable, same rule as the AI log): reports carry the
+// problem's where/message/detail passed through redact() — never event or
+// chore content, never prompt text, never the API key. The Problem Log's own
+// text is already written to be shareable (it goes in the diagnostics file);
+// this sends that same text and nothing more.
+
+
+const ERROR_REPORT_APP = 'flyersnap';
+const ERROR_REPORT_PROJECT = 'meal-planner-f7f2f';
+// The shared project's public web API key (public by design — it ships in the
+// recipe app's bundle too; security is enforced by Firestore rules, not secrecy).
+const ERROR_REPORT_KEY = 'AIzaSyAp87MmFWuWQmHdJKPJ-i1UNOMXg-my5ho';
+const ERROR_OUTBOX_MAX = 20;
+
+// djb2, hex-encoded — same recipe as the other apps so grouping is uniform.
+function reportHash(input){
+  let h = 5381;
+  const s = String(input || '');
+  for(let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(16);
+}
+
+// Same normalization the Problem Log itself groups by: digits vary between
+// occurrences of one bug, the shape does not.
+function reportFingerprint(where, message){
+  return reportHash(String(where || '') + '|' +
+    String(message || '').replace(/\d+/g, 'N').slice(0, 120));
+}
+
+/**
+ * One Problem Log entry -> one v2-contract report document (plain object).
+ * ctx carries the environment: { version, url, userAgent, standalone }.
+ */
+function toReportDoc(problem, ctx){
+  const c = ctx || {};
+  const docOut = {
+    reportId: 'fs-' + String(problem.id || 'unknown'),
+    createdAt: Date.parse(problem.first || '') || Date.parse(problem.last || '') || 0,
+    type: 'problem',
+    message: redact(String(problem.where || 'App') + ': ' + String(problem.message || '')).slice(0, 2000),
+    app: ERROR_REPORT_APP,
+    appVersion: String(c.version || ''),
+    severity: 'error',
+    fingerprint: reportFingerprint(problem.where, problem.message),
+    standalone: !!c.standalone,
+    url: String(c.url || ''),
+    userAgent: String(c.userAgent || '').slice(0, 500),
+  };
+  if(problem.detail) docOut.description = redact(String(problem.detail)).slice(0, 400);
+  if(problem.count > 1) docOut.occurrenceCount = problem.count;
+  return docOut;
+}
+
+/** Plain object -> Firestore REST typed `fields` map. */
+function toRestFields(docOut){
+  const fields = {};
+  for(const k of Object.keys(docOut)){
+    const v = docOut[k];
+    if(typeof v === 'boolean') fields[k] = { booleanValue: v };
+    else if(typeof v === 'number') fields[k] = { integerValue: String(Math.trunc(v)) };
+    else fields[k] = { stringValue: String(v) };
+  }
+  return fields;
+}
+
+/** The create-document endpoint for one report id. */
+function reportRestUrl(docId){
+  return 'https://firestore.googleapis.com/v1/projects/' + ERROR_REPORT_PROJECT +
+    '/databases/(default)/documents/errorReports?documentId=' + encodeURIComponent(docId) +
+    '&key=' + ERROR_REPORT_KEY;
+}
+// --- end js/errorReport.js ---
+
 // ---------------------------------------------------------------------------
 // Problem log. Errors used to appear in a toast or an alert and then vanish, so
 // a pattern ("this sender always fails") was impossible to notice. Every
@@ -5315,6 +5403,7 @@ function logProblem(where, message, detail){
       S.problems.unshift({ id: uid(), key, where, message: msg,
         detail: detail ? String(detail).slice(0, 400) : null,
         first: now, last: now, count: 1, done: false });
+      queueErrorReport(S.problems[0]);
     }
     if(S.problems.length > 60) S.problems = S.problems.filter(p => !p.done).slice(0, 60);
     save();
@@ -5338,6 +5427,74 @@ function clearResolvedProblems(){
   S.problems = (S.problems||[]).filter(p => !p.done);
   save(); render();
 }
+
+// ---------------------------------------------------------------------------
+// Remote error reporting glue (v9.24). The pure builders live in
+// js/errorReport.js (inlined above); this half does the I/O. Same
+// non-negotiables as the AI log: redact() has already scrubbed the text,
+// reporting must never break the thing it reports on, and NOTHING here runs
+// at boot or blocks it -- delivery is lazy, the app keeps working with no
+// network, and an unreachable Firestore just leaves entries in the outbox.
+// Each report lands in the admin console's Logs tab under the `flyersnap`
+// badge (ERROR-REPORTING-PLAN.md). Opt out: S.settings.errorReportsOff = true.
+// NEVER call logProblem from inside this section -- a failing reporter
+// reporting itself is a loop.
+const ERROR_OUTBOX_LS = 'flyersnap-error-outbox';
+function errorOutboxRead(){
+  try{
+    const a = JSON.parse(localStorage.getItem(ERROR_OUTBOX_LS) || '[]');
+    return Array.isArray(a) ? a : [];
+  }catch(e){ return []; }
+}
+function errorOutboxWrite(list){
+  try{ localStorage.setItem(ERROR_OUTBOX_LS, JSON.stringify(list.slice(-ERROR_OUTBOX_MAX))); }catch(e){}
+}
+function queueErrorReport(problem){
+  try{
+    if(S && S.settings && S.settings.errorReportsOff) return;
+    const docOut = toReportDoc(problem, {
+      version: APP_VERSION,
+      url: location.origin + location.pathname,
+      userAgent: navigator.userAgent,
+      standalone: !!(navigator.standalone ||
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)),
+    });
+    errorOutboxWrite(errorOutboxRead().filter(d => d.reportId !== docOut.reportId).concat([docOut]));
+    setTimeout(() => { flushErrorReports(); }, 0);
+  }catch(e){ /* reporting must never break the app */ }
+}
+let errorFlushBusy = false;
+async function flushErrorReports(){
+  if(errorFlushBusy) return;
+  errorFlushBusy = true;
+  try{
+    if(S && S.settings && S.settings.errorReportsOff) return;
+    if(navigator.onLine === false) return;
+    for(const docOut of errorOutboxRead()){
+      let res;
+      try{
+        res = await fetch(reportRestUrl(docOut.reportId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: toRestFields(docOut) })
+        });
+      }catch(e){ return; } // offline/blocked -- the outbox keeps it for next time
+      if(res && (res.ok || res.status === 409 || res.status === 403)){
+        // ok = delivered; 409 = an earlier launch already delivered this id;
+        // 403 = rules rejected the shape -- retrying forever would not help.
+        errorOutboxWrite(errorOutboxRead().filter(d => d.reportId !== docOut.reportId));
+      } else {
+        return; // transient (5xx, no status) -- keep for the next flush
+      }
+    }
+  }catch(e){ /* never throw out of the reporter */
+  } finally { errorFlushBusy = false; }
+}
+// Leftovers from a page that died mid-write get delivered on the next launch.
+// Scheduled ONLY when something is actually waiting, so a normal boot adds no
+// timer and no work.
+try{ if(errorOutboxRead().length) setTimeout(() => { flushErrorReports(); }, 8000); }catch(e){}
+
 
 function renderProblems(m){
   setHeader('Problem Log', true);
