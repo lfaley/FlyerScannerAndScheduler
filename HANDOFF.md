@@ -1,6 +1,6 @@
 # FlyerSnap — Handoff Notes
 
-**Updated:** August 23, 2026 · **Live version:** v9.27 · **Tests:** 541 passing
+**Updated:** August 23, 2026 · **Live version:** v9.28 · **Tests:** 549 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 
@@ -80,6 +80,7 @@ stale and named three files that are not here):
 | **ERROR-LOGGING-HANDOFF.md** | Written by the Admin Console session, 23 Aug. The three-app arrangement and the rules for agents touching it. Not authoritative — see below. |
 | **ERROR-LOGGING-FINDINGS.md** | This session's reply to it: two findings. **Both accepted.** |
 | **ERROR-LOGGING-RULINGS-REPLY.md** | The Admin Console session's rulings on those findings, and the authorisation for the v9.27 change. |
+| **FLYERSNAP-FIXES-PLAN.md** | Remediation plan for the external review of `f60f09a`. Amended 23 Aug — see below. |
 | **GMAIL-WATCHER-SETUP.md** | Apps Script setup for the watcher. |
 | **DEPLOY.md** | Historical one-time GitHub Pages setup. |
 
@@ -129,6 +130,7 @@ a per-version progress log.
 | v9.24 | Problems also report to the shared Firestore backlog (admin console shows them under a `flyersnap` badge) — `js/errorReport.js` + ERROR-REPORTING-PLAN.md |
 | v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
 | v9.24 | Diagnostics share as text so Gmail appears; the fallback toast stopped blaming Anthropic |
+| v9.28 | An event can be typed in by hand — the app's primary object no longer requires AI to exist; toast stopped covering the FAB |
 | v9.27 | Automatic error reports are diagnostics-only — the email subject stops leaving the device (ruling 2026-08-23) |
 | v9.26 | The app measures the local context window and plans against it; thinking actually turned off; router scorer stopped failing names the app resolves; refusals say why; a wrong-day event is no longer called a hallucination; self-test collapses |
 
@@ -156,6 +158,40 @@ declare; the file now goes as `.txt` / `text/plain`, byte-identical inside
 added beside **Save to Files** so a share sheet that will not list your mail
 app is never the only way out. All three routes now build through one
 `buildDiagnosticsFile()`, so they cannot drift apart.
+
+**v9.28 — THE APP'S PRIMARY OBJECT COULD ONLY BE CREATED BY THE AI.**
+Reviewing `FLYERSNAP-FIXES-PLAN.md` meant checking its claims rather than
+reading them, and the item it had parked behind a decision gate turned out to be
+the biggest one in the document.
+
+`S.events.push` existed at **exactly one site** (`index.html:6996`, the save
+flow for AI-extracted `pendingEvents`). `openEventEdit(id)` does
+`S.events.find(...)` then dereferences `e.title` — it could only ever EDIT, and
+its one caller was an "Edit event" action on an existing row. Chores had
+`saveChoreForm()`; lists had their add box. **Events were the only one of the
+three with no hand-entry path** — and a fresh install defaults to Anthropic with
+an empty `localBaseUrl`, so with no key a user could not scan, could not ask
+Gordon, and could not type. The app's primary object was unreachable.
+
+Nobody noticed because every test and every dev session starts with a key set.
+That is now CLAUDE.md rule 22.
+
+Built and shipped: `openNewEvent()`, reusing the existing form and validator.
+`isNew` is its own flag rather than a third value for `saved` — `saved` is a
+boolean the save and cancel handlers branch on, and a string would be truthy in
+`if(f.saved)`, sending a new event into `S.events.find(x => x.id === null)`.
+Entry points are a "Type it in myself" row on Add Paperwork and the Events empty
+state's previously-unused `cta` slot. Driven end-to-end in a browser with the
+key cleared: validation still bites, the saved record matches the extracted
+shape, cancel returns to Events instead of an empty review queue, and editing a
+typed event still works.
+
+**And the toast really was covering the button.** `.fab` at
+`bottom:calc(76px + safe-area)`, `.toast` at `calc(80px + safe-area)`, both
+centred, z-index 9 against 99. Measured: **65% of the FAB covered**, on every
+screen with a FAB, not just theme changes. Moved to `calc(136px + safe-area)` —
+the FAB's offset plus its 48px height plus a 12px gap. Re-measured at **0px
+overlap**.
 
 **THE SHARED DATABASE IS NOW REAL, AND IT IS GROWING INTO SIGN-IN.**
 `ERROR-LOGGING-HANDOFF.md` (Admin Console session, 23 Aug) documents what

@@ -2603,6 +2603,101 @@ module.exports = async function runModuleTests(test){
     assert.strictEqual(loose.pass, true);
   });
 
+  console.log('\nAn event can be typed in by hand (v9.28)');
+
+  test('there is a way to create an event that needs no AI at all', () => {
+    // FS-UI-04. Verified at f60f09a: S.events.push existed at exactly ONE site
+    // (the AI review flow), and openEventEdit(id) does S.events.find(...) then
+    // dereferences e.title -- it could only ever EDIT. A fresh install defaults
+    // to provider 'anthropic' with an empty localBaseUrl, so with no key a user
+    // could not scan (needs AI), ask Gordon (routes through the model), or type
+    // (no form). The app's primary object was unreachable.
+    assert.ok(/function openNewEvent\(\)/.test(script), 'no create path exists');
+    const fn = script.split('function openNewEvent(')[1].split('\n}')[0];
+    assert.ok(/isNew\s*:\s*true/.test(fn), 'the form cannot tell create from edit');
+    assert.ok(/sub\('eventEdit'\)/.test(fn), 'it never opens the form');
+  });
+
+  test('create mode is its own flag, not a third value for `saved`', () => {
+    // `saved` is a boolean the save and cancel handlers branch on. Overloading
+    // it with a string would be TRUTHY in `if(f.saved)`, sending a brand-new
+    // event into S.events.find(x => x.id === null).
+    const open = script.split('function openNewEvent(')[1].split('\n}')[0];
+    assert.ok(/saved\s*:\s*false/.test(open), 'a new form claims to be a saved one');
+    assert.ok(!/saved\s*:\s*'new'|saved\s*:\s*"new"/.test(open), '`saved` has been overloaded');
+
+    const save = script.split('function saveEventEdit(')[1].split('\nfunction ')[0];
+    // Order matters: isNew forms carry saved:false, so a later branch would
+    // send them down the pendingEvents path and write into index null.
+    assert.ok(save.indexOf('if(f.isNew)') >= 0, 'the create branch is missing');
+    assert.ok(save.indexOf('if(f.isNew)') < save.indexOf('if(f.saved)'),
+      'the create branch must be tested BEFORE the saved branch');
+  });
+
+  test('a typed event is indistinguishable from an extracted one downstream', () => {
+    // Reminders, conflict detection, calendar export and duplicate matching all
+    // read the same fields. A create path that wrote a different shape would
+    // produce events that quietly do not warn or export.
+    const save = script.split('function saveEventEdit(')[1].split('\nfunction ')[0];
+    const branch = save.split('if(f.isNew)')[1].split('} else')[0];
+    ['id:uid()', 'exported:false', 'deleted:false', 'aiSource:null'].forEach(k =>
+      assert.ok(branch.replace(/\s+/g, '').includes(k.replace(/\s+/g, '')),
+        'the created event is missing ' + k));
+    assert.ok(/S\.events\.push/.test(branch), 'nothing is actually saved');
+  });
+
+  test('cancelling a new event does not strand you on a review queue', () => {
+    // A new event has no pendingEvents behind it. The old cancel sent anything
+    // with saved:false to sub('review') -- which for a typed event is a screen
+    // that was never populated.
+    const fn = script.split('function cancelEventEdit(')[1].split('\n}')[0];
+    assert.ok(/isNew/.test(fn), 'cancel cannot tell a new event from an extracted one');
+  });
+
+  test('it is reachable from where a user with no key actually lands', () => {
+    // Two entry points, both existing patterns: the Add Paperwork screen (it is
+    // already the "add something" screen) and the Events empty state's cta slot,
+    // which was going unused. With no API key the empty-state button is the
+    // ONLY action on that screen that works.
+    const cap = script.split('function renderCapture(')[1].split('\n}')[0];
+    assert.ok(/openNewEvent\(\)/.test(cap), 'not offered on Add Paperwork');
+    assert.ok(/Nothing tracked yet[\s\S]{0,400}openNewEvent\(\)/.test(script),
+      'the Events empty state does not offer it');
+  });
+
+  test('the created form is validated as strictly as an edited one', () => {
+    // The validator is shared, which is the point -- but a create path that
+    // skipped it would let an undated event into the calendar, and an event
+    // with no date can never be reminded about.
+    const save = script.split('function saveEventEdit(')[1].split('\nfunction ')[0];
+    assert.ok(save.indexOf('errors.title') < save.indexOf('if(f.isNew)'),
+      'validation must run before ANY branch writes');
+    assert.ok(save.indexOf('errors.date') < save.indexOf('if(f.isNew)'));
+  });
+
+  test('the create form is audited for accessibility in its own right', () => {
+    const { SCREENS } = require('./tools/a11y-audit.js');
+    const row = SCREENS.find(s => s.key === 'eventEdit-new');
+    assert.ok(row, 'the New Event screen is not in the audit table');
+    assert.ok(/openNewEvent\(\)/.test(row.setup), 'the audit row does not open it');
+  });
+
+  console.log('\nA toast must not cover the button underneath it (FS-UI-01)');
+
+  test('the toast clears the FAB it used to sit on top of', () => {
+    // Measured before the fix in a 390x844 browser: toast at y 719-764, FAB at
+    // 720-768, 65% of the FAB covered, toast at z-index 99 against the FAB's 9.
+    // Both are centred and fixed, so this collided on every screen with a FAB.
+    const toast = css.match(/\.toast\{[^}]*\}/);
+    const fab = css.match(/\.fab\{[^}]*\}/);
+    assert.ok(toast && fab, 'could not find the rules');
+    const px = (rule) => Number((rule[0].match(/bottom:calc\((\d+)px/) || [])[1]);
+    const t = px(toast), f = px(fab);
+    assert.ok(t && f, 'both need a calc() bottom offset');
+    // The FAB is 48px tall (14px padding top and bottom around a 20px line).
+    assert.ok(t >= f + 48, `the toast (bottom ${t}px) still overlaps the FAB (bottom ${f}px, 48px tall)`);
+  });
+
   console.log('\nSelf-test screen — long output can be shrunk (v9.25)');
 
   // renderSelfTest is followed by an `async function`, so splitting on

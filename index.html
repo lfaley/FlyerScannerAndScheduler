@@ -265,7 +265,11 @@
   main.enter{animation:screenIn .2s ease both}
   .celebrate{background:var(--green-lt);border-radius:10px;padding:12px;text-align:center;
     font-weight:700;color:var(--accent);margin-bottom:12px}
-  .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  /* 136px, not 80px. At 80 the toast sat 1px above the .fab (which is 48px
+     tall on a 76px offset) and covered 65% of it at z-index 99 vs 9 -- measured
+     in a 390x844 browser, on every screen with a FAB, not just theme changes.
+     136 = the FAB's 76px offset + its 48px height + a 12px gap. */
+  .toast{position:fixed;bottom:calc(136px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     background:var(--ink);color:var(--bg);padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
     z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none;
     display:inline-flex;align-items:center;gap:var(--s3)}
@@ -3906,7 +3910,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.27';
+const APP_VERSION = 'v9.28';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -4984,7 +4988,8 @@ function renderEvents(m){
         <div class="eb">You have ${totalEvents} event${totalEvents===1?'':'s'} saved${eventFilter?', but the filter above is limiting this list':''}. ${eventFilter?'Tap <b>All</b> to see everything.':'They may all be in the past — check below.'}</div></div>`;
     } else {
       html += emptyState('camera', 'Nothing tracked yet',
-        'Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.');
+        'Snap a flyer or import a PDF and FlyerSnap will pull out the dates for you.',
+        `<button class="btn alt" style="width:auto" onclick="openNewEvent()">${ico('pen')}Type one in instead</button>`);
     }
   } else {
     // Always available. These used to be hidden while an export queue was
@@ -6731,6 +6736,12 @@ function renderCapture(m){
     ${watcherConfigured() ? `<div class="card row" onclick="checkEmail(false)">
       ${ico('mail', {cls:'rowicon'})}
       <div class="grow"><div class="title">Check my email now</div><div class="meta">Looks for flyers from your watched senders</div></div></div>` : ''}
+    <div class="sect">No paperwork?</div>
+    <div class="card row" role="button" tabindex="0"
+        onclick="openNewEvent()"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewEvent()}">
+      ${ico('pen', {cls:'rowicon'})}
+      <div class="grow"><div class="title">Type it in myself</div><div class="meta">A blank event — no photo, no AI</div></div></div>
     <div class="help">Tip: on ParentSquare links, long-press the link in your email and pick "Open in Safari" — otherwise iOS opens the app instead of the flyer.</div>`;
 }
 
@@ -7019,6 +7030,23 @@ function openEventEdit(id){
     location:e.location||'', notes:e.notes||'', kind:e.kind, personIds:ids };
   sub('eventEdit');
 }
+/**
+ * A blank event, typed by hand. The one path to an event that needs no AI.
+ *
+ * `isNew` is its own flag rather than a third value for `saved`, which is a
+ * boolean the save and cancel handlers already branch on -- 'new' would be
+ * truthy there and would look up an event id that does not exist.
+ *
+ * The date defaults to today because that is overwhelmingly what a hand-typed
+ * event is for, and the field shows the value plainly so it cannot be saved
+ * unnoticed. The validator still refuses an empty or malformed one.
+ */
+function openNewEvent(){
+  eventForm = { isNew:true, saved:false, ref:null, title:'', date:todayISO(),
+    time:'', endTime:'', location:'', notes:'', kind:'event', personIds:[] };
+  sub('eventEdit');
+}
+
 function openPendingEdit(i){
   const e = pendingEvents[i];
   eventForm = { saved:false, ref:i, title:e.title, date:e.date, time:e.time||'',
@@ -7034,7 +7062,7 @@ function renderEventEdit(m){
   // the one screen missing it.
   document.getElementById('header').innerHTML =
     `<button class="back" aria-label="Back" onclick="cancelEventEdit()">${ico('chevron-left')}</button>`
-    + `<h1 class="htitle">Edit Event</h1>`
+    + `<h1 class="htitle">${eventForm && eventForm.isNew ? 'New Event' : 'Edit Event'}</h1>`
     + (aiEnabled() && !S.__locked ? `<button class="headerbtn" aria-label="Ask ${esc(aiName())} a question"
         onclick="openAsk()">${ico('message')}</button>` : '');
   m.classList.add('isform');            // F3: room for Save to clear the tab bar
@@ -7152,7 +7180,19 @@ function saveEventEdit(){
     endTime:(f.time && f.endTime)?f.endTime:null,
     location:(f.location||'').trim()||null, notes:(f.notes||'').trim()||null,
     kind:f.kind, personIds:ids, kidId:ids[0]||null };
-  if(f.saved){
+  if(f.isNew){
+    // The same shape the review flow writes (index.html's only other
+    // S.events.push), so a hand-typed event is indistinguishable downstream --
+    // reminders, conflict detection, calendar export and duplicate matching all
+    // treat it identically. `source` says where it came from, and `aiSource` is
+    // null because no model touched it.
+    S.events.push(Object.assign({ id:uid(), source:'Typed in', from:null,
+      aiSource:null, exported:false, unread:false, deleted:false }, fields));
+    save();
+    eventForm = null;
+    view = {tab:'events', sub:null, data:null}; render();
+    toast('Event added');
+  } else if(f.saved){
     const e = S.events.find(x=>x.id===f.ref);
     const timingChanged = e.date!==fields.date || (e.time||'')!==(f.time||'');
     Object.assign(e, fields);
@@ -7168,9 +7208,11 @@ function saveEventEdit(){
   }
 }
 function cancelEventEdit(){
-  const wasSaved = eventForm && eventForm.saved;
+  // A new event has nothing to go back to -- there is no review queue behind
+  // it -- so it returns to Events like a saved one does.
+  const toEvents = eventForm && (eventForm.saved || eventForm.isNew);
   eventForm = null;
-  if(wasSaved){ view = {tab:'events', sub:null, data:null}; render(); }
+  if(toEvents){ view = {tab:'events', sub:null, data:null}; render(); }
   else sub('review');
 }
 

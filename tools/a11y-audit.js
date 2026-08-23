@@ -144,6 +144,9 @@ const SCREENS = [
         personIds:['k1'], kidId:null, aiSource:'claude' }];
       pendingSource = 'assistant'; sub('review')` },
   { key:'eventEdit',  setup:`openEventEdit('e1')` },
+  // v9.28: the same form in CREATE mode. A different heading and a different
+  // Back behaviour, so it is a different DOM and gets its own audit row.
+  { key:'eventEdit-new', setup:`openNewEvent()` },
   { key:'listDetail', setup:`view = { tab:'lists', sub:'listDetail', data:{ id:'l1' } }` },
   { key:'rewards',    setup:`sub('rewards')` },
   { key:'ledger',     setup:`sub('ledger')` },

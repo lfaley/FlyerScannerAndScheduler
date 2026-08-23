@@ -11,7 +11,7 @@ in each event's `aiSource`).
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.27 · **Tests:** 541 passing (`node tests.js`)
+**Current version:** v9.28 · **Tests:** 549 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -211,16 +211,23 @@ having checked it.
    (`deploy.ps1`) must pin the OPERATIVE EXPRESSION, and every one of them must
    be mutation-tested. Third time this project has shipped a guard that read
    prose or vocabulary instead of code.
-22. Run `node tests.js` before every deploy; add a regression test with every
+22. EVERY OBJECT THE APP OWNS NEEDS A PATH THAT DOES NOT GO THROUGH THE AI.
+   Until v9.28, `S.events.push` existed at exactly one site — the review flow
+   for AI-extracted events — so with no API key a new user could not create an
+   event by scanning, by asking Gordon, or by typing. Chores and lists always
+   had hand-entry; events did not, and nobody noticed because every developer
+   test starts with a key. When adding a create path, check the other two ways
+   in still work with `aiEnabled()` false and no key.
+23. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.
 
 ## Verification tooling
 
-- `node tests.js` — 541 tests: data safety, migrations, inline-handler
+- `node tests.js` — 549 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
-- `node tools/a11y-audit.js` — ALL 36 screens in the RENDERED DOM: accessible
+- `node tools/a11y-audit.js` — ALL 37 screens in the RENDERED DOM: accessible
   names, tap targets, ARIA state, horizontal overflow, exactly one `<h1>`.
   The source tests cannot see a name that computes to nothing at runtime;
   this found exactly that in v9.1, and a 24px back button in v9.15.

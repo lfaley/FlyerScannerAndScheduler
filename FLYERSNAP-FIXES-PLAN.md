@@ -15,7 +15,7 @@
 - **First-run/empty-state onboarding** — NN/g's guidance on empty states is that the first-use empty state should teach the primary action and remove friction to it; the app already does this beautifully everywhere **except** the hidden API-key prerequisite (FS-UI-05). The fix applies the app's own existing pattern (`emptyState`, amber "wants attention" rows) to that one gap.
 - **Secure deletion of a stored secret** — removing a key means deleting `S.settings.apiKey` from the persisted blob, not just clearing the input; grounds FS-UI-02.
 
-Repo facts verified on disk today (exact sites for the code steps): the key UI lives in `renderSetAI` at `index.html:7974-7984` (the "Anthropic API key" `.sect`, help text, and `saveKey()` button); the opt-out flag is read at `index.html:5907` and `:5924` with no UI; the Trouble screen is `renderSetTrouble` (`index.html:4686`, `diagnosticsSection` at `:7651`); the direct Anthropic call is `index.html:4182-4184`.
+Repo facts verified on disk today (exact sites for the code steps): the key UI lives in `renderSetAI` at `index.html:7975-7985` (the "Anthropic API key" `.sect`, help text, and `saveKey()` button); the opt-out flag is read at `index.html:5907` and `:5924` with no UI; the Trouble screen is `renderSetTrouble` (`index.html:4686`, `diagnosticsSection` at `:7651`); the direct Anthropic call is `index.html:4182-4184`.
 
 ---
 
@@ -26,11 +26,60 @@ Phase 1  Anthropic low-cap workspace key        ← biggest risk-per-effort; pur
 Phase 2  Key management + AI-key onboarding      ← FS-UI-02 (remove key) + FS-UI-05 (first-run nudge)
 Phase 3  Error-reporting opt-out UI              ← FS-UI-03
 Phase 4  Gmail-watcher token hardening (docs+rotate) ← FS-BE-03, within the JSONP constraint
-Phase 5  Small UI polish                          ← FS-UI-01 toast; FS-UI-04 manual-entry (needs a decision)
+Phase 5  Small UI polish                          ← FS-UI-01 toast (SHIPPED v9.28)
 Deferred/handed-off: FS-BE-01 (SECURITY-PLAN P1), FS-BE-02 (integration phase), FS-BE-04/FS-BE-05 (accepted)
 ```
 
+**AMENDED 2026-08-23, after verification.** FS-UI-04 was not polish and its
+decision gate is closed — see §2a, which now runs BEFORE Phase 2. FS-UI-01 was
+measured, fixed and shipped in v9.28 along with it.
+
 Phase 1 first because it's the only item that meaningfully shrinks the standing key-exposure risk (FS-BE-01) **today**, costs nothing to build, and needs no code review — it's account configuration. Everything else is independent and reorderable.
+
+---
+
+## 2a. Phase 0 — Manual event entry (FS-UI-04) — **DECIDED AND SHIPPED (v9.28)**
+
+The plan deferred this pending "verify manual-create exists." It was verified on
+disk at `f60f09a`, and the answer was that it did not exist **at all**:
+
+- `S.events.push` occurred at **exactly one site** — `index.html:6996`, inside
+  the save flow for AI-extracted `pendingEvents`. Every event in the app came
+  from the model.
+- `openEventEdit(id)` does `S.events.find(x=>x.id===id)` and then dereferences
+  `e.title`; its single caller is an "Edit event" action on an existing row
+  (`:6686`). The form could only ever **edit**.
+- Chores have `saveChoreForm()` (`:7272`) and lists have their own add box
+  (`:7426`). **Events were the only one of the three with no hand-entry path.**
+
+**And it compounds with FS-UI-05, which is why it moved to the front.** A fresh
+install defaults to `aiProvider:'anthropic'` with an empty `localBaseUrl`
+(`:711`), so with no API key a new user could not create an event by scanning
+(needs AI), by asking Gordon (`add_event` routes through the model), or by
+typing (no form). **The app's primary object was unreachable.** That makes the
+Phase 2 onboarding nudge load-bearing rather than helpful — a nudge is a poor
+substitute for a path that works.
+
+Logan's decision, 23 Aug: **build it.** Shipped in v9.28:
+
+- `openNewEvent()` — a blank form, date defaulting to today, reusing the
+  existing edit screen and its validator unchanged.
+- `isNew` is its **own** flag, not a third value for `saved` — `saved` is a
+  boolean the save and cancel handlers branch on, and a string would be truthy
+  in `if(f.saved)`, sending a new event into `S.events.find(x=>x.id===null)`.
+  The create branch is tested **before** the saved branch, with a test pinning
+  that order.
+- The saved record carries the same shape the review flow writes, so reminders,
+  conflict detection, calendar export and duplicate matching treat it
+  identically. `source:'Typed in'`, `aiSource:null`.
+- Two entry points, both existing patterns: a **"Type it in myself"** row at the
+  end of Add Paperwork, and the Events empty state's `cta` slot, which was
+  unused. With no key, that button is the only action on the screen that works.
+- Seven tests, mutation-tested (disabling the create branch kills three), and
+  `eventEdit-new` added to the a11y audit table — **37 screens, no problems**.
+
+**Phase 2's nudge is still worth building**, but it is now a signpost to a
+faster path rather than the only way out of a dead end.
 
 ---
 
@@ -69,6 +118,15 @@ The gap: a brand-new user taps Add paperwork, but extraction needs a key that is
 
 **Acceptance:** with no key, Add-paperwork shows the nudge and one tap reaches the key field; with a key set, the nudge is gone and Remove key works and actually clears the stored value (verify the blob no longer contains it). `node tests.js` green (watch the settings-hub reachability test — the key controls stay in `setAI`, so no hub field is added).
 
+**AMENDED — register the new control.** The plan's reasoning about the hub tests
+is right: `mustSurvive` is an allowlist and "the hub is a menu" only forbids
+`<input>` in `renderSettings`, so adding to a spoke keeps both green. But that
+also means **`removeKey()` gets no protection from the one test that exists to
+stop controls vanishing in a reorganisation.** Add `'removeKey()'` to the
+`mustSurvive` array in `tests-modules.js` (24 entries today), and mutation-test
+that registration per CLAUDE.md rule 21 — delete the button, confirm the test
+fails.
+
 ---
 
 ## 4. Phase 3 — Error-reporting opt-out UI (FS-UI-03, sev 1)
@@ -80,6 +138,16 @@ The flag `S.settings.errorReportsOff` is honored in code (`index.html:5907`, `:5
 - **CLAUDE.md flags this touches the settings-hub tests** — expected and known-scope: the Trouble screen already hosts controls, so add the toggle there and update the reachability list if required. Mutation-nothing (no new guard), but re-run the hub tests.
 
 **Acceptance:** toggling off stops the queue (confirm no new `errorReports` POST fires — the two guard sites already short-circuit on the flag); toggling on resumes it; `node tests.js` green including the settings-hub suite.
+
+**AMENDED — two corrections.**
+1. **Register the toggle in `mustSurvive`** for the same reason as §3.1. The
+   plan says "Mutation-nothing (no new guard)" — true as written, but the
+   `mustSurvive` entry IS a new guard and must be mutation-tested.
+2. **The help-text wording is a standard, not a preference.** "Never your
+   events, notes, email contents, or API key" is true *as of v9.27*, and only
+   because of the ruling in `ERROR-LOGGING-RULINGS-REPLY.md`: every field of an
+   automatic report is diagnostics-only. Cite that document beside the string so
+   nobody softens it later without knowing what it is.
 
 ---
 
@@ -99,8 +167,21 @@ Grounded honestly in the JSONP constraint (§0): the token can't leave the URL w
 
 ## 6. Phase 5 — Small UI polish (FS-UI-01 sev 1, FS-UI-04 sev 2)
 
-- **FS-UI-01 — toast/FAB overlap.** The theme-change toast renders centered over the "Add paperwork" FAB. Fix in the `toast()` positioning (offset above the FAB's fixed zone), or suppress the confirmation toast for theme changes the user just watched happen. Verify in `node tools/preview.js` (light+dark screenshots) — the harness that would have caught it.
-- **FS-UI-04 — manual event entry (needs a decision first).** The review couldn't reach a plain "new event" form from Events with no data. **Before any code:** confirm whether manual entry exists (grep for an event-edit entry point; `renderEventEdit` exists per CLAUDE.md, so the *form* does — the question is whether there's a discoverable **create** affordance vs. only edit-existing). If it exists → surface it (an "Add manually" secondary action on the Events empty state / Add-paperwork). If it doesn't → that's a genuine feature gap and a **Logan decision**, not an automatic fix (CLAUDE.md rule 1: never add/remove a feature without asking). This plan flags it; it does not presume the answer.
+- **FS-UI-01 — toast/FAB overlap. MEASURED AND SHIPPED (v9.28).** Not a
+  near-miss and not specific to theme changes: `.fab` is
+  `bottom:calc(76px + safe-area)` and `.toast` was `calc(80px + safe-area)`,
+  both `left:50%` with `translateX(-50%)`, at z-index **9 and 99**. Measured in
+  a 390×844 browser: FAB at y 720–768, toast at 719–764, **65% of the FAB
+  covered** — on every screen with a FAB, for every toast. Suppressing the
+  theme toast would have hidden one symptom of a general collision. Fixed by
+  moving the toast to **`calc(136px + env(safe-area-inset-bottom))`** = the
+  FAB's 76px offset + its 48px height + a 12px gap. Re-measured: **0px overlap,
+  12px gap.** A test now asserts `toast.bottom >= fab.bottom + 48`, and reverting
+  the offset kills it.
+- ~~**FS-UI-04 — manual event entry (needs a decision first).**~~ **Resolved —
+  moved to §2a and shipped.** Kept below as written, for the record.
+
+  ~~**FS-UI-04 — manual event entry (needs a decision first).**~~ The review couldn't reach a plain "new event" form from Events with no data. **Before any code:** confirm whether manual entry exists (grep for an event-edit entry point; `renderEventEdit` exists per CLAUDE.md, so the *form* does — the question is whether there's a discoverable **create** affordance vs. only edit-existing). If it exists → surface it (an "Add manually" secondary action on the Events empty state / Add-paperwork). If it doesn't → that's a genuine feature gap and a **Logan decision**, not an automatic fix (CLAUDE.md rule 1: never add/remove a feature without asking). This plan flags it; it does not presume the answer.
 
 **Acceptance:** preview screenshots show no toast/FAB collision; the manual-entry question is answered with evidence before any UI is added.
 

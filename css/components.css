@@ -192,7 +192,11 @@
   main.enter{animation:screenIn .2s ease both}
   .celebrate{background:var(--green-lt);border-radius:10px;padding:12px;text-align:center;
     font-weight:700;color:var(--accent);margin-bottom:12px}
-  .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  /* 136px, not 80px. At 80 the toast sat 1px above the .fab (which is 48px
+     tall on a 76px offset) and covered 65% of it at z-index 99 vs 9 -- measured
+     in a 390x844 browser, on every screen with a FAB, not just theme changes.
+     136 = the FAB's 76px offset + its 48px height + a 12px gap. */
+  .toast{position:fixed;bottom:calc(136px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     background:var(--ink);color:var(--bg);padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;
     z-index:99;max-width:88%;text-align:center;opacity:0;transition:opacity .25s;pointer-events:none;
     display:inline-flex;align-items:center;gap:var(--s3)}
