@@ -135,6 +135,21 @@ a per-version progress log.
 | v9.25 | Report ids sort newest-first in the Firebase data browser (inverted-timestamp ids, all three apps) |
 | v9.24 | Diagnostics share as text so Gmail appears; the fallback toast stopped blaming Anthropic |
 | v9.31 | A hit spending cap says so, instead of "something went wrong" |
+
+**Phase 4 of FLYERSNAP-FIXES-PLAN.md is half done (docs, 23 Aug).**
+GMAIL-WATCHER-SETUP.md gained two sections: why the watcher's URL and token are
+**one password** (the token cannot leave the URL — JSONP exists because Apps
+Script gives browsers no usable CORS, cited to `gmail-watcher.gs:543-547`, with
+a warning not to "fix" it), and a seven-step rotation click-path with
+checkpoints. **The plan's own wording was wrong and is corrected there: rotation
+needs NO redeploy** — `SECRET` is read fresh on every call (`:561`), so a
+property change takes effect immediately.
+
+Still open, deliberately: the same token authorises both reading and
+`action=setsenders`, so a leak could repoint the watcher at different senders.
+A second `WRITE_SECRET` would split them, but it is a code change needing a
+re-paste and a new deployment version. Judged a nuisance rather than data loss —
+recorded so it stays a decision rather than an oversight.
 | v9.30 | Gordon (Logan's own model) is the primary AI; Anthropic is the automatic fallback |
 | v9.29 | An API key can be removed; a keyless user is told why scanning fails; error reporting has an off switch |
 | v9.28 | An event can be typed in by hand — the app's primary object no longer requires AI to exist; toast stopped covering the FAB |

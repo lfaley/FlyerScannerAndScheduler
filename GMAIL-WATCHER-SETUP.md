@@ -199,6 +199,104 @@ Change them at the top of the script if you want.
 
 ---
 
+## The URL and the token together are a password
+
+Worth understanding once, because it changes what you do if either ever leaks.
+
+FlyerSnap does not read your email. It **phones this script** and asks "anything
+new?", and the script hands back what it found. To make that call it needs the
+two things you pasted in Step 8: the **web app URL** (the phone number) and the
+**token** (the password). The script checks the token on every single call
+(`gmail-watcher.gs:561`) and answers `unauthorized` to anything else.
+
+The catch is that the token travels **inside the web address**:
+
+```
+https://script.google.com/.../exec?token=YOURSECRET
+```
+
+Addresses are the leakiest place to keep a secret — they end up in browser
+history, server logs and analytics. So the URL and the token are not really two
+things. **Together they are one password**, and anyone holding both can read the
+emails this watcher watches.
+
+**Why it cannot simply be moved somewhere safer.** Browsers cannot call an Apps
+Script web app directly — `/exec` redirects to `script.googleusercontent.com`
+without the headers a browser needs, so an ordinary request is blocked. FlyerSnap
+works around that with **JSONP**, which loads the script the same way a page
+loads a script file. That method can only ever fetch a plain address; it cannot
+carry hidden fields. So the token has nowhere else to live. The reason is written
+into the file itself at `gmail-watcher.gs:543-547` — **do not "fix" this by
+moving the token to a header, because the call will simply stop working.**
+
+---
+
+## Changing the token (rotation)
+
+Do this if the URL or token is ever exposed — a shared screenshot, a lost phone,
+a pasted link. It takes about a minute.
+
+**The good news: you do NOT need to redeploy.** The script reads the token fresh
+on every call, so a change takes effect immediately. Only changes to the *code*
+need a new deployment version.
+
+1. Go to **[script.google.com](https://script.google.com)** and sign in with the
+   Google account that owns the Gmail being watched.
+   ✅ You'll see a list of your Apps Script projects.
+
+2. Click your watcher project to open it.
+   ✅ The code editor opens, with a narrow icon sidebar down the left.
+
+3. In the **left sidebar**, click the **gear icon** — **Project Settings**.
+   ✅ A settings page opens. No code on screen.
+
+4. Scroll to **Script Properties** near the bottom. You'll see rows including
+   `SECRET`, `SENDERS` and `CLAUDE_KEY`.
+
+5. Generate a new secret. In PowerShell on the desktop:
+
+   ```powershell
+   -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 40 | ForEach-Object {[char]$_})
+   ```
+
+   ✅ A 40-character random string. Copy it.
+
+6. Click **Edit script properties**, replace the **value** next to `SECRET` with
+   the new string, then click **Save script properties**.
+   ✅ The new value appears in the list.
+   ⚠️ FlyerSnap stops working with the watcher from this moment. Step 7 fixes it.
+
+7. On the phone: FlyerSnap → **Settings** → **Reminders and email** → paste the
+   new value into the token field → **Save**.
+   ✅ Tap **Check my email now** on the Add Paperwork screen and it works again.
+
+**Reversible:** if anything goes wrong, put the old value back in `SECRET`,
+save, and re-save the old token in the app.
+
+---
+
+## One thing this token does NOT separate (open, not urgent)
+
+The same token authorises two different jobs:
+
+- **Reading** — "any new flyers?", which FlyerSnap does routinely.
+- **Changing** — `action=setsenders` rewrites *which senders are watched*
+  (`gmail-watcher.gs:569-570`).
+
+So a leaked token could not only read those emails but **repoint the watcher at
+different senders**, which is the kind of change nobody notices for a while.
+
+The fix would be a second property, `WRITE_SECRET`, required only for
+`setsenders`. It is a **code** change, so unlike rotation it needs the file
+re-pasted and a new deployment version (Deploy → Manage deployments → pencil →
+New version → Deploy), plus a second field in FlyerSnap's Reminders settings.
+
+**Not done, deliberately.** The token lives only on Logan's own phone, and the
+worst case is a nuisance rather than data loss. Recorded here so the trade-off is
+a decision rather than an oversight. See FLYERSNAP-FIXES-PLAN.md Phase 4.
+
+---
+
 ## Troubleshooting
 
 **"Google hasn't verified this app"** — expected. Advanced → Go to … (unsafe) → Allow. It's your script.
