@@ -3613,4 +3613,82 @@ module.exports = async function runModuleTests(test){
       'callLocalModel still sends the retired shared GORDON_TOKEN');
   });
 
+  // -------------------------------------------------------------------------
+  // Conversational EA (FLYERSNAP-EA-ASSISTANT-PLAN.md). Pure pieces: persona
+  // (tone), the EA system prompt, the three-shape turn parser, and the local
+  // greeting shortcut. A guard below proves the live Ask flow uses them.
+  // -------------------------------------------------------------------------
+  console.log('\nConversational EA');
+  const eaMod = await import('./js/router.js');
+
+  test('eaPersona defaults to crisp professional; casual is the warm variant', () => {
+    assert.ok(/crisp and professional/.test(eaMod.eaPersona('professional')));
+    assert.ok(/crisp and professional/.test(eaMod.eaPersona()));        // no arg → professional
+    assert.ok(/crisp and professional/.test(eaMod.eaPersona('bogus'))); // unknown → professional
+    assert.ok(/warm and friendly/.test(eaMod.eaPersona('casual')));
+  });
+
+  test('buildAssistantPrompt carries persona, the tool catalog, and the 3-shape contract', () => {
+    const p = eaMod.buildAssistantPrompt('professional');
+    assert.ok(/executive assistant/.test(p), 'persona missing');
+    assert.ok(/ask_schedule/.test(p), 'tool catalog missing');
+    assert.ok(/"message"/.test(p) && /"intent"/.test(p) && /"clarify"/.test(p), 'contract shapes missing');
+  });
+
+  test('parseAssistantTurn reads a message turn', () => {
+    const r = eaMod.parseAssistantTurn('{"message":"Good morning. Three deadlines this week."}');
+    assert.ok(r.ok && r.turn.kind === 'message');
+    assert.strictEqual(r.turn.text, 'Good morning. Three deadlines this week.');
+  });
+
+  test('parseAssistantTurn reads a tool turn (intent + params)', () => {
+    const r = eaMod.parseAssistantTurn('{"intent":"add_event","params":{"title":"Dentist"},"confidence":0.9}');
+    assert.ok(r.ok && r.turn.kind === 'tool');
+    assert.strictEqual(r.turn.intent, 'add_event');
+    assert.strictEqual(r.turn.params.title, 'Dentist');
+  });
+
+  test('parseAssistantTurn reads a clarify turn with options', () => {
+    const r = eaMod.parseAssistantTurn('{"clarify":"Which day?","options":["Mon","Tue"]}');
+    assert.ok(r.ok && r.turn.kind === 'clarify');
+    assert.deepStrictEqual(r.turn.options, ['Mon', 'Tue']);
+  });
+
+  test('parseAssistantTurn tolerates fences/<think> and a brace inside a string', () => {
+    const r = eaMod.parseAssistantTurn('<think>hmm</think> ```json\n{"message":"use {curly} carefully"}\n``` ');
+    assert.ok(r.ok && r.turn.kind === 'message');
+    assert.strictEqual(r.turn.text, 'use {curly} carefully');
+  });
+
+  test('parseAssistantTurn rejects junk safely (never throws)', () => {
+    assert.strictEqual(eaMod.parseAssistantTurn('no json here').ok, false);
+    assert.strictEqual(eaMod.parseAssistantTurn('{"foo":"bar"}').ok, false); // no known shape
+    assert.strictEqual(eaMod.parseAssistantTurn('').ok, false);
+  });
+
+  test('eaGreeting answers greetings/help/thanks locally, and defers everything else', () => {
+    assert.ok(/executive|add and edit|What would you like/i.test(eaMod.eaGreeting('hello', 'professional')));
+    assert.ok(/^Hello\./.test(eaMod.eaGreeting('Hello!', 'professional')), 'professional opener');
+    assert.ok(/^Hey!/.test(eaMod.eaGreeting('hi', 'casual')), 'casual opener');
+    assert.ok(/welcome/i.test(eaMod.eaGreeting('thanks', 'professional')));
+    assert.ok(eaMod.eaGreeting('what can you do?', 'professional'));
+    // Real requests must NOT be caught locally — they flow to the model.
+    assert.strictEqual(eaMod.eaGreeting('add dentist tuesday 3pm', 'professional'), null);
+    assert.strictEqual(eaMod.eaGreeting('what is on this week?', 'professional'), null);
+    assert.strictEqual(eaMod.eaGreeting('', 'professional'), null);
+  });
+
+  test('the live Ask flow uses the conversational EA contract (guard reads shipped code)', () => {
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.match(/async function runAsk\([\s\S]*?\n\}/);
+    assert.ok(fn, 'runAsk not found');
+    const code = fn[0].replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/eaGreeting\(/.test(code), 'runAsk no longer offers the local greeting shortcut');
+    assert.ok(/buildAssistantPrompt\(/.test(code), 'runAsk no longer uses the EA system prompt');
+    assert.ok(/parseAssistantTurn\(/.test(code), 'runAsk no longer parses the 3-shape turn');
+    assert.ok(/kind === 'message'/.test(code), 'runAsk no longer renders a chat reply');
+    // Actions still go through validation → confirm, not executed straight off.
+    assert.ok(/validateRoute\(/.test(code), 'runAsk no longer validates a tool turn before acting');
+  });
+
 };
