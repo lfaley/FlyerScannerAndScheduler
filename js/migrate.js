@@ -18,7 +18,7 @@
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -52,6 +52,21 @@ export function migrate(s, fromVersion){
     // Events can now be flagged unread. Everything already in the app counts as
     // seen, so nobody opens the app to a wall of "new" items.
     (s.events || []).forEach(e => { if(e.unread === undefined) e.unread = false; });
+  }
+
+  if(from < 5){
+    // Gordon-by-default: make the self-hosted model (via the auth-checking proxy)
+    // the PRIMARY provider on existing installs. The Anthropic fallback is left
+    // untouched — it stays as the safety net for when the desktop is off. The saved
+    // endpoint falls through to the app's GORDON_BASE_URL, so clear any stale direct
+    // endpoint; move the old text-only default model onto the shared vision model.
+    if(s.settings){
+      s.settings.aiProvider = 'local';
+      s.settings.localBaseUrl = '';
+      if(!s.settings.localModel || s.settings.localModel === 'qwen2.5:14b-instruct'){
+        s.settings.localModel = 'qwen3-vl:8b';
+      }
+    }
   }
 
   s.schemaVersion = SCHEMA_VERSION;

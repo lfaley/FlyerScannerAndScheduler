@@ -306,7 +306,7 @@ test('a v1 save migrates without losing anything', () => {
   v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
   v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
   boot(JSON.stringify(v1));
-  assert.strictEqual(S.schemaVersion, 4, 'stamped with the current version');
+  assert.strictEqual(S.schemaVersion, 5, 'stamped with the current version');
   assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
   assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
   assert.strictEqual(S.events.length, 1, 'real data untouched');
@@ -318,7 +318,7 @@ test('migration is not re-run on an already-current save', () => {
   save();
   const raw = localStorage.getItem('flyersnap');
   S = load();
-  assert.strictEqual(S.schemaVersion, 4);
+  assert.strictEqual(S.schemaVersion, 5);
   assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
 });
 
@@ -1596,11 +1596,16 @@ test('an empty list groups to nothing rather than throwing', () => {
 
 console.log('\nAI provider dispatch');
 
-test('Anthropic stays the default and is never removed', () => {
+test('Gordon (local) is now the PRIMARY provider, and Anthropic is never removed', () => {
+  // SUPERSEDES only the "which provider runs first" half of the 23 Aug decision.
+  // v9.32 (Logan): FlyerSnap runs on Gordon by default — the migration flips
+  // existing saves to local (schema v5) and blank() defaults to local. The
+  // Anthropic FALLBACK stays ON (see the separate fallback test) — "i did not ask
+  // for anthropic gone all the way" — and the Anthropic code path is not removed.
   boot(GOOD);
-  assert.strictEqual(aiProvider(), 'anthropic');
-  assert.strictEqual(typeof callClaude, 'function', 'the Anthropic path still exists');
-  assert.strictEqual(typeof callLocalModel, 'function', 'the local path is additional');
+  assert.strictEqual(aiProvider(), 'local');
+  assert.strictEqual(typeof callClaude, 'function', 'the Anthropic path still exists (fallback)');
+  assert.strictEqual(typeof callLocalModel, 'function', 'the local/Gordon path is primary');
 });
 
 test('switching provider is remembered', () => {
@@ -1649,13 +1654,16 @@ test('images plus text still translate cleanly', () => {
   assert.strictEqual(parts[0].type, 'image_url');
 });
 
-test('the local model refuses to run without a URL', async () => {
-  boot(GOOD);
-  S.settings.localBaseUrl = '';
-  let threw = false;
-  try { await callLocalModel([{type:'text',text:'x'}], 10); }
-  catch(e){ threw = /No local model URL/.test(e.message); }
-  assert.ok(threw, 'fails loudly instead of silently doing nothing');
+test('an empty local URL falls through to Gordon rather than refusing', () => {
+  // SUPERSEDES 'the local model refuses to run without a URL' (v9.32). Gordon is
+  // now the default endpoint: GORDON_BASE_URL is authoritative and a blank saved
+  // localBaseUrl must fall through to it, never refuse. Checked at the source so
+  // the test does no network call (a real call would hang on the model host).
+  const src = String(callLocalModel);
+  assert.ok(/\|\|\s*GORDON_BASE_URL/.test(src),
+    'callLocalModel no longer falls through to GORDON_BASE_URL when the saved URL is blank');
+  assert.ok(/localBaseUrl/.test(src),
+    'callLocalModel no longer reads the saved localBaseUrl at all');
 });
 
 test('the persona carries the rules that prevent our real failures', () => {

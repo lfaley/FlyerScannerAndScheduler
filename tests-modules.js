@@ -2705,7 +2705,9 @@ module.exports = async function runModuleTests(test){
   test('the Anthropic fallback is still reachable and still on by default', () => {
     // Removing Anthropic was explicitly rejected on 23 Aug: it is the reason
     // the app works at 11pm with the desktop off. This guards against a later
-    // "simplification" quietly deleting it.
+    // "simplification" quietly deleting it. (v9.32 made Gordon the PRIMARY
+    // provider but deliberately KEPT this fallback on — Logan: "i did not ask
+    // for anthropic gone all the way.")
     assert.ok(/aiFallback:\s*true/.test(script), 'the fallback no longer defaults on');
     assert.ok(/id="aiFallback"/.test(script), 'the fallback switch is gone from Settings');
     assert.ok(/function saveKey\(\)/.test(script) && /function removeKey\(\)/.test(script),

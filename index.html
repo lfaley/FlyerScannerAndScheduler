@@ -665,7 +665,7 @@ If the same event appears in two places, produce ONE item, not two.`;
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -701,9 +701,36 @@ function migrate(s, fromVersion){
     (s.events || []).forEach(e => { if(e.unread === undefined) e.unread = false; });
   }
 
+  if(from < 5){
+    // Gordon-by-default: make the self-hosted model (via the auth-checking proxy)
+    // the PRIMARY provider on existing installs. The Anthropic fallback is left
+    // untouched — it stays as the safety net for when the desktop is off. The saved
+    // endpoint falls through to the app's GORDON_BASE_URL, so clear any stale direct
+    // endpoint; move the old text-only default model onto the shared vision model.
+    if(s.settings){
+      s.settings.aiProvider = 'local';
+      s.settings.localBaseUrl = '';
+      if(!s.settings.localModel || s.settings.localModel === 'qwen2.5:14b-instruct'){
+        s.settings.localModel = 'qwen3-vl:8b';
+      }
+    }
+  }
+
   s.schemaVersion = SCHEMA_VERSION;
   return s;
 }
+
+// --- Gordon (self-hosted Ollama via the auth-checking proxy over Tailscale Funnel) ---
+// The no-build analog of the recipe app's baked VITE_HOSTED_AI_* config; reuses the SAME
+// proxy + token. GORDON_TOKEN is the proxy's shared ACCESS_TOKEN — already public in the
+// recipe app's deployed JS, CORS-locked to this origin, rate-limited, and rotatable
+// (SECURITY-PLAN.md / AI-BACKEND-PLAN.md), so it is not a true secret. To ROTATE: change
+// ACCESS_TOKEN on the proxy AND GORDON_TOKEN here, then redeploy. GORDON_BASE_URL is the
+// authoritative endpoint (saved settings fall through to it); GORDON_MODEL is the shared
+// vision model that serves both flyer reading and the recipe app, so one model stays warm.
+const GORDON_BASE_URL = 'https://desktop-pvl0f9c.tail1c32c9.ts.net/v1';
+const GORDON_MODEL    = 'qwen3-vl:8b';
+const GORDON_TOKEN    = 'Hr31B6El9YuFgayj8cw2WdsAPtINO4kS0Dxihn7z';  // = the contents of gordon-token.txt on the desktop
 
 let loadError = null;
 let storageWarned = false;
@@ -712,7 +739,7 @@ function blank(){ return { events:[], kids:[], chores:[], completions:[], reward
   redemptions:[], lists:[], listItems:[], ask:{ turns:[] }, aiLog:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
-    aiProvider:'anthropic', localBaseUrl:'', localModel:'qwen2.5:14b-instruct', aiFallback:true,
+    aiProvider:'local', localBaseUrl:'', localModel:'qwen3-vl:8b', aiFallback:true,
     aiEnabled:true, dismissedConflicts:[], theme:'dark' },
   schemaVersion: SCHEMA_VERSION }; }
 // ============================================================
@@ -3873,7 +3900,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.31';
+const APP_VERSION = 'v9.32';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -4019,12 +4046,12 @@ let localCtxAsked = false;
 async function probeLocalContext(){
   if(localCtxAsked) return localCtx;
   localCtxAsked = true;
-  const url = psUrlFrom(S.settings.localBaseUrl || '');
+  const url = psUrlFrom((S.settings.localBaseUrl||'').trim() || GORDON_BASE_URL);
   if(!url) return null;
   try{
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(url, { headers:{ 'Authorization':'Bearer local' }, signal: ctrl.signal });
+    const res = await fetch(url, { headers:{ 'Authorization':'Bearer ' + GORDON_TOKEN }, signal: ctrl.signal });
     clearTimeout(t);
     if(!res.ok) return null;
     localCtx = contextFromPs(await res.json(), (S.settings.localModel || '').trim());
@@ -4039,9 +4066,9 @@ async function probeLocalContext(){
 let lastLocalUsage = { inTokens:null, outTokens:null, finish:null };
 
 async function callLocalModel(contentBlocks, maxTokens, system){
-  const base = (S.settings.localBaseUrl||'').trim().replace(/\/+$/,'');
+  const base = ((S.settings.localBaseUrl||'').trim() || GORDON_BASE_URL).replace(/\/+$/,'');
   if(!base) throw new Error('No local model URL saved.');
-  const model = (S.settings.localModel||'').trim() || 'qwen2.5:14b-instruct';
+  const model = (S.settings.localModel||'').trim() || GORDON_MODEL;
   // Local models are more verbose than Claude for the same task, so give the
   // budget extra room rather than risk a truncated, unparseable response.
   maxTokens = Math.max(maxTokens || 2000, 4000);
@@ -4072,7 +4099,7 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   try{
     res = await fetch(base + '/chat/completions', {
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer local' },
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + GORDON_TOKEN },
       // Ollama 0.12+ auto-enables thinking for thinking-capable models unless
       // told otherwise, and reasoning tokens are spent from the SAME budget as
       // the answer -- so the model can narrate until it runs out and never emit
@@ -8004,7 +8031,7 @@ function renderSetAI(m){
     ${aiProvider()==='local' ? `
       <label class="label" for="localBase">Base URL</label>
       <input type="text" id="localBase" placeholder="https://machine.tailnet.ts.net/v1"
-        autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||'')}">
+        autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||GORDON_BASE_URL)}">
       <label class="label" for="localModel">Model</label>
       <input type="text" id="localModel" placeholder="qwen2.5:14b-instruct"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localModel||'')}">
@@ -8197,8 +8224,8 @@ async function runLocalSelfTest(){
   selfTestResults = [];
   const add = (name, ok, detail) => selfTestResults.push({ name, ok, detail: detail || '' });
 
-  const base = (S.settings.localBaseUrl||'').trim().replace(/\/+$/,'');
-  const model = (S.settings.localModel||'').trim();
+  const base = ((S.settings.localBaseUrl||'').trim() || GORDON_BASE_URL).replace(/\/+$/,'');
+  const model = (S.settings.localModel||'').trim() || GORDON_MODEL;
 
   // Stage 1 -- configuration, before any network work.
   if(!base){ add('Base URL saved', false, 'empty'); sub('selfTest'); return; }
@@ -8294,7 +8321,7 @@ async function runLocalSelfTest(){
 // /models is a plain GET; use fetch where CORS allows and fall back to JSONP.
 async function jsonpRequestOrFetch(url){
   try{
-    const res = await fetch(url, { headers:{ 'Authorization':'Bearer local' } });
+    const res = await fetch(url, { headers:{ 'Authorization':'Bearer ' + GORDON_TOKEN } });
     if(!res.ok) throw new Error('status ' + res.status);
     return await res.json();
   }catch(e){
