@@ -3613,6 +3613,41 @@ module.exports = async function runModuleTests(test){
       'callLocalModel still sends the retired shared GORDON_TOKEN');
   });
 
+  test('every place that names the local model names the SAME one', () => {
+    // 24 Aug: Logan's Ollama was serving `qwen2.5:14b-instruct` -- a TEXT-ONLY
+    // 14B that cannot read a photo -- and Gordon was "really slow". The app had
+    // the tag written in four places that had drifted apart:
+    //   * GORDON_MODEL (the baked default)          -> qwen3-vl:8b  (THINKING)
+    //   * saveLocalModel()'s empty-field fallback    -> qwen2.5:14b-instruct
+    //   * the migration's target                     -> qwen3-vl:8b  (THINKING)
+    //   * the input placeholder                      -> qwen2.5:14b-instruct
+    // Saving with an empty field wrote the text model into settings for good.
+    const baked = (script.match(/const GORDON_MODEL\s*=\s*'([^']+)'/) || [])[1];
+    assert.ok(baked, 'GORDON_MODEL not found');
+
+    // The bare tag is Ollama's THINKING edition (verified from the server log:
+    // renderer=qwen3-vl-thinking). It reasons until the budget is gone.
+    assert.ok(!/^qwen3-vl:\d+b$/.test(baked),
+      'GORDON_MODEL is the bare (thinking) tag: ' + baked);
+    assert.ok(/instruct/.test(baked), 'GORDON_MODEL is not an instruct tag: ' + baked);
+
+    // Save and read must agree, or an empty field silently rewrites the setting.
+    const save = script.split('function saveLocalModel(')[1].split('\n}')[0];
+    assert.ok(/localModel\s*=\s*\(m \? m\.value : ''\)\.trim\(\) \|\| GORDON_MODEL/.test(save),
+      "saveLocalModel's fallback has drifted from GORDON_MODEL");
+
+    // The migration keeps a literal (it is unit-tested as a standalone module and
+    // cannot see GORDON_MODEL) -- so pin the literal to the constant here.
+    const mig = fs.readFileSync('./js/migrate.js', 'utf8');
+    const target = (mig.match(/s\.settings\.localModel = '([^']+)'/) || [])[1];
+    assert.strictEqual(target, baked,
+      'js/migrate.js migrates onto a different model than GORDON_MODEL');
+
+    // A placeholder is a suggestion. This one used to suggest the broken model.
+    const ph = (script.match(/id="localModel" placeholder="([^"]+)"/) || [])[1];
+    assert.strictEqual(ph, baked, 'the Model field suggests a different tag');
+  });
+
   test('no credential is hardcoded in the shipped file', () => {
     // index.html SHIPS TO GITHUB PAGES. There is nowhere in it that is not
     // public, and "not sent" is not the same as "not exposed".

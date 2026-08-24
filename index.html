@@ -710,8 +710,19 @@ function migrate(s, fromVersion){
     if(s.settings){
       s.settings.aiProvider = 'local';
       s.settings.localBaseUrl = '';
-      if(!s.settings.localModel || s.settings.localModel === 'qwen2.5:14b-instruct'){
-        s.settings.localModel = 'qwen3-vl:8b';
+      // ...to the INSTRUCT tag. This previously migrated onto `qwen3-vl:8b`,
+      // which is the Thinking edition -- so the migration meant to rescue people
+      // from a text-only model handed them a model that reasons until it runs
+      // out of budget. Also catches anyone already sitting on that bare tag.
+      //
+      // The tag is a 'qwen3-vl:8b-instruct-q8_0'ERAL here, not index.html's GORDON_MODEL: this module is
+      // imported and unit-tested on its own, and referencing a constant that only
+      // exists in the shipped file would throw ReferenceError the first time a
+      // test exercised this branch. A guard test pins the two together instead.
+      if(!s.settings.localModel
+         || s.settings.localModel === 'qwen2.5:14b-instruct'
+         || s.settings.localModel === 'qwen3-vl:8b'){
+        s.settings.localModel = 'qwen3-vl:8b-instruct-q8_0';
       }
     }
   }
@@ -866,7 +877,18 @@ async function gordonSignIn(email, password){
 //
 // NEVER put a credential in this file. There is nowhere in it that is not public.
 const GORDON_BASE_URL = 'https://desktop-pvl0f9c.tail1c32c9.ts.net/v1';
-const GORDON_MODEL    = 'qwen3-vl:8b';
+// The -instruct tag, NOT the bare `qwen3-vl:8b`. On Ollama that bare tag is the
+// THINKING edition -- verified from Logan's own server log:
+//   template selection model=.../qwen3-vl:8b renderer=qwen3-vl-thinking
+// and its manifest inherits `from: qwen3-vl:8b-thinking-bf16`. It spends its
+// whole token budget reasoning and emits no answer; it cost two failures of 48s
+// and 27s, and is the reason `thinking_only` exists as an error class.
+//
+// This tag is SHARED with the recipe app through one Ollama on a 14.4 GiB card.
+// If the two apps request different tags they cannot both be resident (8.1 GB
+// for the old 14B, 9.8 GB for this), so every switch between apps evicts and
+// reloads ~9 GB. Changing it here means changing it there too.
+const GORDON_MODEL    = 'qwen3-vl:8b-instruct-q8_0';
 
 let loadError = null;
 let storageWarned = false;
@@ -4196,7 +4218,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.36';
+const APP_VERSION = 'v9.37';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -8541,7 +8563,7 @@ function renderSetAI(m){
       <input type="text" id="localBase" placeholder="https://machine.tailnet.ts.net/v1"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||GORDON_BASE_URL)}">
       <label class="label" for="localModel">Model</label>
-      <input type="text" id="localModel" placeholder="qwen2.5:14b-instruct"
+      <input type="text" id="localModel" placeholder="qwen3-vl:8b-instruct-q8_0"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localModel||'')}">
       <label class="row" style="margin-top:10px">
         <input type="checkbox" id="aiFallback" aria-label="Fall back to Anthropic when the local model fails" ${S.settings.aiFallback?'checked':''}
@@ -8552,7 +8574,7 @@ function renderSetAI(m){
         <button class="btn" onclick="saveLocalModel()">Save</button>
         <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
       </div>
-      <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model. A text-only model such as qwen2.5:14b-instruct cannot read photos — pull something like <b>qwen2.5vl</b> or <b>llama3.2-vision</b> for that.</div>
+      <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model — a text-only one such as qwen2.5:14b-instruct cannot read photos at all. Use <b>qwen3-vl:8b-instruct-q8_0</b>. Not the bare <b>qwen3-vl:8b</b>: that tag is the &ldquo;thinking&rdquo; edition and spends its whole answer reasoning.</div>
     ` : ''}
 
     <div class="sect">Anthropic API key ${aiProvider() === 'local' ? '(fallback)' : ''}</div>
@@ -8722,7 +8744,13 @@ function saveLocalModel(){
   }
   if(url && !/\/v1$/.test(url)) url += '/v1';
   S.settings.localBaseUrl = url;
-  S.settings.localModel = (m ? m.value : '').trim() || 'qwen2.5:14b-instruct';
+  // GORDON_MODEL, not the old text-only default. Both READ paths already fall
+  // back to GORDON_MODEL (`callLocalModel`, `probeLocalContext`), so this line
+  // saving something different meant an empty field silently wrote
+  // `qwen2.5:14b-instruct` into settings -- a TEXT-ONLY 14B that cannot read a
+  // photo at all, and is slower than the vision model it replaced. That is how
+  // Logan's Ollama ended up serving the wrong model on 24 Aug.
+  S.settings.localModel = (m ? m.value : '').trim() || GORDON_MODEL;
   save(); render();
   toast('Saved — tap Test to check it');
 }
