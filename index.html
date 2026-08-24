@@ -720,17 +720,141 @@ function migrate(s, fromVersion){
   return s;
 }
 
+// ===== inlined from js/gordon-auth.js =====
+// Firebase Auth REST helpers for "sign in to use Gordon" (SECURITY-PLAN.md P2).
+// PURE: request builders + response parsers only -- no fetch, no DOM, no SDK.
+// That is deliberate. The Firebase JS SDK cannot be inlined without a build
+// step, and making it a boot dependency is the v8.1-v8.5 blank-screen incident
+// in a new costume. Email+password sign-in is two plain HTTPS calls, so the app
+// never imports Firebase and still boots with zero network. index.html holds the
+// impure half (the actual fetch + localStorage); this half is unit-tested offline.
+const GORDON_AUTH = {
+  signInUrl: (key) => 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + key,
+  refreshUrl: (key) => 'https://securetoken.googleapis.com/v1/token?key=' + key,
+
+  // Email + password is the ONLY method that works in an installed iOS PWA
+  // (magic link, popup, and redirect all fail there -- SECURITY-PLAN.md 3.2).
+  signInRequest(email, password, apiKey){
+    return { url: this.signInUrl(apiKey), options: {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password, returnSecureToken: true })
+    } };
+  },
+
+  refreshRequest(refreshToken, apiKey){
+    return { url: this.refreshUrl(apiKey), options: {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refreshToken)
+    } };
+  },
+
+  // Sign-in response -> the session we persist. Throws on a malformed body so a
+  // junk 200 can never masquerade as a signed-in state (hostile-parse discipline).
+  parseSignIn(json, nowMs){
+    if(!json || !json.idToken || !json.refreshToken) throw new Error('sign-in response missing tokens');
+    const ttl = (Number(json.expiresIn) || 3600) * 1000;
+    return { idToken: json.idToken, refreshToken: json.refreshToken,
+      email: String(json.email || '').toLowerCase(), idTokenExpiresAt: nowMs + ttl };
+  },
+
+  // Refresh response -> a fresh session, carrying the email forward. The refresh
+  // endpoint returns snake_case; accept either just in case.
+  parseRefresh(json, prev, nowMs){
+    const idToken = json && (json.id_token || json.idToken);
+    const refreshToken = json && (json.refresh_token || json.refreshToken);
+    if(!idToken || !refreshToken) throw new Error('refresh response missing tokens');
+    const ttl = (Number(json.expires_in || json.expiresIn) || 3600) * 1000;
+    return { idToken: idToken, refreshToken: refreshToken,
+      email: (prev && prev.email) || '', idTokenExpiresAt: nowMs + ttl };
+  },
+
+  isSession(s){
+    return !!(s && typeof s.idToken === 'string' && typeof s.refreshToken === 'string'
+      && typeof s.idTokenExpiresAt === 'number');
+  },
+
+  // Refresh a little before the ~1h ID token actually expires, so a call never
+  // races the boundary. skewMs default = 5 minutes.
+  needsRefresh(s, nowMs, skewMs){
+    if(skewMs === undefined) skewMs = 300000;
+    return !this.isSession(s) || nowMs >= (s.idTokenExpiresAt - skewMs);
+  },
+
+  // Turn Identity Toolkit's error codes into something a parent can read.
+  signInErrorMessage(json){
+    const code = (json && json.error && json.error.message) || '';
+    if(/EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_LOGIN_CREDENTIALS/.test(code))
+      return 'That email or password is not right.';
+    if(/USER_DISABLED/.test(code)) return 'This account has been disabled.';
+    if(/TOO_MANY_ATTEMPTS/.test(code)) return 'Too many attempts — wait a moment and try again.';
+    if(/MISSING_PASSWORD|MISSING_EMAIL/.test(code)) return 'Enter both your email and password.';
+    return 'Sign-in failed' + (code ? ' (' + code + ')' : '') + '.';
+  }
+};
+
+// --- Sign-in that unlocks Gordon (the impure half of gordon-auth) ---
+// Session is stored SEPARATELY from the synced app data (S): it is per-device
+// auth, not app content, and must survive independently. localStorage only.
+const FB_API_KEY = 'AIzaSyAp87MmFWuWQmHdJKPJ-i1UNOMXg-my5ho'; // public web API key, same project as the recipe app
+const GORDON_SESSION_KEY = 'flyersnap.gordon.session';
+
+function loadGordonSession(){
+  try{
+    const raw = localStorage.getItem(GORDON_SESSION_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    return GORDON_AUTH.isSession(s) ? s : null;
+  }catch(e){ return null; }
+}
+function saveGordonSession(s){ try{ localStorage.setItem(GORDON_SESSION_KEY, JSON.stringify(s)); }catch(e){} }
+function clearGordonSession(){ try{ localStorage.removeItem(GORDON_SESSION_KEY); }catch(e){} }
+function gordonSignedInEmail(){ const s = loadGordonSession(); return s ? s.email : null; }
+
+// A fresh Firebase ID token for the proxy, or null if not signed in. Refreshes
+// transparently; a revoked/expired refresh token clears the session. Offline
+// with a still-valid ID token: use it. This is the ONLY source of the proxy
+// bearer now -- the old shared GORDON_TOKEN is no longer sent (see below).
+async function gordonAuthToken(){
+  let s = loadGordonSession();
+  if(!s) return null;
+  if(GORDON_AUTH.needsRefresh(s, Date.now())){
+    try{
+      const { url, options } = GORDON_AUTH.refreshRequest(s.refreshToken, FB_API_KEY);
+      const r = await fetch(url, options);
+      if(r.status === 400 || r.status === 401 || r.status === 403){ clearGordonSession(); return null; }
+      if(!r.ok) return Date.now() < s.idTokenExpiresAt ? s.idToken : null; // transient: keep a still-valid token
+      s = GORDON_AUTH.parseRefresh(await r.json(), s, Date.now());
+      saveGordonSession(s);
+    }catch(e){
+      return Date.now() < s.idTokenExpiresAt ? s.idToken : null; // offline
+    }
+  }
+  return s.idToken;
+}
+
+async function gordonSignIn(email, password){
+  const { url, options } = GORDON_AUTH.signInRequest(String(email||'').trim(), String(password||''), FB_API_KEY);
+  const r = await fetch(url, options);
+  const json = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(GORDON_AUTH.signInErrorMessage(json));
+  const s = GORDON_AUTH.parseSignIn(json, Date.now());
+  saveGordonSession(s);
+  return s;
+}
+
 // --- Gordon (self-hosted Ollama via the auth-checking proxy over Tailscale Funnel) ---
-// The no-build analog of the recipe app's baked VITE_HOSTED_AI_* config; reuses the SAME
-// proxy + token. GORDON_TOKEN is the proxy's shared ACCESS_TOKEN — already public in the
-// recipe app's deployed JS, CORS-locked to this origin, rate-limited, and rotatable
-// (SECURITY-PLAN.md / AI-BACKEND-PLAN.md), so it is not a true secret. To ROTATE: change
-// ACCESS_TOKEN on the proxy AND GORDON_TOKEN here, then redeploy. GORDON_BASE_URL is the
-// authoritative endpoint (saved settings fall through to it); GORDON_MODEL is the shared
+// The no-build analog of the recipe app's baked VITE_HOSTED_AI_* config. GORDON_BASE_URL is
+// the authoritative endpoint (saved settings fall through to it); GORDON_MODEL is the shared
 // vision model that serves both flyer reading and the recipe app, so one model stays warm.
+//
+// AUTH (v9.33): Gordon is now gated by PER-USER sign-in. Every call to the proxy carries the
+// signed-in user's Firebase ID token (gordonAuthToken(), above) — the same allowlist that
+// gates the recipe app. GORDON_TOKEN below is the OLD shared ACCESS_TOKEN; it is kept defined
+// for one release as an emergency fallback flag but is NO LONGER SENT by default, so a
+// signed-out device cannot reach Gordon (it falls back to the user's own Anthropic key).
 const GORDON_BASE_URL = 'https://desktop-pvl0f9c.tail1c32c9.ts.net/v1';
 const GORDON_MODEL    = 'qwen3-vl:8b';
-const GORDON_TOKEN    = 'Hr31B6El9YuFgayj8cw2WdsAPtINO4kS0Dxihn7z';  // = the contents of gordon-token.txt on the desktop
+const GORDON_TOKEN    = 'Hr31B6El9YuFgayj8cw2WdsAPtINO4kS0Dxihn7z';  // LEGACY — no longer sent; see AUTH note above
 
 let loadError = null;
 let storageWarned = false;
@@ -3900,7 +4024,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.32';
+const APP_VERSION = 'v9.33';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -3924,11 +4048,20 @@ async function callAI(contentBlocks, maxTokens, system, op){
         finish: lastLocalUsage.finish });
       return out;
     }catch(err){
+      // Not signed in to Gordon: the local path is gated per-user now. Treat it
+      // as a local failure so the Anthropic fallback (the user's own key) still
+      // answers when enabled, but SAY why so the fix is discoverable.
+      const needAuth = err && err.message === 'GORDON_AUTH_REQUIRED';
       const unsupported = /^UNSUPPORTED_BLOCK:/.test(err.message);
       const localFail = { op: aiOp, provider:'local',
         reqModel: S.settings.localModel || null, ok:false, ms: Date.now() - started,
-        errorType: unsupported ? 'unsupported_input' : classifyError(err),
-        detail: err && err.message };
+        errorType: needAuth ? 'auth_required' : (unsupported ? 'unsupported_input' : classifyError(err)),
+        detail: needAuth ? 'Not signed in to Gordon' : (err && err.message) };
+      if(needAuth && !S.settings.aiFallback){
+        recordAiCall(localFail);
+        logProblem('Gordon', 'Sign in to use the local model (Settings → Gordon and AI)', aiModelName());
+        throw new Error('Sign in to use Gordon.\n\nOpen Settings → Gordon and AI and sign in — or turn on "Fall back to Anthropic".');
+      }
       if(S.settings.aiFallback){
         recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
         // WORDING MATTERS. This used to read "Local model unavailable — using
@@ -3936,11 +4069,13 @@ async function callAI(contentBlocks, maxTokens, system, op){
         // Anthropic" -- Logan reported repeated "Anthropic couldn't be
         // reached" alerts when the log showed Anthropic succeeding every time.
         // Lead with the outcome, name the thing that failed second.
-        toast(unsupported ? 'Read by Anthropic instead — PDFs need it'
-                          : 'Read by Anthropic instead — your local model did not answer');
-        logProblem('Local model', unsupported
-          ? 'Fell back to Anthropic: this content type is not supported locally'
-          : 'Fell back to Anthropic: ' + err.message, aiModelName());
+        toast(needAuth ? 'Read by Anthropic — sign in (Settings) to use Gordon'
+                       : (unsupported ? 'Read by Anthropic instead — PDFs need it'
+                          : 'Read by Anthropic instead — your local model did not answer'));
+        logProblem('Local model', needAuth
+          ? 'Fell back to Anthropic: not signed in to Gordon'
+          : (unsupported ? 'Fell back to Anthropic: this content type is not supported locally'
+             : 'Fell back to Anthropic: ' + err.message), aiModelName());
         return await callClaude(contentBlocks, maxTokens, system);
       }
       recordAiCall(localFail);
@@ -4048,10 +4183,12 @@ async function probeLocalContext(){
   localCtxAsked = true;
   const url = psUrlFrom((S.settings.localBaseUrl||'').trim() || GORDON_BASE_URL);
   if(!url) return null;
+  const gtok = await gordonAuthToken();
+  if(!gtok) return null;   // signed out: skip the probe (best-effort by design)
   try{
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(url, { headers:{ 'Authorization':'Bearer ' + GORDON_TOKEN }, signal: ctrl.signal });
+    const res = await fetch(url, { headers:{ 'Authorization':'Bearer ' + gtok }, signal: ctrl.signal });
     clearTimeout(t);
     if(!res.ok) return null;
     localCtx = contextFromPs(await res.json(), (S.settings.localModel || '').trim());
@@ -4069,6 +4206,11 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   const base = ((S.settings.localBaseUrl||'').trim() || GORDON_BASE_URL).replace(/\/+$/,'');
   if(!base) throw new Error('No local model URL saved.');
   const model = (S.settings.localModel||'').trim() || GORDON_MODEL;
+  // Gordon is gated by per-user sign-in. No session -> refuse here; callAI's
+  // catch treats it like any local failure and falls back to Anthropic (the
+  // user's own key) when that is enabled.
+  const gtok = await gordonAuthToken();
+  if(!gtok) throw new Error('GORDON_AUTH_REQUIRED');
   // Local models are more verbose than Claude for the same task, so give the
   // budget extra room rather than risk a truncated, unparseable response.
   maxTokens = Math.max(maxTokens || 2000, 4000);
@@ -4099,7 +4241,7 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   try{
     res = await fetch(base + '/chat/completions', {
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + GORDON_TOKEN },
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + gtok },
       // Ollama 0.12+ auto-enables thinking for thinking-capable models unless
       // told otherwise, and reasoning tokens are spent from the SAME budget as
       // the answer -- so the model can narrate until it runs out and never emit
@@ -8020,6 +8162,56 @@ function renderSetPeople(m){
       <button class="linkbtn red" onclick="delKid('${k.id}')">Remove</button></div>`).join('') + ``;
 }
 
+// The Gordon sign-in block in Settings. Signing in unlocks the LOCAL model
+// (per-user, via the shared allowlist). The app and every manual feature work
+// without it; the Anthropic fallback uses the user's own key. Email+password
+// only — the one method that works in an installed iOS PWA.
+function gordonAuthCard(){
+  const email = gordonSignedInEmail();
+  if(email){
+    return `<div class="card" style="border-left:4px solid var(--green-accent,#3a7)">
+      <div class="row" style="align-items:center">
+        <div class="grow"><div class="title" style="font-size:14px">Signed in to Gordon</div>
+          <div class="meta" style="font-size:12px">${esc(email)}</div></div>
+        <button class="btn alt sm" style="width:auto" onclick="gordonSignOutUI()">Sign out</button>
+      </div></div>`;
+  }
+  return `<div class="card" style="border-left:4px solid var(--amber-accent,#c90)">
+    <div class="title" style="font-size:14px">Sign in to use Gordon</div>
+    <div class="help" style="margin:4px 0 8px">The local model is per-person now. Sign in with an allow-listed email and password. The app and manual features work without signing in; the Anthropic fallback uses your own key.</div>
+    <input type="email" id="gordonEmail" aria-label="Email" placeholder="you@example.com"
+      autocapitalize="none" autocorrect="off" spellcheck="false" style="margin-bottom:6px">
+    <input type="password" id="gordonPassword" aria-label="Password" placeholder="Password"
+      onkeydown="if(event.key==='Enter')gordonSignInUI()">
+    <div class="formrow" style="margin-top:8px">
+      <button class="btn" onclick="gordonSignInUI()">Sign in</button>
+    </div>
+    <div id="gordonAuthMsg" class="help" style="margin-top:6px;min-height:1em" role="status" aria-live="polite"></div>`;
+}
+
+async function gordonSignInUI(){
+  const emailEl = document.getElementById('gordonEmail');
+  const passEl  = document.getElementById('gordonPassword');
+  const msg     = document.getElementById('gordonAuthMsg');
+  const email = emailEl ? emailEl.value : '';
+  const password = passEl ? passEl.value : '';
+  if(!email || !password){ if(msg) msg.textContent = 'Enter both your email and password.'; return; }
+  if(msg) msg.textContent = 'Signing in…';
+  try{
+    await gordonSignIn(email, password);
+    toast('Signed in — Gordon is ready');
+    sub('setAI');   // re-render with the signed-in state
+  }catch(err){
+    if(msg) msg.textContent = (err && err.message) || 'Sign-in failed.';
+  }
+}
+
+function gordonSignOutUI(){
+  clearGordonSession();
+  toast('Signed out of Gordon');
+  sub('setAI');
+}
+
 function renderSetAI(m){
   setHeader(aiName() + ' and AI', true);
   // No "Gordon" heading here: the header bar already says "Gordon and AI".
@@ -8029,6 +8221,7 @@ function renderSetAI(m){
       <span class="chip ${aiProvider()==='local'?'on':''}" onclick="setAiProvider('local')">${ico('home')}Local model</span>
     </div>
     ${aiProvider()==='local' ? `
+      ${gordonAuthCard()}
       <label class="label" for="localBase">Base URL</label>
       <input type="text" id="localBase" placeholder="https://machine.tailnet.ts.net/v1"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||GORDON_BASE_URL)}">
@@ -8320,8 +8513,10 @@ async function runLocalSelfTest(){
 
 // /models is a plain GET; use fetch where CORS allows and fall back to JSONP.
 async function jsonpRequestOrFetch(url){
+  const gtok = await gordonAuthToken();
+  if(!gtok) throw new Error('Sign in to Gordon first (Settings → Gordon and AI).');
   try{
-    const res = await fetch(url, { headers:{ 'Authorization':'Bearer ' + GORDON_TOKEN } });
+    const res = await fetch(url, { headers:{ 'Authorization':'Bearer ' + gtok } });
     if(!res.ok) throw new Error('status ' + res.status);
     return await res.json();
   }catch(e){

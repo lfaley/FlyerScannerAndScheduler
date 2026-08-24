@@ -3528,4 +3528,89 @@ module.exports = async function runModuleTests(test){
       'logProblem no longer queues remote reports');
   });
 
+  // -------------------------------------------------------------------------
+  // Gordon sign-in (js/gordon-auth.js). Pure request-builders + parsers, so
+  // they test with no network. The impure half (fetch + localStorage) lives in
+  // index.html; a separate test below proves the AI path is gated on a token.
+  // -------------------------------------------------------------------------
+  console.log('\nGordon sign-in (gordon-auth)');
+  const ga = (await import('./js/gordon-auth.js')).GORDON_AUTH;
+
+  test('signInRequest posts email+password JSON to the identitytoolkit endpoint', () => {
+    const { url, options } = ga.signInRequest('a@b.com', 'pw', 'KEY');
+    assert.ok(/identitytoolkit\.googleapis\.com.*signInWithPassword\?key=KEY$/.test(url), 'wrong sign-in URL: ' + url);
+    assert.strictEqual(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    assert.deepStrictEqual(body, { email:'a@b.com', password:'pw', returnSecureToken:true });
+  });
+
+  test('refreshRequest posts a form-encoded refresh grant to the securetoken endpoint', () => {
+    const { url, options } = ga.refreshRequest('RT/with+chars', 'KEY');
+    assert.ok(/securetoken\.googleapis\.com.*token\?key=KEY$/.test(url), 'wrong refresh URL: ' + url);
+    assert.strictEqual(options.headers['Content-Type'], 'application/x-www-form-urlencoded');
+    assert.ok(options.body.indexOf('grant_type=refresh_token') === 0);
+    assert.ok(options.body.indexOf('refresh_token=RT%2Fwith%2Bchars') !== -1, 'refresh token not url-encoded: ' + options.body);
+  });
+
+  test('parseSignIn maps tokens and computes expiry from expiresIn', () => {
+    const s = ga.parseSignIn({ idToken:'ID', refreshToken:'RT', expiresIn:'3600', email:'A@B.com' }, 1000);
+    assert.strictEqual(s.idToken, 'ID');
+    assert.strictEqual(s.refreshToken, 'RT');
+    assert.strictEqual(s.email, 'a@b.com', 'email should be lowercased');
+    assert.strictEqual(s.idTokenExpiresAt, 1000 + 3600*1000);
+  });
+
+  test('parseSignIn throws on a body missing tokens (a junk 200 is not a session)', () => {
+    assert.throws(() => ga.parseSignIn({ email:'a@b.com' }, 0));
+    assert.throws(() => ga.parseSignIn(null, 0));
+  });
+
+  test('parseRefresh accepts snake_case and carries the email forward', () => {
+    const s = ga.parseRefresh({ id_token:'ID2', refresh_token:'RT2', expires_in:'3600' }, { email:'x@y.com' }, 2000);
+    assert.strictEqual(s.idToken, 'ID2');
+    assert.strictEqual(s.refreshToken, 'RT2');
+    assert.strictEqual(s.email, 'x@y.com');
+    assert.strictEqual(s.idTokenExpiresAt, 2000 + 3600*1000);
+  });
+
+  test('parseRefresh throws when tokens are missing', () => {
+    assert.throws(() => ga.parseRefresh({ expires_in:'3600' }, {}, 0));
+  });
+
+  test('isSession accepts a well-formed session and rejects junk', () => {
+    assert.ok(ga.isSession({ idToken:'a', refreshToken:'b', idTokenExpiresAt: 1 }));
+    assert.ok(!ga.isSession(null));
+    assert.ok(!ga.isSession({ idToken:'a', refreshToken:'b' }));
+    assert.ok(!ga.isSession({ idToken:1, refreshToken:'b', idTokenExpiresAt: 1 }));
+  });
+
+  test('needsRefresh: fresh token no, near-expiry yes, no session yes', () => {
+    const s = { idToken:'a', refreshToken:'b', idTokenExpiresAt: 1000000 };
+    assert.strictEqual(ga.needsRefresh(s, 0), false);                 // far from expiry
+    assert.strictEqual(ga.needsRefresh(s, 1000000 - 60000), true);    // within the 5-min skew
+    assert.strictEqual(ga.needsRefresh(s, 1000001), true);            // past expiry
+    assert.strictEqual(ga.needsRefresh(null, 0), true);               // no session
+  });
+
+  test('signInErrorMessage turns Firebase codes into human text', () => {
+    assert.ok(/not right/.test(ga.signInErrorMessage({ error:{ message:'INVALID_PASSWORD' } })));
+    assert.ok(/not right/.test(ga.signInErrorMessage({ error:{ message:'INVALID_LOGIN_CREDENTIALS' } })));
+    assert.ok(/disabled/.test(ga.signInErrorMessage({ error:{ message:'USER_DISABLED' } })));
+    assert.ok(/Sign-in failed/.test(ga.signInErrorMessage({})));
+  });
+
+  test('the AI local path is gated on a Gordon token (no session -> no call)', () => {
+    // callLocalModel must obtain gordonAuthToken() and throw GORDON_AUTH_REQUIRED
+    // when there is none, so a signed-out device cannot reach the proxy. probe
+    // must bail to null. Guard reads the shipped code, not comments.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const call = src.match(/async function callLocalModel\([\s\S]*?\n\}/);
+    assert.ok(call, 'callLocalModel not found');
+    const code = call[0].replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/gordonAuthToken\(\)/.test(code), 'callLocalModel no longer fetches a per-user token');
+    assert.ok(/GORDON_AUTH_REQUIRED/.test(code), 'callLocalModel no longer refuses when signed out');
+    assert.ok(!/Bearer'\s*\+\s*GORDON_TOKEN|Bearer '\s*\+\s*GORDON_TOKEN/.test(code),
+      'callLocalModel still sends the retired shared GORDON_TOKEN');
+  });
+
 };
