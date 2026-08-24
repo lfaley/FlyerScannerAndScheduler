@@ -3691,4 +3691,60 @@ module.exports = async function runModuleTests(test){
     assert.ok(/validateRoute\(/.test(code), 'runAsk no longer validates a tool turn before acting');
   });
 
+  // EA enrichment (scaffold): the pure batch-annotation core. Preview only —
+  // never mutates the input; the build step applies it on confirm.
+  test('computeBatchEnrichment prefixes a theme into every title without mutating input', () => {
+    const batch = [{ title:'Fall Concert', selected:true }, { title:'Winter Concert', selected:true }];
+    const r = eaMod.computeBatchEnrichment(batch, { value:'Band', field:'title' });
+    assert.strictEqual(r.count, 2);
+    assert.strictEqual(r.changes[0].after, 'Band — Fall Concert');
+    assert.strictEqual(batch[0].title, 'Fall Concert', 'input must not be mutated (preview only)');
+  });
+
+  test('computeBatchEnrichment appends into notes (never prefixes notes)', () => {
+    const batch = [{ title:'Game', notes:'Bring water' }];
+    const r = eaMod.computeBatchEnrichment(batch, { value:'Room 204', field:'notes', mode:'prefix' });
+    assert.strictEqual(r.mode, 'append', 'notes are always appended');
+    assert.strictEqual(r.changes[0].after, 'Bring water\nRoom 204');
+  });
+
+  test('computeBatchEnrichment scope "selected" only touches selected entries', () => {
+    const batch = [{ title:'A', selected:true }, { title:'B', selected:false }];
+    const r = eaMod.computeBatchEnrichment(batch, { value:'Band', field:'title', scope:'selected' });
+    assert.strictEqual(r.count, 1);
+    assert.strictEqual(r.changes[0].index, 0);
+  });
+
+  test('computeBatchEnrichment: empty value changes nothing; replace overwrites the title', () => {
+    assert.strictEqual(eaMod.computeBatchEnrichment([{ title:'X' }], { value:'  ' }).count, 0);
+    const r = eaMod.computeBatchEnrichment([{ title:'Old' }], { value:'New', field:'title', mode:'replace' });
+    assert.strictEqual(r.changes[0].after, 'New');
+  });
+
+  test('enrich_batch is registered as a CONFIRM intent requiring a value', async () => {
+    const intents = (await import('./js/intents.js')).INTENTS;
+    const e = intents.find(i => i.id === 'enrich_batch');
+    assert.ok(e, 'enrich_batch not registered');
+    assert.strictEqual(e.consequence, 'confirm');
+    assert.strictEqual(e.params.value.required, true);
+  });
+
+  test('validateRoute accepts a well-formed enrich_batch and rejects a missing value', () => {
+    const ok = eaMod.validateRoute({ intent:'enrich_batch', params:{ value:'Band', field:'title' }, confidence:0.9 });
+    assert.ok(ok.ok && ok.intent === 'enrich_batch', 'well-formed enrich_batch should validate');
+    const bad = eaMod.validateRoute({ intent:'enrich_batch', params:{ field:'title' }, confidence:0.9 });
+    assert.strictEqual(bad.ok, false, 'missing required value must be rejected');
+  });
+
+  test('the app wires enrich_batch end to end: preview in performRoute, apply in confirm, review UI (guard reads shipped code)', () => {
+    const src = fs.readFileSync('index.html', 'utf8');
+    assert.ok(/function runReviewAsk\(/.test(src), 'review-screen Ask Gordon handler missing');
+    assert.ok(/function applyReviewEnrich\(/.test(src), 'review-screen apply missing');
+    const perf = src.match(/async function performRoute\([\s\S]*?\n\}/);
+    assert.ok(perf && /enrich_batch/.test(perf[0]) && /computeBatchEnrichment\(/.test(perf[0]),
+      'performRoute does not preview enrich_batch');
+    const conf = src.match(/function confirmPendingAction\([\s\S]*?\n\}/);
+    assert.ok(conf && /case 'enrich_batch'/.test(conf[0]), 'confirm path does not apply enrich_batch');
+  });
+
 };

@@ -384,3 +384,41 @@ export function eaGreeting(text, tone){
     return CAP;
   return null;
 }
+
+// ── EA enrichment (scaffold — FLYERSNAP-EA-PLAN.md) ──────────────────────────
+// Apply a stated theme/annotation across the batch of draft entries under review
+// (index.html's pendingEvents), into a chosen field, WITHOUT mutating. Returns a
+// preview so the review screen can show exactly what changes before the user
+// confirms — the same propose-then-confirm safety the router already relies on.
+// Pure + unit-tested here; the build step registers the intent, previews the
+// result, and applies it to pendingEvents on confirm.
+//   field: 'title' | 'notes'
+//   mode:  title → 'prefix' (default) | 'suffix' | 'replace';  notes → 'append'
+//   scope: 'all' (default) | 'selected'   (selected = entries with .selected)
+export function computeBatchEnrichment(entries, opts){
+  const field = (opts && opts.field) === 'notes' ? 'notes' : 'title';
+  const value = String((opts && opts.value) || '').trim();
+  const scope = (opts && opts.scope) === 'selected' ? 'selected' : 'all';
+  let mode = (opts && opts.mode) || (field === 'notes' ? 'append' : 'prefix');
+  if(field === 'notes') mode = 'append';                       // notes only ever append
+  else if(!/^(prefix|suffix|replace)$/.test(mode)) mode = 'prefix';
+  const list = Array.isArray(entries) ? entries : [];
+  const changes = [];
+  list.forEach((e, i) => {
+    if(!e || (scope === 'selected' && !e.selected)) return;
+    if(!value) return;
+    const before = String(e[field] || '');
+    let after;
+    if(field === 'notes'){
+      after = before.trim() ? (before.replace(/\s+$/, '') + '\n' + value) : value;
+    } else if(mode === 'replace'){
+      after = value;
+    } else if(mode === 'suffix'){
+      after = before.trim() ? (before + ' — ' + value) : value;
+    } else { // prefix
+      after = before.trim() ? (value + ' — ' + before) : value;
+    }
+    if(after !== before) changes.push({ index:i, field, before, after });
+  });
+  return { field, value, mode, scope, count: changes.length, changes };
+}

@@ -195,6 +195,22 @@ export const INTENTS = [
     params: { chore: { type:'string', required:true } },
     fallback: 'Long-press the chore on the Chores tab.',
   },
+  {
+    // EA batch enrichment: apply a shared theme/annotation to every draft entry
+    // currently on the review screen (pendingEvents), into the title or notes.
+    // Preview + confirm before it changes anything; additive and undoable.
+    id: 'enrich_batch',
+    consequence: CONSEQUENCE.CONFIRM,
+    title: 'Apply a theme or note to the whole review batch',
+    examples: ['add band to the title of all these', 'put room 204 in the notes for all of them', 'tag these as choir'],
+    params: {
+      value: { type:'string', required:true },
+      field: { type:'enum', required:false, values:['title','notes'] },
+      mode:  { type:'enum', required:false, values:['prefix','suffix','replace','append'] },
+      scope: { type:'enum', required:false, values:['all','selected'] },
+    },
+    fallback: 'Edit each entry on the review screen.',
+  },
 ];
 
 export function intentById(id){ return INTENTS.find(i => i.id === id) || null; }

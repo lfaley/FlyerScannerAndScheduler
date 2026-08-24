@@ -91,6 +91,7 @@ export function actionName(route, target){
     case 'edit_event':       return name ? `Update ${short(name)}` : 'Update it';
     case 'delete_event':
     case 'delete_chore':     return name ? `Delete ${short(name)}` : 'Delete it';
+    case 'enrich_batch':     return p.scope === 'selected' ? 'Apply to selected' : 'Apply to all';
     default:                 return 'Do it';
   }
 }
