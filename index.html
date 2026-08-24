@@ -813,7 +813,7 @@ function gordonSignedInEmail(){ const s = loadGordonSession(); return s ? s.emai
 // A fresh Firebase ID token for the proxy, or null if not signed in. Refreshes
 // transparently; a revoked/expired refresh token clears the session. Offline
 // with a still-valid ID token: use it. This is the ONLY source of the proxy
-// bearer now -- the old shared GORDON_TOKEN is no longer sent (see below).
+// bearer now -- the old shared ACCESS_TOKEN was retired entirely on 24 Aug.
 async function gordonAuthToken(){
   let s = loadGordonSession();
   if(!s) return null;
@@ -847,14 +847,26 @@ async function gordonSignIn(email, password){
 // the authoritative endpoint (saved settings fall through to it); GORDON_MODEL is the shared
 // vision model that serves both flyer reading and the recipe app, so one model stays warm.
 //
-// AUTH (v9.33): Gordon is now gated by PER-USER sign-in. Every call to the proxy carries the
+// AUTH (v9.33): Gordon is gated by PER-USER sign-in. Every call to the proxy carries the
 // signed-in user's Firebase ID token (gordonAuthToken(), above) — the same allowlist that
-// gates the recipe app. GORDON_TOKEN below is the OLD shared ACCESS_TOKEN; it is kept defined
-// for one release as an emergency fallback flag but is NO LONGER SENT by default, so a
-// signed-out device cannot reach Gordon (it falls back to the user's own Anthropic key).
+// gates the recipe app. A signed-out device cannot reach Gordon at all; it falls back to the
+// user's own Anthropic key.
+//
+// THE OLD SHARED TOKEN IS GONE (24 Aug 2026), and the reason it went is worth keeping.
+// v9.32 kept the retired `GORDON_TOKEN` constant here "for one release, as an emergency
+// fallback". But index.html SHIPS TO GITHUB PAGES — it is a public file — so that constant
+// was a working credential published next to the endpoint it opened. A secret you publish is
+// not a fallback; you have already given it to everyone. Verified live on 24 Aug: a request
+// carrying it returned HTTP 200 from the proxy.
+//
+// Retired rather than rotated, because rotating only publishes a different secret next
+// build. The proxy's ACCESS_TOKEN was removed from the GordonAI service environment
+// (NSSM: `nssm set GordonAI AppEnvironmentExtra ...` without it), so the proxy now accepts
+// exactly one thing: a valid Firebase ID token whose email is on the allowlist.
+//
+// NEVER put a credential in this file. There is nowhere in it that is not public.
 const GORDON_BASE_URL = 'https://desktop-pvl0f9c.tail1c32c9.ts.net/v1';
 const GORDON_MODEL    = 'qwen3-vl:8b';
-const GORDON_TOKEN    = 'Hr31B6El9YuFgayj8cw2WdsAPtINO4kS0Dxihn7z';  // LEGACY — no longer sent; see AUTH note above
 
 let loadError = null;
 let storageWarned = false;
@@ -4184,7 +4196,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.35';
+const APP_VERSION = 'v9.36';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }

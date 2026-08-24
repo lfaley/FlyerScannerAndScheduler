@@ -3613,6 +3613,33 @@ module.exports = async function runModuleTests(test){
       'callLocalModel still sends the retired shared GORDON_TOKEN');
   });
 
+  test('no credential is hardcoded in the shipped file', () => {
+    // index.html SHIPS TO GITHUB PAGES. There is nowhere in it that is not
+    // public, and "not sent" is not the same as "not exposed".
+    //
+    // v9.32 kept the retired shared proxy token here "for one release as an
+    // emergency fallback". The app genuinely never sent it -- the previous
+    // assertion proves that -- and it was still a working credential published
+    // four lines under the URL it opened. Verified live on 24 Aug 2026: a
+    // request carrying it returned HTTP 200 from the proxy. It was retired at
+    // the server (removed from the GordonAI service environment) rather than
+    // rotated, because rotating only publishes a different secret next build.
+    assert.ok(!/Hr31B6El9YuFgayj8cw2WdsAPtINO4kS0Dxihn7z/.test(script),
+      'the retired Gordon shared token is back in the shipped file');
+
+    // Anything NAMED like a secret must not carry a long literal value.
+    // The Firebase web API keys are deliberately out of scope: they are public
+    // by design -- security comes from Firestore rules, not from hiding them --
+    // and they are named *_KEY rather than *_TOKEN/*_SECRET.
+    const found = [];
+    for(const m of script.matchAll(
+        /(?:const|let|var)\s+([A-Za-z_$][\w$]*(?:TOKEN|SECRET|PASSWORD))\s*=\s*['"]([^'"]{16,})['"]/g)){
+      found.push(m[1] + ' = ' + m[2].slice(0, 8) + '...');
+    }
+    assert.deepStrictEqual(found, [],
+      'hardcoded credential(s) in a file served publicly: ' + found.join(', '));
+  });
+
   // -------------------------------------------------------------------------
   // Conversational EA (FLYERSNAP-EA-ASSISTANT-PLAN.md). Pure pieces: persona
   // (tone), the EA system prompt, the three-shape turn parser, and the local
