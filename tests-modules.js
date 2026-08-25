@@ -17,8 +17,18 @@ module.exports = async function runModuleTests(test){
   const fmt = await import('./js/format.js');
 
   test('format module exports what the app needs', () => {
-    ['todayISO','daysUntil','fmt12','fmtTimeRange','esc','formatProblemForCopy','formatAnswerForCopy','problemGuidance']
+    ['todayISO','daysUntil','fmt12','fmtTimeRange','esc','formatProblemForCopy','formatAnswerForCopy','problemGuidance','relativeTime']
       .forEach(k => assert.strictEqual(typeof fmt[k], 'function', 'missing: ' + k));
+  });
+
+  test('relativeTime gives compact ago / in labels, tolerant of junk', () => {
+    const now = new Date('2026-08-25T12:00:00Z');
+    assert.strictEqual(fmt.relativeTime('2026-08-25T11:59:40Z', now), 'just now');
+    assert.strictEqual(fmt.relativeTime('2026-08-25T11:30:00Z', now), '30m ago');
+    assert.strictEqual(fmt.relativeTime('2026-08-25T09:00:00Z', now), '3h ago');
+    assert.strictEqual(fmt.relativeTime('2026-08-22T12:00:00Z', now), '3d ago');
+    assert.strictEqual(fmt.relativeTime('2026-08-27T12:00:00Z', now), 'in 2d');
+    assert.strictEqual(fmt.relativeTime('not a date', now), '');
   });
 
   test('problemGuidance reads a problem and offers a next step + urgency tier', () => {

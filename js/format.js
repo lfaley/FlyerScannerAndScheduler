@@ -97,3 +97,23 @@ export function problemGuidance(text){
     return { tier:'wait', hint:'Could not reach the desktop — wake it and check Tailscale, then retry.' };
   return { tier:'', hint:'' };
 }
+
+// --- relative time ---------------------------------------------------------
+// Pure: "3h ago" / "in 2d" for a timestamp. `now` is injectable for tests.
+// The exact date still travels alongside (callers keep it in a title/tooltip),
+// so nothing is lost -- the relative form is just easier to read at a glance.
+export function relativeTime(iso, now){
+  const then = new Date(iso).getTime();
+  if(!isFinite(then)) return '';
+  const nowMs = now instanceof Date ? now.getTime() : (now || Date.now());
+  const secs = Math.round((nowMs - then) / 1000);
+  const abs = Math.abs(secs), future = secs < 0;
+  const label = (n, u) => future ? 'in ' + n + u : n + u + ' ago';
+  if(abs < 45) return 'just now';
+  if(abs < 5400) return label(Math.round(abs / 60), 'm');
+  if(abs < 129600) return label(Math.round(abs / 3600), 'h');
+  if(abs < 6 * 86400) return label(Math.round(abs / 86400), 'd');
+  if(abs < 60 * 86400) return label(Math.round(abs / 604800), 'w');
+  if(abs < 365 * 86400) return label(Math.round(abs / 2592000), 'mo');
+  return label(Math.round(abs / 31536000), 'y');
+}
