@@ -4287,7 +4287,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.41';
+const APP_VERSION = 'v9.42';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5467,11 +5467,25 @@ function conflictActions(c){
     return `<button class="btn sm" onclick="markHandled('${esc(e.id)}')">${ico('check-circle')}Mark as handled</button>
       <button class="btn alt sm" onclick="eventActions('${esc(e.id)}')">${ico('edit')}Open it</button>`;
   }
-  // Overlaps and busy days: there is nothing to "resolve", so just get the
-  // user to the events involved.
-  return c.events.slice(0, 2).map(ev =>
-    `<button class="btn alt sm" onclick="eventActions('${esc(ev.id)}')">${esc(ev.title || 'Untitled')}</button>`
-  ).join('');
+  // Overlaps and busy days: there is nothing to "resolve", so surface enough of
+  // each event -- time, place, who -- to judge the clash without opening both,
+  // then tap either to edit. (Was just two bare title buttons.)
+  const people = allPeople();
+  return `<div style="width:100%;display:flex;flex-direction:column;gap:6px">`
+    + c.events.slice(0, 5).map(ev => {
+        const t = fmtTimeRange(ev) || (ev.time ? fmt12(ev.time)
+          : (ev.kind === 'deadline' ? 'due (no time)' : 'all day'));
+        const who = (ev.personIds || [])
+          .map(id => (people.find(p => p.id === id) || {}).name).filter(Boolean).join(', ');
+        const meta = [t, ev.location || '', who].filter(Boolean).join(' · ');
+        return `<button class="btn alt sm" style="width:100%;text-align:left;white-space:normal;padding:10px 12px"
+          onclick="eventActions('${esc(ev.id)}')">
+          <span style="font-weight:700;display:block">${esc(ev.title || 'Untitled')}${ev.kind === 'deadline' ? ' · deadline' : ''}</span>
+          <span class="meta" style="font-size:12px;display:block;margin-top:2px">${esc(meta)}</span>
+        </button>`;
+      }).join('')
+    + (c.events.length > 5 ? `<div class="meta" style="font-size:12px">and ${c.events.length - 5} more overlapping</div>` : '')
+    + `</div>`;
 }
 
 // The real field, set here and read by findConflicts. Undoable, like every
@@ -5564,11 +5578,12 @@ function renderAsk(m){
     `).join('')}
 
     ${a.busy ? `<div class="spin" style="padding:24px"><div class="spinner"></div>
-      <div class="meta">${aiProvider() === 'local'
-        ? `Trying your local model (${esc(S.settings.localModel || 'local')})…`
+      <div class="meta" id="askWait">${aiProvider() === 'local'
+        ? `Gordon is working…`
         : `Asking ${esc(aiModelName())}…`}</div>
       ${aiProvider() === 'local' && S.settings.aiFallback ? `<div class="help" style="margin:0">
         If your desktop is asleep this waits for it to time out, then uses Anthropic.</div>` : ''}
+      <div style="text-align:center;margin-top:10px"><button class="linkbtn" onclick="cancelAsk()">Cancel</button></div>
       </div>` : ''}
 
     ${a.error ? `<div class="card" style="border-left:5px solid var(--red-accent)">
@@ -5586,19 +5601,25 @@ function renderAsk(m){
       <div class="suggest">${suggestions.map(s => `<span class="chip" role="button" tabindex="0"
         onclick="askThis('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join('')}</div>` : ''}
 
-    <div class="composer">
-      <input type="text" id="askQ" aria-label="Your question"
+    <div class="composer" style="align-items:flex-end">
+      <textarea id="askQ" rows="1" aria-label="Your question" spellcheck="true"
+        autocapitalize="sentences" autocorrect="on"
+        style="min-height:44px;max-height:160px;resize:none;line-height:1.4;padding-top:11px"
         placeholder="${a.turns.length ? 'Ask a follow-up…' : 'Ask, or tell me to add something…'}"
-        value="${esc(a.draft)}" oninput="askState.draft=this.value"
-        onkeydown="if(event.key==='Enter')runAsk()">
+        oninput="askState.draft=this.value;autogrow(this)"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();runAsk()}">${esc(a.draft)}</textarea>
       <button class="btn sm" onclick="runAsk()" ${a.busy?'disabled':''}>Ask</button>
     </div>
+    <div class="help" style="text-align:center;font-size:11px;margin:4px 0 0">Enter to send · Shift+Enter for a new line</div>
     ${isCarriedOver(a.turns, todayISO()) ? `<div class="help" style="text-align:center">
       That was an earlier day. Gordon can still see it, but starts fresh from here —
       answers about "this week" change when the week does.</div>` : ''}
     ${a.turns.length ? `<div style="text-align:center">
       <button class="linkbtn" onclick="clearAsk()">${ico('plus')}New chat</button></div>` : ''}
 `;
+  // Keep the elapsed/staged wait indicator ticking only while a call is in
+  // flight; tear it down as soon as the screen is no longer busy.
+  if(a.busy) startAskWaitTimer(); else clearAskWaitTimer();
 }
 
 // Render whatever a citation pointed at, in the shape that screen already uses.
@@ -5626,10 +5647,54 @@ function clearAsk(){
 // were dead: they set askState.draft, but this read the (empty) input box and
 // bailed on the falsy value. Caught by the end-to-end harness, not by a unit
 // test -- which is why the harness exists.
+// --- Ask progress + cancel --------------------------------------------------
+// A local model can take many seconds -- a cold load is a minute. NN/g: past
+// ~10s, show progress and offer a way out. askGen invalidates an in-flight
+// runAsk when the user cancels (or asks again), so a late answer is discarded
+// rather than popping in after. We do NOT abort the network request: aborting
+// would look like a local failure and trip the Anthropic fallback, which is the
+// opposite of "cancel". The request finishes in the background, ignored.
+let askGen = 0, askWaitTimer = null, askWaitStart = 0;
+function clearAskWaitTimer(){
+  if(typeof clearInterval !== 'undefined' && askWaitTimer) clearInterval(askWaitTimer);
+  askWaitTimer = null; askWaitStart = 0;
+}
+function askWaitLabel(s){
+  if(aiProvider() !== 'local') return 'Asking ' + aiModelName() + '… ' + s + 's';
+  if(s < 5)  return 'Gordon is working…';
+  if(s < 20) return 'Gordon is working… ' + s + 's';
+  if(s < 50) return 'Still going — a cold model can take up to a minute… ' + s + 's';
+  return 'The desktop is likely loading the model… ' + s + 's';
+}
+function startAskWaitTimer(){
+  if(typeof setInterval === 'undefined' || askWaitTimer) return;
+  if(!askWaitStart) askWaitStart = Date.now();
+  askWaitTimer = setInterval(() => {
+    const el = document.getElementById('askWait');
+    if(!el){ clearAskWaitTimer(); return; }
+    el.textContent = askWaitLabel(Math.round((Date.now() - askWaitStart) / 1000));
+  }, 1000);
+}
+// Grow a composer textarea with its content, up to a cap, so a long instruction
+// is visible while typing instead of scrolling inside one cramped line.
+function autogrow(el){
+  if(!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+function cancelAsk(){
+  askGen++;                 // any in-flight runAsk will now discard its result
+  askState.busy = false;
+  clearAskWaitTimer();
+  render();
+  toast('Stopped waiting — Gordon may still finish in the background');
+}
+
 async function runAsk(explicit){
   const el = document.getElementById('askQ');
   const q = String(explicit || (el && el.value) || askState.draft || '').trim();
   if(!q || askState.busy) return;
+  const myGen = ++askGen;   // cancel, or a new question, invalidates this run
   askState.lastQ = q;   // remembered so a failed turn can offer Retry
   askState.draft = '';
   askState.busy = true; askState.error = ''; pendingAction = null;
@@ -5672,6 +5737,7 @@ async function runAsk(explicit){
       const turnText = await callAI(
         [{ type:'text', text:`Today is ${todayISO()}.${batchCtx}\n\nUser: ${q}` }],
         500, buildAssistantPrompt(assistantTone()), 'ask.route');
+      if(myGen !== askGen) return;   // cancelled while waiting — drop the answer
       const parsed = parseAssistantTurn(cleanModelText(turnText));
       if(parsed.ok && (parsed.turn.kind === 'message' || parsed.turn.kind === 'clarify')){
         askState.turns.push({ q, domain:'chat', cited:[], day: todayISO(), sourceNote:'',
@@ -5695,6 +5761,7 @@ async function runAsk(explicit){
         sourceNote: 'Try one of the suggestions below.' });
     } else {
       const out = await performRoute(route, q);
+      if(myGen !== askGen) return;   // cancelled while waiting — drop the result
       askState.turns.push({ q, a: out.answer, domain: out.domain, day: todayISO(),
         cited: out.cited || [], sourceNote: out.sourceNote || '',
         confirm: !!out.confirm, choices: out.choices || null,
@@ -5704,6 +5771,7 @@ async function runAsk(explicit){
     askState.busy = false;
     saveConversation();
   }catch(err){
+    if(myGen !== askGen) return;   // cancelled — do not surface an error
     askState.busy = false;
     askState.error = err && err.message === 'NO_API_KEY'
       ? 'No API key saved yet — add one in Settings.'
@@ -7618,10 +7686,13 @@ function renderReview(m){
   // Ask Gordon to enrich the whole batch — e.g. "add band to the title of all these".
   html += `<div class="card" style="margin-bottom:10px">
     <div class="formrow">
-      <input type="text" id="reviewAskQ" aria-label="Ask Gordon about these entries" placeholder="Ask Gordon… e.g. add band to the title of all these"
+      <textarea id="reviewAskQ" rows="1" aria-label="Ask Gordon about these entries" spellcheck="true"
+        placeholder="Ask Gordon… e.g. add band to the title of all these"
         autocapitalize="sentences" autocorrect="on" ${reviewAsk.busy?'disabled':''}
-        onkeydown="if(event.key==='Enter')runReviewAsk()">
-      <button class="btn sm" ${reviewAsk.busy?'disabled':''} onclick="runReviewAsk()">${reviewAsk.busy?'…':'Ask'}</button>
+        style="min-height:44px;max-height:160px;resize:none;line-height:1.4;padding-top:11px"
+        oninput="autogrow(this)"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();runReviewAsk()}"></textarea>
+      <button class="btn sm" ${reviewAsk.busy?'disabled':''} onclick="runReviewAsk()" style="align-self:flex-end">${reviewAsk.busy?'…':'Ask'}</button>
     </div>
     ${reviewAsk.reply ? `<div class="help" style="margin-top:6px">${esc(reviewAsk.reply)}</div>` : ''}
     ${reviewAsk.preview ? `<div class="notes" style="margin-top:6px">Add "${esc(reviewAsk.preview.value)}" to the ${reviewAsk.preview.field} of ${reviewAsk.preview.count} entr${reviewAsk.preview.count===1?'y':'ies'}.<br>Example: "${esc(reviewAsk.preview.changes[0].before||'(empty)')}" → "${esc(reviewAsk.preview.changes[0].after)}"</div>

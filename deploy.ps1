@@ -212,7 +212,13 @@ Ok $summary
 # ---------------------------------------------------------------------------
 Step 5 "The part no script can do for you"
 # ---------------------------------------------------------------------------
-if ($all -contains "gmail-watcher.gs") {
+# Only prompt when gmail-watcher.gs has a REAL (non-whitespace) change vs HEAD.
+# It kept tripping on line-ending (CRLF) noise alone: git lists the file as
+# "changed" then, but there is nothing to re-paste at script.google.com.
+# --ignore-all-space makes a CRLF-only (or indentation-only) diff count as none,
+# so the prompt only appears when the watcher's code actually changed.
+$watcherReal = @(git diff --ignore-all-space --name-only HEAD -- gmail-watcher.gs) | Where-Object { $_ }
+if ($watcherReal) {
   Warn "gmail-watcher.gs changed - it does NOT deploy with this push."
   Warn "At script.google.com: open the project, select all, paste the new file,"
   Warn "save, then Deploy > Manage deployments > pencil > New version > Deploy."
@@ -220,7 +226,7 @@ if ($all -contains "gmail-watcher.gs") {
   $go = Read-Host "    Type y once that is done (anything else stops here)"
   if ($go -ne "y") { Stop-Here "Stopped so the watcher can be updated first." }
 } else {
-  Ok "gmail-watcher.gs unchanged - nothing to re-paste at script.google.com"
+  Ok "gmail-watcher.gs unchanged (or line-endings only) - nothing to re-paste"
 }
 
 # ---------------------------------------------------------------------------
