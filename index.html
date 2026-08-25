@@ -4324,7 +4324,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.56';
+const APP_VERSION = 'v9.58';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5568,17 +5568,32 @@ function conflictActions(c){
     return `<button class="btn sm" onclick="markHandled('${esc(e.id)}')">${ico('check-circle')}Mark as handled</button>
       <button class="btn alt sm" onclick="eventActions('${esc(e.id)}')">${ico('edit')}Open it</button>`;
   }
-  // Overlaps and busy days: the fix is to move one of them, so each row goes
-  // STRAIGHT to that event's editor (reschedule), not the generic add/edit/remove
-  // sheet -- which for a clash just repeated what tapping any event does. Shows
-  // time, place, who so you can judge which to move without opening both.
+  // Overlaps and busy days are NOT necessarily errors: on a family calendar the
+  // usual case is two children each with their own thing at the same time, and
+  // both must stay. Research on double-booking UX (and Apple/Google's own
+  // side-by-side overlaps) says a soft, non-blocking warning with an explicit
+  // "keep both" is right — never force a resolution. So the FIRST, primary action
+  // here is "Keep both": it acknowledges the overlap and won't nag about this pair
+  // again. Moving one (reschedule) is offered second, for a genuine clash.
   const people = allPeople();
+  const key = conflictKey(c);
+  const nameOf = id => (people.find(p => p.id === id) || {}).name;
+  // Are these plausibly for DIFFERENT people? (distinct non-empty person tags.)
+  const tagged = c.events.map(ev => (ev.personIds || []).map(nameOf).filter(Boolean).sort().join(', ')).filter(Boolean);
+  const differentPeople = new Set(tagged).size > 1;
+  const keepLabel = c.events.length > 2 ? 'Keep all' : 'Keep both';
+  const note = differentPeople
+    ? `Looks like these are for different people${tagged.length === c.events.length ? ' (' + tagged.join(' vs ') + ')' : ''} — keeping ${c.events.length > 2 ? 'them all' : 'both'} is usually right.`
+    : 'Overlaps aren’t always a problem — keep them if that’s intended, or move one below.';
   return `<div style="width:100%;display:flex;flex-direction:column;gap:6px">`
+    + `<button class="btn sm" style="width:100%" onclick="event.stopPropagation();dismissConflict('${esc(key)}')">${ico('check-circle')}${keepLabel} — this is fine</button>`
+    + `<div class="meta" style="font-size:12px;margin:2px 0 4px">${esc(note)}</div>`
+    + `<div class="meta" style="font-size:11px;color:var(--muted)">Or move one:</div>`
     + c.events.slice(0, 5).map(ev => {
         const t = fmtTimeRange(ev) || (ev.time ? fmt12(ev.time)
           : (ev.kind === 'deadline' ? 'due (no time)' : 'all day'));
         const who = (ev.personIds || [])
-          .map(id => (people.find(p => p.id === id) || {}).name).filter(Boolean).join(', ');
+          .map(id => nameOf(id)).filter(Boolean).join(', ');
         const meta = [t, ev.location || '', who].filter(Boolean).join(' · ');
         return `<button class="btn alt sm" style="width:100%;text-align:left;white-space:normal;padding:10px 12px"
           onclick="openEventEdit('${esc(ev.id)}')">
@@ -7102,6 +7117,31 @@ function dismissEmailTrouble(){
   render();
 }
 
+// Clear ONE email from the trouble list (act-on-a-single-brief). The rest stay so the
+// user can keep triaging. Falls back to leaving Found Events if that emptied everything.
+function dismissOneEmail(msgId){
+  lastEmailProblems = lastEmailProblems.filter(p => !(p && p.msgId === msgId));
+  if(emailReviews[msgId]) delete emailReviews[msgId];
+  if(!lastEmailProblems.length && !pendingEvents.length){ nav('events'); return; }
+  render();
+}
+
+// Act on a brief: open the manual event editor pre-filled from the email (title from
+// its subject, notes from Gordon's gist + any date it mentioned, person tagged from the
+// sender) so a "you may want to add this by hand" is one tap, not a retype. `fromEmail`
+// on the form tells save/cancel to return to the review and clear that email once added.
+function addEventFromEmail(msgId){
+  const b = emailReviews[msgId] || {};
+  const prob = lastEmailProblems.find(p => p && p.msgId === msgId) || {};
+  const title = String(prob.subject || b.subject || b.gist || '').slice(0, 80);
+  const ids = personsForSender(b.from) || [];
+  const notes = [b.gist ? ('From email: ' + b.gist) : '', b.deadline ? ('Mentioned: ' + b.deadline) : '']
+    .filter(Boolean).join('\n');
+  eventForm = { isNew:true, saved:false, ref:null, title, date: todayISO(), time:'', endTime:'',
+    location:'', notes, kind:'event', personIds: ids.slice(), fromEmail: msgId };
+  sub('eventEdit');
+}
+
 // Ask Gordon to act as an executive assistant and brief the user on the emails that
 // had no dates to import — so a "no dates to import" line becomes "here's what this
 // actually was, and whether it's worth your time." Fields follow standard EA triage
@@ -7134,8 +7174,9 @@ async function reviewEmailTrouble(){
       try{
         const payload = await fetchMessage(items[i].msgId);
         brief = await reviewOneEmail(payload, items[i].msgId);
+        brief.subject = payload.subject || items[i].subject || ''; // for "Add as event" prefill
       }catch(err){
-        brief = { msgId: items[i].msgId, from: items[i].from || 'unknown',
+        brief = { msgId: items[i].msgId, from: items[i].from || 'unknown', subject: items[i].subject || '',
           gist: 'Could not open this email to read it.', category:'fyi', deadline:null,
           missedDate:false, suggestedAction:'Open it in your mail app to check.' };
         logProblem('Gordon', 'Email review failed: ' + (err && err.message || 'unknown'), aiModelName());
@@ -7222,8 +7263,12 @@ function emailBriefHtml(b){
     </div>
     <div style="margin-top:4px;font-size:var(--t-cap)">${esc(b.gist||'')}</div>
     ${b.deadline ? `<div style="margin-top:3px;font-size:11px;color:var(--amber)"><b>When:</b> ${esc(b.deadline)}</div>` : ''}
-    ${b.missedDate ? `<div style="margin-top:3px;font-size:11px;color:var(--amber)">Looks like it names a date — you may want to add it by hand.</div>` : ''}
+    ${b.missedDate ? `<div style="margin-top:3px;font-size:11px;color:var(--amber)">Looks like it names a date — add it below.</div>` : ''}
     ${b.suggestedAction ? `<div style="margin-top:3px;font-size:11px"><b>Suggested:</b> ${esc(b.suggestedAction)}</div>` : ''}
+    <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
+      <button class="btn sm" onclick="addEventFromEmail('${esc(b.msgId)}')">${b.missedDate ? 'Add the event' : 'Add as event'}</button>
+      <button class="btn alt sm" style="width:auto" onclick="dismissOneEmail('${esc(b.msgId)}')">Dismiss this</button>
+    </div>
   </div>`;
 }
 
@@ -8282,12 +8327,22 @@ function saveEventEdit(){
     // reminders, conflict detection, calendar export and duplicate matching all
     // treat it identically. `source` says where it came from, and `aiSource` is
     // null because no model touched it.
-    S.events.push(Object.assign({ id:uid(), source:'Typed in', from:null,
+    S.events.push(Object.assign({ id:uid(), source: f.fromEmail ? 'From email' : 'Typed in', from:null,
       aiSource:null, exported:false, unread:false, deleted:false }, fields));
     save();
+    const fromEmail = f.fromEmail;
     eventForm = null;
-    view = {tab:'events', sub:null, data:null}; render();
-    toast('Event added');
+    if(fromEmail){
+      // Added from a review brief: clear that email and stay in Found Events so the
+      // user keeps triaging the rest, rather than being kicked out to the events list.
+      lastEmailProblems = lastEmailProblems.filter(p => !(p && p.msgId === fromEmail));
+      if(emailReviews[fromEmail]) delete emailReviews[fromEmail];
+      toast('Event added');
+      sub('review');
+    } else {
+      view = {tab:'events', sub:null, data:null}; render();
+      toast('Event added');
+    }
   } else if(f.saved){
     const e = S.events.find(x=>x.id===f.ref);
     const timingChanged = e.date!==fields.date || (e.time||'')!==(f.time||'');
@@ -8305,10 +8360,13 @@ function saveEventEdit(){
 }
 function cancelEventEdit(){
   // A new event has nothing to go back to -- there is no review queue behind
-  // it -- so it returns to Events like a saved one does.
-  const toEvents = eventForm && (eventForm.saved || eventForm.isNew);
+  // it -- so it returns to Events like a saved one does. EXCEPT one opened from a
+  // review brief ("Add as event"), which came FROM the review and should return there.
+  const fromReview = eventForm && eventForm.fromEmail;
+  const toEvents = eventForm && (eventForm.saved || eventForm.isNew) && !fromReview;
   eventForm = null;
-  if(toEvents){ view = {tab:'events', sub:null, data:null}; render(); }
+  if(fromReview){ sub('review'); }
+  else if(toEvents){ view = {tab:'events', sub:null, data:null}; render(); }
   else sub('review');
 }
 
