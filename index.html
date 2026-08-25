@@ -406,6 +406,7 @@
 <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2.9l8.6 4.4L12 11.7 3.4 7.3z"/><path d="M3.4 12.2L12 16.6l8.6-4.4M3.4 16.6L12 21l8.6-4.4"/></symbol>
 <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 4.5L7.5 12l7.5 7.5"/></symbol>
 <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 4.5L16.5 12 9 19.5"/></symbol>
+<symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M4.5 9L12 16.5 19.5 9"/></symbol>
 </defs></svg>
 <header id="header" role="banner">FlyerSnap</header>
 <!-- tabindex=-1 so a screen-change can move focus here; see render(). -->
@@ -4323,7 +4324,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.52';
+const APP_VERSION = 'v9.54';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5496,7 +5497,7 @@ function renderEvents(m){
   if(past.length){
     const open = showPast || !!eventSearch;      // a search should look everywhere
     html += `<div style="text-align:center;margin-top:6px">
-      <button class="linkbtn" onclick="togglePastEvents()">${open?'▾':'▸'} Past events (${past.length})</button></div>`;
+      <button class="linkbtn" onclick="togglePastEvents()">${ico(open?'chevron-down':'chevron-right')} Past events (${past.length})</button></div>`;
     if(open){
       const shown = past.slice(0, pastLimit);
       html += shown.map(e=>evtCard(e, true)).join('');
@@ -7985,8 +7986,13 @@ function openNewEvent(){
 
 function openPendingEdit(i){
   const e = pendingEvents[i];
-  eventForm = { saved:false, ref:i, title:e.title, date:e.date, time:e.time||'',
-    location:e.location||'', notes:e.notes||'', kind:e.kind, kidId:e.kidId||null };
+  // Carry endTime AND personIds through the edit. The form + saveEventEdit read
+  // f.endTime and f.personIds; this used to pass only kidId and no endTime, so
+  // editing a scanned event before importing it silently dropped its end time
+  // and its person assignment. Mirror openEventEdit's shape exactly.
+  const ids = Array.isArray(e.personIds) ? e.personIds.slice() : (e.kidId ? [e.kidId] : []);
+  eventForm = { saved:false, ref:i, title:e.title, date:e.date, time:e.time||'', endTime:e.endTime||'',
+    location:e.location||'', notes:e.notes||'', kind:e.kind, personIds:ids };
   sub('eventEdit');
 }
 function renderEventEdit(m){
@@ -8356,9 +8362,19 @@ function redeem(id){
     kids.map(k=>({label:`${k.name} (⭐ ${bal[k.id]||0})`, fn:()=>{
       const has = bal[k.id]||0;
       if(has < r.cost){ alert(`${k.name} has ${has} of ${r.cost} stars needed. Keep going!`); return; }
-      S.redemptions.push({id:uid(), rewardId:r.id, kidId:k.id, stars:r.cost, date:todayISO()});
+      const rid = uid();
+      S.redemptions.push({id:rid, rewardId:r.id, kidId:k.id, stars:r.cost, date:todayISO()});
       save(); render();
-      toast(`🎁 ${k.name} traded ${r.cost} stars for "${r.title}". Enjoy!`);
+      // Spending a kid's hard-earned stars is exactly the mis-tap that needs an
+      // Undo — every other data change in the app is reversible, this one wasn't.
+      toast(`🎁 ${k.name} traded ${r.cost} stars for "${r.title}". Enjoy!`, {
+        label: 'Undo',
+        fn: () => {
+          S.redemptions = S.redemptions.filter(x => x.id !== rid);
+          save(); render();
+          toast(`Refunded ${r.cost} ⭐ to ${k.name}`);
+        }
+      });
     }})));
 }
 
@@ -9805,7 +9821,14 @@ function addKid(){
 }
 function delKid(id){
   const k = kidById(id);
-  if(!confirm(`Remove ${k.name}? Their events and chores stay but lose the tag.`)) return;
+  // Undo instead of a blocking confirm: removing a person also strips their tag
+  // off every event and chore, which was irreversible and unlike every other
+  // delete in the app. Snapshot exactly what we're about to change (live object
+  // refs + their prior values) so Undo restores the person AND every tag.
+  const evBefore = S.events
+    .filter(e => (Array.isArray(e.personIds) && e.personIds.includes(id)) || e.kidId === id)
+    .map(e => ({ e, personIds: Array.isArray(e.personIds) ? e.personIds.slice() : undefined, kidId: e.kidId }));
+  const chBefore = S.chores.filter(c => c.kidId === id).map(c => ({ c, kidId: c.kidId }));
   k.deleted = true;
   S.events.forEach(e=>{
     if(Array.isArray(e.personIds)){ e.personIds = e.personIds.filter(pid => pid !== id); }
@@ -9813,6 +9836,16 @@ function delKid(id){
   });
   S.chores.forEach(c=>{ if(c.kidId===id) c.kidId=null; });
   save(); render();
+  toast(`Removed ${k.name} — their tags were cleared`, {
+    label: 'Undo',
+    fn: () => {
+      k.deleted = false;
+      evBefore.forEach(s => { if(s.personIds !== undefined) s.e.personIds = s.personIds; s.e.kidId = s.kidId; });
+      chBefore.forEach(s => { s.c.kidId = s.kidId; });
+      save(); render();
+      toast(`${k.name} is back`);
+    }
+  });
 }
 /**
  * Delete the stored key. There was no way to do this before v9.29 -- a key
