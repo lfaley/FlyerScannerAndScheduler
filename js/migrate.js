@@ -63,19 +63,20 @@ export function migrate(s, fromVersion){
     if(s.settings){
       s.settings.aiProvider = 'local';
       s.settings.localBaseUrl = '';
-      // ...to the INSTRUCT tag. This previously migrated onto `qwen3-vl:8b`,
-      // which is the Thinking edition -- so the migration meant to rescue people
-      // from a text-only model handed them a model that reasons until it runs
-      // out of budget. Also catches anyone already sitting on that bare tag.
+      // ...to the INSTRUCT tag. Earlier builds migrated onto `qwen3-vl:8b`
+      // (the Thinking edition, which reasons until it runs out of budget) and
+      // then onto the q8_0 (9.8 GB, the slowest 8B) -- rewrite both to the
+      // shared fast tag. Also catches anyone still on the text-only 14B.
       //
-      // The tag is a 'qwen3-vl:8b-instruct-q8_0'ERAL here, not index.html's GORDON_MODEL: this module is
+      // The tag is a LITERAL here, not index.html's GORDON_MODEL: this module is
       // imported and unit-tested on its own, and referencing a constant that only
       // exists in the shipped file would throw ReferenceError the first time a
       // test exercised this branch. A guard test pins the two together instead.
       if(!s.settings.localModel
          || s.settings.localModel === 'qwen2.5:14b-instruct'
-         || s.settings.localModel === 'qwen3-vl:8b'){
-        s.settings.localModel = 'qwen3-vl:8b-instruct-q8_0';
+         || s.settings.localModel === 'qwen3-vl:8b'
+         || s.settings.localModel === 'qwen3-vl:8b-instruct-q8_0'){
+        s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
       }
     }
   }

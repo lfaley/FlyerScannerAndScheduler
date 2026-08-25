@@ -129,7 +129,7 @@ export function explainError(errorType, provider, detail){
       // another model" is wrong advice. It is the same model, one tag over.
       return 'Your local model spent its whole answer thinking and never replied.\n\n'
         + 'Plain qwen3-vl:8b is the Thinking edition. Pull the Instruct one instead:\n'
-        + 'ollama pull qwen3-vl:8b-instruct\n\n'
+        + 'ollama pull qwen3-vl:8b-instruct-q4_K_M\n\n'
         + 'Also check its context length — Ollama defaults to 4096 tokens, and a '
         + 'photo prompt fills most of that before the answer even starts.';
     case 'spend_limit':

@@ -710,19 +710,20 @@ function migrate(s, fromVersion){
     if(s.settings){
       s.settings.aiProvider = 'local';
       s.settings.localBaseUrl = '';
-      // ...to the INSTRUCT tag. This previously migrated onto `qwen3-vl:8b`,
-      // which is the Thinking edition -- so the migration meant to rescue people
-      // from a text-only model handed them a model that reasons until it runs
-      // out of budget. Also catches anyone already sitting on that bare tag.
+      // ...to the INSTRUCT tag. Earlier builds migrated onto `qwen3-vl:8b`
+      // (the Thinking edition, which reasons until it runs out of budget) and
+      // then onto the q8_0 (9.8 GB, the slowest 8B) -- rewrite both to the
+      // shared fast tag. Also catches anyone still on the text-only 14B.
       //
-      // The tag is a 'qwen3-vl:8b-instruct-q8_0'ERAL here, not index.html's GORDON_MODEL: this module is
+      // The tag is a LITERAL here, not index.html's GORDON_MODEL: this module is
       // imported and unit-tested on its own, and referencing a constant that only
       // exists in the shipped file would throw ReferenceError the first time a
       // test exercised this branch. A guard test pins the two together instead.
       if(!s.settings.localModel
          || s.settings.localModel === 'qwen2.5:14b-instruct'
-         || s.settings.localModel === 'qwen3-vl:8b'){
-        s.settings.localModel = 'qwen3-vl:8b-instruct-q8_0';
+         || s.settings.localModel === 'qwen3-vl:8b'
+         || s.settings.localModel === 'qwen3-vl:8b-instruct-q8_0'){
+        s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
       }
     }
   }
@@ -888,7 +889,7 @@ const GORDON_BASE_URL = 'https://desktop-pvl0f9c.tail1c32c9.ts.net/v1';
 // If the two apps request different tags they cannot both be resident (8.1 GB
 // for the old 14B, 9.8 GB for this), so every switch between apps evicts and
 // reloads ~9 GB. Changing it here means changing it there too.
-const GORDON_MODEL    = 'qwen3-vl:8b-instruct-q8_0';
+const GORDON_MODEL    = 'qwen3-vl:8b-instruct-q4_K_M';
 
 let loadError = null;
 let storageWarned = false;
@@ -897,7 +898,7 @@ function blank(){ return { events:[], kids:[], chores:[], completions:[], reward
   redemptions:[], lists:[], listItems:[], ask:{ turns:[] }, aiLog:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
-    aiProvider:'local', localBaseUrl:'', localModel:'qwen3-vl:8b', aiFallback:true,
+    aiProvider:'local', localBaseUrl:'', localModel:'qwen3-vl:8b-instruct-q4_K_M', aiFallback:true,
     aiEnabled:true, assistantTone:'professional', dismissedConflicts:[], theme:'dark' },
   schemaVersion: SCHEMA_VERSION }; }
 // ============================================================
@@ -3130,7 +3131,7 @@ function explainError(errorType, provider, detail){
       // another model" is wrong advice. It is the same model, one tag over.
       return 'Your local model spent its whole answer thinking and never replied.\n\n'
         + 'Plain qwen3-vl:8b is the Thinking edition. Pull the Instruct one instead:\n'
-        + 'ollama pull qwen3-vl:8b-instruct\n\n'
+        + 'ollama pull qwen3-vl:8b-instruct-q4_K_M\n\n'
         + 'Also check its context length — Ollama defaults to 4096 tokens, and a '
         + 'photo prompt fills most of that before the answer even starts.';
     case 'spend_limit':
@@ -4218,7 +4219,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.37';
+const APP_VERSION = 'v9.38';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -8563,7 +8564,7 @@ function renderSetAI(m){
       <input type="text" id="localBase" placeholder="https://machine.tailnet.ts.net/v1"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localBaseUrl||GORDON_BASE_URL)}">
       <label class="label" for="localModel">Model</label>
-      <input type="text" id="localModel" placeholder="qwen3-vl:8b-instruct-q8_0"
+      <input type="text" id="localModel" placeholder="qwen3-vl:8b-instruct-q4_K_M"
         autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.settings.localModel||'')}">
       <label class="row" style="margin-top:10px">
         <input type="checkbox" id="aiFallback" aria-label="Fall back to Anthropic when the local model fails" ${S.settings.aiFallback?'checked':''}
@@ -8574,7 +8575,7 @@ function renderSetAI(m){
         <button class="btn" onclick="saveLocalModel()">Save</button>
         <button class="btn alt" style="width:auto" onclick="testLocalModel()">Test</button>
       </div>
-      <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model — a text-only one such as qwen2.5:14b-instruct cannot read photos at all. Use <b>qwen3-vl:8b-instruct-q8_0</b>. Not the bare <b>qwen3-vl:8b</b>: that tag is the &ldquo;thinking&rdquo; edition and spends its whole answer reasoning.</div>
+      <div class="help" style="margin-top:8px">Scanning flyers needs a <b>vision</b> model — a text-only one such as qwen2.5:14b-instruct cannot read photos at all. Use <b>qwen3-vl:8b-instruct-q4_K_M</b>. Not the bare <b>qwen3-vl:8b</b>: that tag is the &ldquo;thinking&rdquo; edition and spends its whole answer reasoning.</div>
     ` : ''}
 
     <div class="sect">Anthropic API key ${aiProvider() === 'local' ? '(fallback)' : ''}</div>
