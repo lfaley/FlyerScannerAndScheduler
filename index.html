@@ -500,6 +500,27 @@ function esc(s){
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// --- copy/share formatting -------------------------------------------------
+// Pure: turn app records into plain text a person can paste elsewhere. The
+// Problem Log used to be a dead end on a phone -- you could see an error and
+// not get it out. These build the exact text the Copy/Share buttons hand to
+// the clipboard or the share sheet.
+
+function formatProblemForCopy(p){
+  if(!p) return '';
+  const lines = [];
+  lines.push(String(p.message || 'Problem'));
+  if(p.where) lines.push('Where: ' + p.where);
+  if(p.count > 1) lines.push('Happened: ' + p.count + ' times');
+  if(p.last) lines.push('Last: ' + p.last);
+  if(p.detail) lines.push('', String(p.detail));
+  return lines.join('\n').trim();
+}
+
+function formatAnswerForCopy(turn){
+  return String(turn && turn.a != null ? turn.a : '').trim();
+}
+
 // ===== inlined from js/matching.js =====
 /**
  * Event matching and grouping. Pure -- no DOM, no app state.
@@ -665,7 +686,7 @@ If the same event appears in two places, produce ONE item, not two.`;
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -725,6 +746,22 @@ function migrate(s, fromVersion){
          || s.settings.localModel === 'qwen3-vl:8b-instruct-q8_0'){
         s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
       }
+    }
+  }
+
+  if(from < 6){
+    // The from<5 rewrite above was ADDED LATER than the v9.32 migration that
+    // first wrote a model tag. v9.32 set `qwen3-vl:8b` (the Thinking edition --
+    // reasons to budget, never answers) AND stamped schemaVersion 5, so on those
+    // installs `from < 5` can never run again: they are permanently stuck asking
+    // for the wrong model. Confirmed live via an error report (description
+    // `qwen3-vl:8b` on v9.38, model error 429 then Anthropic). Force the shared
+    // instruct tag now -- the same one-time repair the recipe app does with
+    // migrateModelTag(). LITERAL tag, per the note in the from<5 block.
+    const bad = new Set(['qwen2.5:14b-instruct', 'qwen3-vl:8b',
+      'qwen3-vl:8b-thinking', 'qwen3-vl:8b-thinking-bf16', 'qwen3-vl:8b-instruct-q8_0']);
+    if(s.settings && bad.has(s.settings.localModel)){
+      s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
     }
   }
 
@@ -4219,7 +4256,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.38';
+const APP_VERSION = 'v9.40';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -4254,6 +4291,10 @@ async function callAI(contentBlocks, maxTokens, system, op){
         reqModel: S.settings.localModel || null, ok:false, ms: Date.now() - started,
         errorType: needAuth ? 'auth_required' : (unsupported ? 'unsupported_input' : classifyError(err)),
         detail: needAuth ? 'Not signed in to Gordon' : (err && err.message) };
+      // A 429 from the proxy is "wait a moment," not "the model is broken" -- say
+      // so, rather than the generic "did not answer," so a busy Gordon reads as
+      // transient and the user retries instead of assuming it's down.
+      const rateLimited = localFail.errorType === 'rate_limit';
       if(needAuth && !S.settings.aiFallback){
         recordAiCall(localFail);
         logProblem('Gordon', 'Sign in to use the local model (Settings → Gordon and AI)', aiModelName());
@@ -4267,6 +4308,7 @@ async function callAI(contentBlocks, maxTokens, system, op){
         // reached" alerts when the log showed Anthropic succeeding every time.
         // Lead with the outcome, name the thing that failed second.
         toast(needAuth ? 'Read by Anthropic — sign in (Settings) to use Gordon'
+                       : rateLimited ? 'Read by Anthropic — Gordon is busy (rate limited); try again shortly'
                        : (unsupported ? 'Read by Anthropic instead — PDFs need it'
                           : 'Read by Anthropic instead — your local model did not answer'));
         logProblem('Local model', needAuth
@@ -5466,6 +5508,9 @@ function renderAsk(m){
         <div style="white-space:pre-wrap;line-height:1.55">${esc(t.a)}</div>
         <div class="meta" style="font-size:12px;margin-top:10px">
           ${esc(t.sourceNote)}</div>
+        <div class="row" style="justify-content:flex-end;margin-top:8px">
+          <button class="linkbtn" onclick="copyAnswer(${i})">${ico('clipboard')}Copy</button>
+        </div>
       </div>
       ${/* Only ever on the LAST turn. An earlier turn keeps confirm:true forever,
             and a later pendingAction would otherwise re-show its stale buttons
@@ -6258,7 +6303,78 @@ function logProblem(where, message, detail){
   }catch(e){ /* logging must never break the thing it is logging about */ }
 }
 
-function openProblems(){ sub('problems'); }
+// Select mode for the Problem Log. `null` = not selecting (the normal state);
+// a Set of problem ids = selecting. Held outside S because it is view state,
+// not data -- it must never be saved or reach a backup.
+let problemSel = null;
+
+function openProblems(){ problemSel = null; sub('problems'); }
+
+function toggleProblemSelect(){
+  problemSel = problemSel ? null : new Set();
+  render();
+}
+function toggleProblemPick(id){
+  if(!problemSel) return;
+  if(problemSel.has(id)) problemSel.delete(id); else problemSel.add(id);
+  render();
+}
+function selectAllProblems(){
+  const all = (S.problems || []).map(p => p.id);
+  // One control, both directions: if everything is already picked it clears,
+  // which is the only sane meaning of tapping "Select all" a second time.
+  problemSel = (problemSel && problemSel.size === all.length) ? new Set() : new Set(all);
+  render();
+}
+function selectedProblems(){
+  if(!problemSel) return [];
+  return (S.problems || []).filter(p => problemSel.has(p.id));
+}
+function resolveSelectedProblems(){
+  const picked = selectedProblems();
+  if(!picked.length) return;
+  const now = new Date().toISOString();
+  picked.forEach(p => { p.done = true; p.resolved = now; });
+  problemSel = null;
+  save();
+  toast('Marked ' + picked.length + ' done');
+  render();
+}
+/**
+ * Remove the picked rows outright. Undoable: `before` is the whole array as it
+ * stood, so restoring puts every row back in its original position -- the log
+ * is read newest-first and an undo that reorders it is not an undo.
+ */
+function deleteSelectedProblems(){
+  if(!problemSel || !problemSel.size) return;
+  const before = (S.problems || []).slice();
+  const n = problemSel.size;
+  S.problems = before.filter(p => !problemSel.has(p.id));
+  problemSel = null;
+  save();
+  render();
+  toast('Deleted ' + n + ' problem' + (n === 1 ? '' : 's'), { label:'Undo', fn:() => {
+    S.problems = before; save(); render(); toast('Restored');
+  }});
+}
+/**
+ * Empty the log. The only control here that touches rows you cannot see, which
+ * is why it confirms as well as offering the undo.
+ */
+function clearAllProblems(){
+  const before = (S.problems || []).slice();
+  if(!before.length) return;
+  if(!confirm('Clear all ' + before.length + ' entries from the Problem Log?\n\nThis only clears the list — it does not fix anything, and new problems will still be recorded.')) return;
+  S.problems = [];
+  problemSel = null;
+  save();
+  render();
+  toast('Problem Log cleared', { label:'Undo', fn:() => {
+    S.problems = before; save(); render(); toast('Restored');
+  }});
+}
+
+
 function activeProblems(){ return (S.problems||[]).filter(p => !p.done); }
 
 function resolveProblem(id){
@@ -6356,19 +6472,54 @@ function renderProblems(m){
     return;
   }
 
+  const picking = !!problemSel;
+  const nPicked = problemSel ? problemSel.size : 0;
+
   const row = (p) => `<div class="card" style="border-left:5px solid ${p.done?'var(--line)':'var(--amber)'}">
     <div class="row">
-      <div class="grow">
+      ${picking ? `<input type="checkbox" style="margin-right:10px;flex:none"
+        aria-label="Select: ${esc(p.message)}"
+        ${problemSel.has(p.id)?'checked':''}
+        onclick="event.stopPropagation();toggleProblemPick('${p.id}')">` : ''}
+      <div class="grow" ${picking?`role="button" tabindex="0"
+        onclick="toggleProblemPick('${p.id}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleProblemPick('${p.id}')}"`:''}>
         <div style="font-weight:700;font-size:var(--t-sm)">${esc(p.message)}</div>
         <div class="meta" style="font-size:var(--t-cap)">
           ${esc(p.where)}${p.count>1?' · happened '+p.count+' times':''} · last ${esc(String(p.last).slice(0,10))}
         </div>
-        ${p.detail?`<div class="meta" style="font-size:var(--t-cap);opacity:.75;word-break:break-word">${esc(p.detail)}</div>`:''}
+        ${p.detail?`<div style="font-size:var(--t-sm);word-break:break-word;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;-webkit-user-select:text;user-select:text;margin-top:6px">${esc(p.detail)}</div>`:''}
       </div>
       <button class="linkbtn" onclick="${p.done?"reopenProblem('"+p.id+"')":"resolveProblem('"+p.id+"')"}">${p.done?'Reopen':'Done'}</button>
-    </div></div>`;
+    </div>
+    ${picking ? '' : `<div class="row" style="justify-content:flex-end;gap:2px;margin-top:4px">
+      <button class="linkbtn" onclick="copyProblem('${p.id}')">${ico('clipboard')}Copy</button>
+      <button class="linkbtn" onclick="shareProblem('${p.id}')">${ico('share')}Share</button>
+    </div>`}</div>`;
 
   let html = '';
+
+  // The select bar. Kept at the TOP so the count and the escape hatch are
+  // visible without scrolling back up from a long log.
+  if(picking){
+    html += `<div class="card" style="padding:12px;border-left:5px solid var(--accent)">
+      <div class="row">
+        <div class="grow" style="font-weight:700;font-size:var(--t-sm)">${nPicked} selected</div>
+        <button class="linkbtn" onclick="selectAllProblems()">${nPicked === all.length ? 'Select none' : 'Select all'}</button>
+        <button class="linkbtn" onclick="toggleProblemSelect()">Cancel</button>
+      </div>
+      <div class="formrow" style="margin-top:10px">
+        <button class="btn sm" ${nPicked?'':'disabled'} onclick="resolveSelectedProblems()">Mark done</button>
+        <button class="btn sm alt" ${nPicked?'':'disabled'}
+          style="border-color:var(--red-accent);color:var(--red-accent)"
+          onclick="deleteSelectedProblems()">Delete</button>
+      </div>
+    </div>`;
+  } else {
+    html += `<div class="row" style="justify-content:flex-end">
+      <button class="linkbtn" onclick="toggleProblemSelect()">Select</button></div>`;
+  }
+
   if(open.length){
     html += `<div class="help">${open.length} thing${open.length===1?'':'s'} to look at. Repeats are grouped, so a count means it keeps happening.</div>`;
     html += open.map(row).join('');
@@ -6379,6 +6530,13 @@ function renderProblems(m){
     html += `<div class="sect">Resolved (${done.length})</div>` + done.slice(0,10).map(row).join('');
     html += `<button class="btn alt" onclick="clearResolvedProblems()">Clear resolved</button>`;
   }
+
+  html += `<div style="height:12px"></div>
+    <button class="btn alt" style="border-color:var(--red-accent);color:var(--red-accent)"
+      onclick="clearAllProblems()">${ico('trash')}Clear all (${all.length})</button>
+    <div class="help" style="font-size:12px">Clearing only empties the list. It does not fix
+      anything, and it does not stop new problems being recorded.</div>`;
+
   m.innerHTML = html;
 }
 
@@ -6760,6 +6918,40 @@ function shareAsText(){
   } else if(navigator.clipboard){
     navigator.clipboard.writeText(text).then(()=>toast('Copied — paste it wherever you like'));
   }
+}
+
+// ---------- copy / share a single record (Problem Log entry, Ask answer) ----
+// On a phone the Problem Log was a dead end: you could read an error and not
+// get it out. writeText works inside a tap handler on iOS; Share offers the
+// richer path (Messages/Mail) where the OS supports it. Look-ups are by id or
+// index so no untrusted text is ever interpolated into an onclick attribute.
+function copyTextValue(text, okNote){
+  const t = String(text || '');
+  if(!t){ toast('Nothing to copy'); return; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(()=>toast(okNote || 'Copied'))
+      .catch(()=>toast('Could not copy — try Share instead'));
+  } else {
+    toast('Copy is not available on this device');
+  }
+}
+function shareTextValue(text){
+  const t = String(text || '');
+  if(!t){ toast('Nothing to share'); return; }
+  if(navigator.share){ navigator.share({text:t}).catch(()=>{}); }
+  else { copyTextValue(t, 'Copied — paste it wherever you like'); }
+}
+function copyProblem(id){
+  const p = (S.problems || []).find(x => x.id === id);
+  if(p) copyTextValue(formatProblemForCopy(p), 'Copied the error');
+}
+function shareProblem(id){
+  const p = (S.problems || []).find(x => x.id === id);
+  if(p) shareTextValue(formatProblemForCopy(p));
+}
+function copyAnswer(i){
+  const t = (askState.turns || [])[i];
+  if(t) copyTextValue(formatAnswerForCopy(t), 'Copied');
 }
 function renderShareEvents(m){
   setHeader('Share Events', true);
@@ -9613,11 +9805,13 @@ Object.assign(window, {
   clearChecked,
   clearCompare,
   clearEventSearch,
+  clearAllProblems,
   clearResolvedProblems,
   closeChoreForm,
   closeLinkSheet,
   closeRecipeForm,
   delKid,
+  deleteSelectedProblems,
   dismissGroup,
   dismissPendingEmail,
   downloadQuarantine,
@@ -9674,6 +9868,10 @@ Object.assign(window, {
   syncEventForm,
   syncRecipeForm,
   tagAll,
+  resolveSelectedProblems,
+  selectAllProblems,
+  toggleProblemPick,
+  toggleProblemSelect,
   toggleAlert,
   toggleAllExportPick,
   toggleChore,

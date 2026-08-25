@@ -18,7 +18,7 @@
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -78,6 +78,22 @@ export function migrate(s, fromVersion){
          || s.settings.localModel === 'qwen3-vl:8b-instruct-q8_0'){
         s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
       }
+    }
+  }
+
+  if(from < 6){
+    // The from<5 rewrite above was ADDED LATER than the v9.32 migration that
+    // first wrote a model tag. v9.32 set `qwen3-vl:8b` (the Thinking edition --
+    // reasons to budget, never answers) AND stamped schemaVersion 5, so on those
+    // installs `from < 5` can never run again: they are permanently stuck asking
+    // for the wrong model. Confirmed live via an error report (description
+    // `qwen3-vl:8b` on v9.38, model error 429 then Anthropic). Force the shared
+    // instruct tag now -- the same one-time repair the recipe app does with
+    // migrateModelTag(). LITERAL tag, per the note in the from<5 block.
+    const bad = new Set(['qwen2.5:14b-instruct', 'qwen3-vl:8b',
+      'qwen3-vl:8b-thinking', 'qwen3-vl:8b-thinking-bf16', 'qwen3-vl:8b-instruct-q8_0']);
+    if(s.settings && bad.has(s.settings.localModel)){
+      s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
     }
   }
 

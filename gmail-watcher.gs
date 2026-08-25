@@ -523,8 +523,25 @@ function checkMail() {
     }
   }
 
-  // Trim: drop past events and keep the queue bounded
-  queue = queue.filter(function (e) { return e.date >= today; });
+  // Trim: drop past events and keep the queue bounded.
+  //
+  // A queue entry is one of TWO shapes, and only one carries a date:
+  //   * an extracted event   -- { title, date, time, ... }        (RAW_MODE off)
+  //   * a message REFERENCE  -- { msgId, subject, from, received } (RAW_MODE on)
+  //
+  // The reference has no `date`, and `undefined >= '2026-08-25'` is false, so
+  // the old one-line filter deleted every reference at the end of the very run
+  // that created it -- while the message id had ALREADY been pushed onto SEEN.
+  // Net effect with RAW_MODE = true: the watcher silently swallowed every
+  // email and the app never saw a single item.
+  //
+  // FlyerSnap's own reader already handles undated entries correctly --
+  // fetchEmailQueue() tests isMessageRef(i) BEFORE the date test -- so this
+  // side was the one that was wrong.
+  queue = queue.filter(function (e) {
+    if (!e.date) return true;          // message reference -- the app dates it
+    return e.date >= today;
+  });
   if (queue.length > MAX_QUEUE) queue = queue.slice(queue.length - MAX_QUEUE);
   if (seen.length > 300) seen = seen.slice(seen.length - 300);
 

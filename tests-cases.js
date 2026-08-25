@@ -306,7 +306,7 @@ test('a v1 save migrates without losing anything', () => {
   v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
   v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
   boot(JSON.stringify(v1));
-  assert.strictEqual(S.schemaVersion, 5, 'stamped with the current version');
+  assert.strictEqual(S.schemaVersion, 6, 'stamped with the current version');
   assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
   assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
   assert.strictEqual(S.events.length, 1, 'real data untouched');
@@ -318,7 +318,7 @@ test('migration is not re-run on an already-current save', () => {
   save();
   const raw = localStorage.getItem('flyersnap');
   S = load();
-  assert.strictEqual(S.schemaVersion, 5);
+  assert.strictEqual(S.schemaVersion, 6);
   assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
 });
 
@@ -2189,6 +2189,130 @@ test('the problem screen renders in every state', () => {
   m = { innerHTML:'' };
   renderProblems(m);
   assert.ok(/Resolved/.test(m.innerHTML), 'resolved section');
+});
+
+// ---------------------------------------------------------------------------
+// v9.39 -- multi-select. These drive the REAL handlers, not the markup: the
+// static guards in tests-modules.js prove the buttons are wired, and these
+// prove that pressing them does the right thing to S.problems.
+// ---------------------------------------------------------------------------
+function threeProblems(){
+  boot(GOOD);
+  S.problems = [];
+  logProblem('Email', 'attachment could not be read');
+  logProblem('Model', 'local model offline');
+  logProblem('Watcher', 'queue came back empty');
+  problemSel = null;
+  return S.problems.map(p => p.id);
+}
+
+test('select mode turns on, picks, and turns off again', () => {
+  const ids = threeProblems();
+  assert.strictEqual(problemSel, null, 'starts off');
+  toggleProblemSelect();
+  assert.ok(problemSel instanceof Set, 'select mode did not open');
+  toggleProblemPick(ids[0]);
+  toggleProblemPick(ids[2]);
+  assert.strictEqual(problemSel.size, 2);
+  toggleProblemPick(ids[0]);                       // second tap unpicks
+  assert.strictEqual(problemSel.size, 1);
+  toggleProblemSelect();
+  assert.strictEqual(problemSel, null, 'cancel did not leave select mode');
+});
+
+test('select all is a toggle — a second tap clears it', () => {
+  threeProblems();
+  toggleProblemSelect();
+  selectAllProblems();
+  assert.strictEqual(problemSel.size, 3, 'select all missed rows');
+  selectAllProblems();
+  assert.strictEqual(problemSel.size, 0, 'second tap did not clear');
+});
+
+test('bulk mark-done resolves only what was picked, and leaves select mode', () => {
+  const ids = threeProblems();
+  toggleProblemSelect();
+  toggleProblemPick(ids[0]);
+  toggleProblemPick(ids[1]);
+  resolveSelectedProblems();
+  assert.strictEqual(activeProblems().length, 1, 'wrong number left open');
+  assert.strictEqual(activeProblems()[0].id, ids[2], 'resolved the wrong one');
+  assert.ok(S.problems.find(p => p.id === ids[0]).resolved, 'no resolved timestamp');
+  assert.strictEqual(problemSel, null, 'still in select mode afterwards');
+});
+
+test('bulk delete removes the picked rows and the undo restores the original order', () => {
+  const ids = threeProblems();
+  const orderBefore = S.problems.map(p => p.id);
+  let undo = null;
+  const realToast = toast;
+  toast = (msg, action) => { if(action && action.fn) undo = action.fn; };
+
+  toggleProblemSelect();
+  toggleProblemPick(ids[0]);
+  toggleProblemPick(ids[1]);
+  deleteSelectedProblems();
+  assert.strictEqual(S.problems.length, 1, 'rows were not deleted');
+  assert.strictEqual(S.problems[0].id, ids[2], 'deleted the wrong rows');
+
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  assert.deepStrictEqual(S.problems.map(p => p.id), orderBefore,
+    'undo did not restore the log in its original order');
+  toast = realToast;
+});
+
+test('clear all empties the log, asks first, and is undoable', () => {
+  threeProblems();
+  const orderBefore = S.problems.map(p => p.id);
+  let undo = null, asked = 0;
+  const realToast = toast, realConfirm = confirm;
+  toast = (msg, action) => { if(action && action.fn) undo = action.fn; };
+
+  confirm = () => { asked++; return false; };
+  clearAllProblems();
+  assert.strictEqual(asked, 1, 'clear all did not ask');
+  assert.strictEqual(S.problems.length, 3, 'declining the confirm still cleared the log');
+
+  confirm = () => { asked++; return true; };
+  clearAllProblems();
+  assert.strictEqual(S.problems.length, 0, 'the log was not cleared');
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  assert.deepStrictEqual(S.problems.map(p => p.id), orderBefore, 'undo did not restore');
+
+  toast = realToast; confirm = realConfirm;
+});
+
+test('clearing survives a reload — it is written, not just re-rendered', () => {
+  threeProblems();
+  const realConfirm = confirm;
+  confirm = () => true;
+  clearAllProblems();
+  S = load();
+  assert.strictEqual((S.problems || []).length, 0, 'the cleared log came back after a reload');
+  confirm = realConfirm;
+});
+
+test('the select bar and clear-all render, and vanish with an empty log', () => {
+  threeProblems();
+  let m = { innerHTML:'' };
+  renderProblems(m);
+  assert.ok(/Select</.test(m.innerHTML), 'no way into select mode');
+  assert.ok(/Clear all \(3\)/.test(m.innerHTML), 'clear all is missing its count');
+  assert.ok(!/selected</.test(m.innerHTML), 'the select bar shows before it is asked for');
+
+  toggleProblemSelect();
+  m = { innerHTML:'' };
+  renderProblems(m);
+  assert.ok(/0 selected/.test(m.innerHTML), 'the select bar did not appear');
+  assert.ok(/type="checkbox"/.test(m.innerHTML), 'rows have no checkboxes in select mode');
+
+  boot(GOOD); S.problems = []; problemSel = null;
+  m = { innerHTML:'' };
+  renderProblems(m);
+  assert.ok(/Nothing has gone wrong/.test(m.innerHTML));
+  assert.ok(!/Clear all/.test(m.innerHTML), 'clear all offered on an empty log');
 });
 
 console.log('\nProblem log');

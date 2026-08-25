@@ -51,3 +51,24 @@ export function esc(s){
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+// --- copy/share formatting -------------------------------------------------
+// Pure: turn app records into plain text a person can paste elsewhere. The
+// Problem Log used to be a dead end on a phone -- you could see an error and
+// not get it out. These build the exact text the Copy/Share buttons hand to
+// the clipboard or the share sheet.
+
+export function formatProblemForCopy(p){
+  if(!p) return '';
+  const lines = [];
+  lines.push(String(p.message || 'Problem'));
+  if(p.where) lines.push('Where: ' + p.where);
+  if(p.count > 1) lines.push('Happened: ' + p.count + ' times');
+  if(p.last) lines.push('Last: ' + p.last);
+  if(p.detail) lines.push('', String(p.detail));
+  return lines.join('\n').trim();
+}
+
+export function formatAnswerForCopy(turn){
+  return String(turn && turn.a != null ? turn.a : '').trim();
+}

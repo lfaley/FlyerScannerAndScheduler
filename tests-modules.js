@@ -17,8 +17,25 @@ module.exports = async function runModuleTests(test){
   const fmt = await import('./js/format.js');
 
   test('format module exports what the app needs', () => {
-    ['todayISO','daysUntil','fmt12','fmtTimeRange','esc']
+    ['todayISO','daysUntil','fmt12','fmtTimeRange','esc','formatProblemForCopy','formatAnswerForCopy']
       .forEach(k => assert.strictEqual(typeof fmt[k], 'function', 'missing: ' + k));
+  });
+
+  test('formatProblemForCopy turns an entry into plain, pasteable text', () => {
+    const p = { message:'Fell back to Anthropic: model error 429', where:'Local model',
+      detail:'qwen3-vl:8b', count:3, last:'2026-08-25T00:00:00.000Z' };
+    const out = fmt.formatProblemForCopy(p);
+    assert.ok(out.includes('Fell back to Anthropic: model error 429'), 'keeps the message');
+    assert.ok(out.includes('Where: Local model'), 'labels the source');
+    assert.ok(out.includes('Happened: 3 times'), 'notes repeats');
+    assert.ok(out.includes('qwen3-vl:8b'), 'includes the detail — the point of copying');
+    assert.strictEqual(fmt.formatProblemForCopy(null), '', 'tolerant of nothing');
+  });
+
+  test('formatAnswerForCopy returns the answer text, tolerant of a missing turn', () => {
+    assert.strictEqual(fmt.formatAnswerForCopy({ q:'hi', a:'Hello there' }), 'Hello there');
+    assert.strictEqual(fmt.formatAnswerForCopy(null), '');
+    assert.strictEqual(fmt.formatAnswerForCopy({}), '');
   });
 
   test('fmt12 matches the behaviour it had inside index.html', () => {
@@ -125,6 +142,24 @@ module.exports = async function runModuleTests(test){
       assert.ok(src.includes('from < ' + v),
         'no migration guard for version ' + v + ' -- old saves would be stamped current without upgrading');
     }
+  });
+
+  test('a schema-5 install stuck on the bare thinking tag is repaired to q4_K_M', () => {
+    // The field bug: v9.32 wrote `qwen3-vl:8b` (Thinking -- never answers) AND
+    // stamped schemaVersion 5, so the from<5 rewrite could never run again.
+    // from<6 must repair it (confirmed live: description qwen3-vl:8b on v9.38).
+    const stuck = { schemaVersion: 5, settings: { localModel: 'qwen3-vl:8b', aiProvider: 'local' } };
+    mig.migrate(stuck, 5);
+    assert.strictEqual(stuck.settings.localModel, 'qwen3-vl:8b-instruct-q4_K_M', 'bare tag rewritten');
+    assert.strictEqual(stuck.schemaVersion, mig.SCHEMA_VERSION);
+    // q8_0 (largest/slowest) is repaired too.
+    const big = { schemaVersion: 5, settings: { localModel: 'qwen3-vl:8b-instruct-q8_0' } };
+    mig.migrate(big, 5);
+    assert.strictEqual(big.settings.localModel, 'qwen3-vl:8b-instruct-q4_K_M');
+    // A device already on the shared tag is left exactly as it is.
+    const good = { schemaVersion: 5, settings: { localModel: 'qwen3-vl:8b-instruct-q4_K_M' } };
+    mig.migrate(good, 5);
+    assert.strictEqual(good.settings.localModel, 'qwen3-vl:8b-instruct-q4_K_M');
   });
 
   console.log('\nService worker caches every module');
@@ -3007,6 +3042,121 @@ module.exports = async function runModuleTests(test){
     // version behind the app that talks to it.
     assert.ok(/gmail-watcher\.gs/.test(psCode), 'never mentions the watcher');
     assert.ok(/script\.google\.com/.test(psCode), 'does not say where to paste it');
+  });
+
+  console.log('\nGmail watcher — the queue trim (v9.39)');
+
+  const watcherSrc = fs.readFileSync('gmail-watcher.gs', 'utf8');
+
+  test('the queue trim keeps message references, which carry no date', () => {
+    // The bug this pins: in RAW_MODE the script queues a REFERENCE
+    // ({msgId, subject, from, received}) with no `date`, and the trim ran
+    // `e.date >= today`. `undefined >= '2026-08-25'` is false, so the entry was
+    // deleted at the end of the same run that created it -- after its id had
+    // already been pushed onto SEEN. The watcher swallowed every email, and
+    // the message never came back.
+    //
+    // The real filter is lifted out of the file and EXECUTED, not read as
+    // prose, because a guard that reads prose is not reading code
+    // (CLAUDE.md rule 21).
+    const m = watcherSrc.match(
+      /queue = queue\.filter\((function \(e\) \{[\s\S]*?\r?\n  \})\);/);
+    assert.ok(m, 'could not find the queue trim filter in gmail-watcher.gs');
+
+    const today = '2026-08-25';
+    const keep = eval('(' + m[1] + ')');
+
+    // A RAW_MODE message reference -- the exact shape pushed at the queue site.
+    assert.strictEqual(
+      keep({ msgId: '18f', subject: 'Picture Day', from: 'x@parentsquare.com',
+             received: '2026-08-25T12:00:00Z', chars: 900, attachments: 0 }),
+      true, 'a message reference is dropped -- the watcher will swallow all mail');
+
+    // Extracted events still get the past-date trim the filter was written for.
+    assert.strictEqual(keep({ title: 'Old', date: '2020-01-01' }), false,
+      'a past event is being kept');
+    assert.strictEqual(keep({ title: 'Today', date: today }), true,
+      'today is being dropped');
+    assert.strictEqual(keep({ title: 'Future', date: '2027-01-01' }), true,
+      'a future event is being dropped');
+  });
+
+  test('the app agrees: an undated queue entry is a reference, not a stale event', () => {
+    // Both sides have to hold the same rule or one of them eats the mail.
+    // index.html tests isMessageRef BEFORE the date test; if that order ever
+    // flips, refs get dropped app-side instead and the bug just moves house.
+    const q = html.indexOf('async function fetchEmailQueue');
+    assert.ok(q > 0, 'fetchEmailQueue is gone');
+    const body = html.slice(q, q + 1400);
+    const refAt = body.indexOf('isMessageRef(i)');
+    const dateAt = body.indexOf('i.date >= today');
+    assert.ok(refAt > 0 && dateAt > 0, 'the queue filter changed shape');
+    assert.ok(refAt < dateAt,
+      'the date test now runs before the reference test -- undated refs get dropped');
+  });
+
+  console.log('\nProblem Log — multi-select and clear (v9.39)');
+
+  test('every new Problem Log control is reachable from an inline handler', () => {
+    // index.html handlers resolve against the GLOBAL scope. A function that is
+    // defined but never added to the Object.assign(window, {...}) block is a
+    // button that silently does nothing.
+    const win = (html.match(/Object\.assign\(window, \{[\s\S]*?\n\}\);/) || [''])[0];
+    assert.ok(win, 'the window export block is gone');
+    ['toggleProblemSelect', 'toggleProblemPick', 'selectAllProblems',
+     'resolveSelectedProblems', 'deleteSelectedProblems', 'clearAllProblems']
+      .forEach(fn => {
+        assert.ok(new RegExp('\\n  ' + fn + ',').test(win), fn + ' is not exported to window');
+        assert.ok(html.includes('function ' + fn + '('), fn + ' is not defined');
+      });
+  });
+
+  test('select mode is view state — it never reaches saved data or a backup', () => {
+    // A Set is not JSON-serialisable and a selection is not the user's data.
+    // If it were parked on S it would be written by save() and shipped in an
+    // export, where it would deserialise as {} and quietly corrupt the screen.
+    assert.ok(/\nlet problemSel = null;/.test(html),
+      'problemSel is not a module-level let — check it has not moved onto S');
+    assert.ok(!/S\.problemSel/.test(html), 'select state was parked on S');
+    const blank = html.split('function blank(){')[1].split('\n}')[0];
+    assert.ok(!/problemSel/.test(blank), 'select state leaked into the saved shape');
+  });
+
+  test('both bulk deletes offer a real undo, restoring the original order', () => {
+    // The log is read newest-first. An "undo" that re-pushes the removed rows
+    // reorders history, so both handlers must restore the captured array.
+    ['deleteSelectedProblems', 'clearAllProblems'].forEach(fn => {
+      const body = html.split('function ' + fn + '(')[1].split('\n}\n')[0];
+      assert.ok(/const before = \(S\.problems \|\| \[\]\)\.slice\(\)/.test(body),
+        fn + ' does not snapshot the array before changing it');
+      assert.ok(/label:'Undo'/.test(body), fn + ' offers no undo');
+      assert.ok(/S\.problems = before/.test(body),
+        fn + ' undo does not restore the original array');
+    });
+  });
+
+  test('clear-all confirms, because it touches rows you cannot see', () => {
+    const body = html.split('function clearAllProblems(')[1].split('\n}\n')[0];
+    // Strip comments AND string literals before looking for the call, so the
+    // word "confirm" inside prose cannot satisfy this (CLAUDE.md rule 21).
+    const code = body.replace(/\/\/[^\n]*/g, ' ')
+                     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+                     .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    assert.ok(/\bconfirm\(/.test(code), 'clearAllProblems does not actually confirm');
+    // And the selected-rows delete deliberately does NOT confirm -- undo is the
+    // escape hatch there. Pin that too, so the two do not drift together.
+    const sel = html.split('function deleteSelectedProblems(')[1].split('\n}\n')[0]
+                    .replace(/\/\/[^\n]*/g, ' ')
+                    .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+    assert.ok(!/\bconfirm\(/.test(sel),
+      'deleteSelectedProblems now confirms as well as undoing — pick one');
+  });
+
+  test('the checkboxes are named for a screen reader', () => {
+    const fn = html.split('function renderProblems(')[1].split('\nfunction ')[0];
+    assert.ok(/type="checkbox"/.test(fn), 'no checkbox in the problem rows');
+    assert.ok(/aria-label="Select: \$\{esc\(p\.message\)\}"/.test(fn),
+      'the row checkbox has no accessible name');
   });
 
   console.log('\nRouter benchmark — a refusal says why (v9.25)');
