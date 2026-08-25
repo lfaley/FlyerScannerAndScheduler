@@ -4323,7 +4323,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.49';
+const APP_VERSION = 'v9.50';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5051,9 +5051,21 @@ const TABS = [
 let view = {tab:'events', sub:null, data:null};
 let lastViewKey = '';
 
-function nav(tab){ closeSheet(); askOrigin = null; view = {tab, sub:null, data:null}; render(); }
-function sub(name, data){ closeSheet(); view.sub = name; view.data = data||null; render(); }
-function back(){ closeSheet(); view.sub = null; view.data = null; render(); }
+// A soft crossfade between screens on navigation (View Transitions API). Only
+// the changed part (#main) visibly fades — header/nav are identical old→new, so
+// crossfading them shows nothing. Falls back to an instant render where the API
+// is absent or reduced-motion is on, so behaviour never depends on it.
+function withTransition(fn){
+  const reduce = typeof window !== 'undefined' && window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(typeof document !== 'undefined' && document.startViewTransition && !reduce){
+    try{ document.startViewTransition(fn); return; }catch(e){ /* fall through */ }
+  }
+  fn();
+}
+function nav(tab){ closeSheet(); askOrigin = null; view = {tab, sub:null, data:null}; withTransition(render); }
+function sub(name, data){ closeSheet(); view.sub = name; view.data = data||null; withTransition(render); }
+function back(){ closeSheet(); view.sub = null; view.data = null; withTransition(render); }
 
 function renderNav(){
   document.getElementById('nav').innerHTML = TABS.map(t=>{
