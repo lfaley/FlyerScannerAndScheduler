@@ -18,7 +18,7 @@
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -94,6 +94,17 @@ export function migrate(s, fromVersion){
       'qwen3-vl:8b-thinking', 'qwen3-vl:8b-thinking-bf16', 'qwen3-vl:8b-instruct-q8_0']);
     if(s.settings && bad.has(s.settings.localModel)){
       s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
+    }
+  }
+
+  if(from < 7){
+    // Recovered fallbacks to Anthropic used to be logged as Problems, so the
+    // "N problems to look at" count never dropped even though every one had been
+    // answered (e.g. 74 rate-limited calls that all fell back). They live in the
+    // AI call log, not here -- drop the stale entries. New ones are no longer
+    // logged as problems (see callAI). Only removes recovered-fallback rows.
+    if(Array.isArray(s.problems)){
+      s.problems = s.problems.filter(p => !/^Fell back to Anthropic/.test(String(p && p.message || '')));
     }
   }
 

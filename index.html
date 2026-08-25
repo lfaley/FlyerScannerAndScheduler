@@ -711,7 +711,7 @@ If the same event appears in two places, produce ONE item, not two.`;
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -787,6 +787,17 @@ function migrate(s, fromVersion){
       'qwen3-vl:8b-thinking', 'qwen3-vl:8b-thinking-bf16', 'qwen3-vl:8b-instruct-q8_0']);
     if(s.settings && bad.has(s.settings.localModel)){
       s.settings.localModel = 'qwen3-vl:8b-instruct-q4_K_M';
+    }
+  }
+
+  if(from < 7){
+    // Recovered fallbacks to Anthropic used to be logged as Problems, so the
+    // "N problems to look at" count never dropped even though every one had been
+    // answered (e.g. 74 rate-limited calls that all fell back). They live in the
+    // AI call log, not here -- drop the stale entries. New ones are no longer
+    // logged as problems (see callAI). Only removes recovered-fallback rows.
+    if(Array.isArray(s.problems)){
+      s.problems = s.problems.filter(p => !/^Fell back to Anthropic/.test(String(p && p.message || '')));
     }
   }
 
@@ -4287,7 +4298,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.42';
+const APP_VERSION = 'v9.43';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -4342,10 +4353,11 @@ async function callAI(contentBlocks, maxTokens, system, op){
                        : rateLimited ? 'Read by Anthropic — Gordon is busy (rate limited); try again shortly'
                        : (unsupported ? 'Read by Anthropic instead — PDFs need it'
                           : 'Read by Anthropic instead — your local model did not answer'));
-        logProblem('Local model', needAuth
-          ? 'Fell back to Anthropic: not signed in to Gordon'
-          : (unsupported ? 'Fell back to Anthropic: this content type is not supported locally'
-             : 'Fell back to Anthropic: ' + err.message), aiModelName());
+        // A successful fallback RECOVERED -- the user got an answer -- so it is
+        // NOT a "problem to look at." It is already in the AI call log above
+        // (fellBackTo), which Diagnostics summarises as "fell back N×". Logging
+        // it as a Problem too made the "N problems to look at" count never drop
+        // even though nothing was actually broken.
         return await callClaude(contentBlocks, maxTokens, system);
       }
       recordAiCall(localFail);

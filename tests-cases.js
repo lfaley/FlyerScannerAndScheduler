@@ -306,7 +306,7 @@ test('a v1 save migrates without losing anything', () => {
   v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
   v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
   boot(JSON.stringify(v1));
-  assert.strictEqual(S.schemaVersion, 6, 'stamped with the current version');
+  assert.strictEqual(S.schemaVersion, 7, 'stamped with the current version');
   assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
   assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
   assert.strictEqual(S.events.length, 1, 'real data untouched');
@@ -318,7 +318,7 @@ test('migration is not re-run on an already-current save', () => {
   save();
   const raw = localStorage.getItem('flyersnap');
   S = load();
-  assert.strictEqual(S.schemaVersion, 6);
+  assert.strictEqual(S.schemaVersion, 7);
   assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
 });
 

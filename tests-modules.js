@@ -179,6 +179,21 @@ module.exports = async function runModuleTests(test){
     assert.strictEqual(good.settings.localModel, 'qwen3-vl:8b-instruct-q4_K_M');
   });
 
+  test('migrating drops stale recovered-fallback problems, keeps real ones', () => {
+    // "N problems to look at" never dropped because a call that fell back to
+    // Anthropic (recovered) was logged as a Problem. from<7 prunes those; a
+    // genuine failure stays.
+    const s = { schemaVersion: 6, problems: [
+      { id:'a', where:'Local model', message:'Fell back to Anthropic: model error 429', done:false },
+      { id:'b', where:'Local model', message:'Fell back to Anthropic: not signed in to Gordon', done:false },
+      { id:'c', where:'Scanning', message:'Could not read the photo', done:false },
+    ] };
+    mig.migrate(s, 6);
+    const ids = s.problems.map(p => p.id);
+    assert.deepStrictEqual(ids, ['c'], 'only the genuine, non-fallback problem remains');
+    assert.strictEqual(s.schemaVersion, mig.SCHEMA_VERSION);
+  });
+
   console.log('\nService worker caches every module');
 
   test('the inlined copies match js/ exactly', () => {
