@@ -4298,7 +4298,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.43';
+const APP_VERSION = 'v9.44';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5558,15 +5558,19 @@ function renderAsk(m){
     ${a.turns.map((t, i) => `
       ${i === firstTurnOfToday(a.turns, todayISO()) && i > 0
         ? `<div class="bucket">Today<span class="bucket-n">${a.turns.length - i}</span></div>` : ''}
-      <div class="card" style="background:var(--green-lt);border:none">
-        <div style="font-weight:700">${esc(t.q)}</div>
+      <div style="display:flex;justify-content:flex-end;margin:10px 0 2px">
+        <div style="max-width:85%;background:var(--green-lt);border-radius:16px 16px 4px 16px;padding:10px 14px;font-weight:600;white-space:pre-wrap;overflow-wrap:anywhere">${esc(t.q)}</div>
       </div>
-      <div class="card">
-        <div style="white-space:pre-wrap;line-height:1.55">${esc(t.a)}</div>
-        <div class="meta" style="font-size:12px;margin-top:10px">
-          ${esc(t.sourceNote)}</div>
-        <div class="row" style="justify-content:flex-end;margin-top:8px">
-          <button class="linkbtn" onclick="copyAnswer(${i})">${ico('clipboard')}Copy</button>
+      <div style="display:flex;justify-content:flex-start;margin:0 0 6px">
+        <div style="max-width:88%;min-width:0">
+          <div class="meta" style="font-size:11px;font-weight:700;margin:0 0 3px 6px">${esc(aiName())}</div>
+          <div class="card" style="margin:0;border-radius:16px 16px 16px 4px">
+            <div style="white-space:pre-wrap;line-height:1.55;overflow-wrap:anywhere">${esc(t.a)}</div>
+            ${t.sourceNote ? `<div class="meta" style="font-size:12px;margin-top:10px">${esc(t.sourceNote)}</div>` : ''}
+            <div class="row" style="justify-content:flex-end;margin-top:8px">
+              <button class="linkbtn" onclick="copyAnswer(${i})">${ico('clipboard')}Copy</button>
+            </div>
+          </div>
         </div>
       </div>
       ${/* Only ever on the LAST turn. An earlier turn keeps confirm:true forever,
