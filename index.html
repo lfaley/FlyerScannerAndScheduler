@@ -4323,7 +4323,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.50';
+const APP_VERSION = 'v9.51';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -8213,7 +8213,7 @@ function renderChoreForm(){
     ${f.frequency==='weekly' ? `<div style="margin-top:6px">` + DOW.map((d,i)=>
       `<span class="chip ${f.days.includes(i)?'on':''}" onclick="toggleChoreDay(${i})">${d}</span>`).join('') + `</div>` : ''}
     <div class="label">Stars</div>` +
-    [0,1,2,3,5].map(s=>`<span class="chip ${f.stars===s?'on':''}" onclick="choreForm.stars=${s};syncChoreTitle();render()">${s===0?'None':s+' ⭐'}</span>`).join('') + `
+    [0,1,2,3,4,5].map(s=>`<span class="chip ${f.stars===s?'on':''}" onclick="choreForm.stars=${s};syncChoreTitle();render()">${s===0?'None':s+' ⭐'}</span>`).join('') + `
     <div class="formrow" style="margin-top:12px">
       <button class="btn" onclick="saveChoreForm()">Save chore</button>
       <button class="btn alt" style="width:auto" onclick="closeChoreForm()">Cancel</button>
