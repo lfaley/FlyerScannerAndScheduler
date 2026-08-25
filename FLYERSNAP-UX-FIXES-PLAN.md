@@ -139,3 +139,30 @@ the Critical finding (PL-1) and the reason "I can't copy them on the phone" happ
   endTime 100%) in ~2.2 s/case — the correct model performs well.
 - Remaining Gordon failure is the proxy **429 rate limit** (`server/ollama-proxy.mjs` per-user
   cap) — infra, Logan's call — now surfaced honestly as "Gordon is busy; try again shortly."
+
+## Shipped — final status (2026-08-25) — supersedes the "(queued)" notes above
+
+The whole plan plus several follow-on requests are built, tested (609 passing), and
+committed. FlyerSnap moved **v9.40 → v9.47** across this effort:
+
+- **v9.40** — item 0: schema-6 model-tag repair + honest 429 message.
+- **v9.41** — P1a: Ask Retry/Copy on errors; Problem Log per-row hint + red/amber tier
+  (`problemGuidance`); the "74 failed" summarize fix.
+- **v9.42** — P1b: Ask elapsed/staged progress + **Cancel** (generation-token, no network
+  abort so it never trips the fallback); growable spell-checked composer (main + review
+  boxes); overlap banner shows time · place · who per event.
+- **v9.43** — recovered fallbacks no longer logged as problems + schema-7 prune of stale ones.
+- **v9.44** — P2: Ask chat bubbles (you right, Gordon left with a label).
+- **v9.45** — P2: keyboard-operable suggestion chips (AG-6); relative timestamps
+  (`relativeTime`, exact-on-tap) in the Problem Log (AG-7).
+- **v9.46** — overlap banner: each row taps straight to **reschedule** that event; a
+  "See next clash" **stepper** to page multiple conflicts without dismissing.
+- **v9.47** — the "N emails had trouble" box rebuilt (research: NN/g error-message
+  guidelines + bulk-import patterns): retitled non-blaming, **dismissible**, **Try N again**
+  for transient failures (retains `msgId`), "no dates to import" for the rest, points to the
+  Problem Log. `extractFromRawItems` now returns `{ out, failures }` with structured failures.
+
+Everything verified with `node tests.js` and, for the visual items, rendered screenshots.
+Nothing in this plan remains queued. Related, outside this repo: Gordon confirmed working
+(model + proxy rate limit 20→120/min); recipe app got recipe-preview-before-save + a
+FlyerSnap-style "new version ready" reload prompt.

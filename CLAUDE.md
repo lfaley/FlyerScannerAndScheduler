@@ -64,7 +64,7 @@ HANDOFF.md.
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.31 · **Tests:** 562 passing (`node tests.js`)
+**Current version:** v9.47 · **Tests:** 609 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 

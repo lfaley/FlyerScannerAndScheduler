@@ -4318,7 +4318,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.47';
+const APP_VERSION = 'v9.48';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -8218,11 +8218,39 @@ function toggleChore(id){
   }
   completeChore(c, c.kidId);
 }
+// A brief, dependency-free confetti burst for the moment a kid earns stars.
+// Uses the Web Animations API (no library, no CSS), self-cleans, and honours
+// prefers-reduced-motion (skips entirely). Purely decorative — never on the data
+// path, wrapped so it can never break completing a chore.
+function celebrateBurst(){
+  try{
+    if(typeof window === 'undefined' || typeof document === 'undefined') return;
+    if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if(!document.body || !document.createElement('div').animate) return;
+    const colors = ['#f59e0b','#10b981','#3b82f6','#ef4444','#a855f7','#ec4899'];
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9999;overflow:hidden';
+    for(let i=0;i<28;i++){
+      const p = document.createElement('div');
+      const size = 6 + Math.random()*6;
+      p.style.cssText = 'position:absolute;top:-14px;left:'+(Math.random()*100)+'%;width:'+size+'px;height:'+(size*0.6)+'px;background:'+colors[i%colors.length]+';border-radius:1px';
+      box.appendChild(p);
+      p.animate([
+        { transform:'translate(0,0) rotate(0deg)', opacity:1 },
+        { transform:'translate('+((Math.random()-0.5)*160)+'px,'+(window.innerHeight+40)+'px) rotate('+(360+Math.random()*360)+'deg)', opacity:0.9 }
+      ], { duration:900+Math.random()*700, easing:'cubic-bezier(.2,.6,.4,1)', delay:Math.random()*120 });
+    }
+    document.body.appendChild(box);
+    setTimeout(function(){ box.remove(); }, 1900);
+  }catch(e){ /* decoration must never break the action */ }
+}
+
 function completeChore(c, kidId){
   S.completions.push({ id:uid(), choreId:c.id, kidId:kidId||null, date:todayISO(), stars:kidId?(c.stars||0):0 });
   if(kidId && c.stars>0){
     const kid = kidById(kidId);
     if(kid) toast(`⭐ ${kid.name} earned ${c.stars} star${c.stars>1?'s':''} — now at ${starBalances()[kid.id]||0}`);
+    celebrateBurst();   // a little confetti for the kid — reduced-motion aware
   }
   save(); render();
 }
