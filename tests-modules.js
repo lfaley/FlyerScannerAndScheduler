@@ -2763,9 +2763,30 @@ module.exports = async function runModuleTests(test){
       'no first-run explanation');
     assert.ok(/your own model/.test(cap) && /Anthropic key/.test(cap),
       'the notice offers only one of the two providers');
-    assert.ok(/!S\.settings\.apiKey/.test(cap), 'the notice is not gated on a missing key');
+    // Provider-aware since v9.51: the notice (and the scan gates) fire on
+    // aiSetupError(), which is null only when the ACTIVE provider is actually
+    // ready — an Anthropic key for the cloud path, a Gordon sign-in for the local
+    // path. The old apiKey-only gate dead-ended local-model users who need no key.
+    assert.ok(/aiSetupError\(\)/.test(cap), 'the notice is not gated on provider readiness');
     assert.ok(cap.indexOf('set up first') < cap.indexOf("document.getElementById('fCam')"),
       'the notice renders below the options it is warning about');
+  });
+
+  test('scan entry points gate on provider readiness, not just an Anthropic key', () => {
+    // FS-UI-05b (v9.51). handleCapture (photo/PDF), handleLinkCapture, and the
+    // recipe scan must gate on aiSetupError() so a local-model user signed into
+    // Gordon can scan with no Anthropic key — the old `!S.settings.apiKey` gate
+    // dead-ended them with a "add your key" alert they could never satisfy.
+    for (const fn of ['handleCapture', 'handleLinkCapture']) {
+      const body = script.split('function ' + fn + '(')[1].split('\n}')[0];
+      assert.ok(/aiSetupError\(\)/.test(body), fn + ' does not gate on aiSetupError');
+      assert.ok(!/if\(!S\.settings\.apiKey\)\{\s*\n?\s*alert\('Add your Anthropic/.test(body),
+        fn + ' still hard-blocks on a missing Anthropic key');
+    }
+    // aiSetupError itself must let a Gordon-signed-in local user through.
+    const helper = script.split('function aiSetupError(')[1].split('\n}')[0];
+    assert.ok(/aiProvider\(\) === 'local'/.test(helper) && /gordonSignedInEmail\(\)/.test(helper),
+      'aiSetupError is not provider-aware for the local path');
   });
 
   test('Gordon is a display name, never a provider', () => {

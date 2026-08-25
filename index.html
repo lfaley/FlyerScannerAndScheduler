@@ -4323,10 +4323,28 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.51';
+const APP_VERSION = 'v9.52';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
+
+// Why AI can't run a scan right now, worded for the ACTIVE provider — or null when
+// it's ready. The scan entry points used to check `!S.settings.apiKey` unconditionally,
+// which dead-ended local-model (Gordon) users — who need no Anthropic key — with a
+// message telling them to add one. Gate on what THIS provider actually needs instead.
+function aiSetupError(){
+  if(!aiEnabled()) return 'Turn AI back on in Settings first (Gordon and AI).';
+  if(aiProvider() === 'local'){
+    // Local model: needs a Gordon sign-in. If Anthropic fallback is armed (fallback
+    // on AND a key saved), callAI can still answer, so don't block the scan.
+    if(gordonSignedInEmail()) return null;
+    if(S.settings.aiFallback && S.settings.apiKey) return null;
+    return 'Sign in to Gordon in Settings first — or add an Anthropic key and turn on "Fall back to Anthropic".';
+  }
+  // Anthropic: needs the user's key.
+  if(!S.settings.apiKey) return 'Add your Anthropic API key in Settings first.';
+  return null;
+}
 // How Gordon addresses the user (Settings → Gordon and AI). Default professional.
 function assistantTone(){ return (S.settings && S.settings.assistantTone === 'casual') ? 'casual' : 'professional'; }
 
@@ -4929,7 +4947,7 @@ function addAllAtOnce(onlyNew){
   evts.forEach(e=>veh.push(...buildVEVENTs(e)));
   deliverICS(wrapICS(veh), 'flyersnap-events.ics',
     'Tap "Add All" in the Calendar screen that opens 📆');
-  evts.forEach(e=>e.exported=true); save();
+  evts.forEach(e=>e.exported=true); save(); render(); // render(): refresh the "In calendar" flags (single-event downloadICS already does)
 }
 
 function emailAllToSelf(){
@@ -7544,7 +7562,7 @@ function renderCapture(m){
     <input type="text" id="scanContext" placeholder="e.g. band, Olivia's dance, 3rd grade"
       value="${esc(scanContext)}" oninput="setScanContext(this.value)">
     <div class="help">If the page only shows dates, tell it what they are for. It gets noted on every event found.</div>
-    ${(!S.settings.apiKey && aiProvider() === 'anthropic' && aiEnabled()) ? `
+    ${aiSetupError() ? `
     <div class="card" style="border-left:5px solid var(--amber-accent)">
       <div style="font-weight:700">Reading flyers needs ${esc(aiName())} set up first</div>
       <div class="meta">Every option below sends the page to a model to be read, and none is
@@ -7600,9 +7618,8 @@ function markDuplicates(found, alsoPending){
 async function handleCapture(fileList, isPdf){
   const files = Array.from(fileList||[]).filter(Boolean);
   if(!files.length) return;
-  if(!S.settings.apiKey){
-    alert('Add your Anthropic API key in Settings first.'); nav('settings'); return;
-  }
+  const setupErr = aiSetupError();
+  if(setupErr){ alert(setupErr); nav('settings'); return; }
   const append = captureAppend && pendingEvents.length > 0;
   captureAppend = false;
   sub('busy', {msg:'Reading the document…', hint: aiWorkingHint()});
@@ -7714,9 +7731,8 @@ function submitLink(){
 }
 
 async function handleLinkCapture(url){
-  if(!S.settings.apiKey){
-    alert('Add your Anthropic API key in Settings first.'); nav('settings'); return;
-  }
+  const setupErr = aiSetupError();
+  if(setupErr){ alert(setupErr); nav('settings'); return; }
   const append = captureAppend && pendingEvents.length > 0;
   captureAppend = false;
   sub('busy', {msg:'Fetching the link…', hint: aiWorkingHint()});
@@ -8229,7 +8245,7 @@ function toggleChoreDay(d){
 function saveChoreForm(){
   syncChoreTitle();
   const f = choreForm;
-  if(!f.title.trim()) return;
+  if(!f.title.trim()){ alert('Give the chore a name first.'); return; } // was a silent no-op — the Save button looked broken
   if(f.frequency==='weekly' && !f.days.length){ alert('Choose at least one day of the week.'); return; }
   S.chores.push({ id:uid(), title:f.title.trim(), kidId:f.kidId, frequency:f.frequency,
     daysOfWeek:f.frequency==='weekly'?f.days.join(','):null, stars:f.stars, deleted:false });
@@ -8840,7 +8856,8 @@ let recipeBatch = null;      // { files:[], done:[], mode:'separate'|'one' }
 async function handleRecipeScan(files){
   const list = Array.from(files || []).filter(Boolean);
   if(!list.length) return;
-  if(!S.settings.apiKey){ alert('Add your Anthropic API key in Settings first.'); nav('settings'); return; }
+  const setupErr = aiSetupError();
+  if(setupErr){ alert(setupErr); nav('settings'); return; }
 
   if(list.length === 1) return runRecipeScan(list, 'one');
 
