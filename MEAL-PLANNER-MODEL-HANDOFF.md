@@ -1,5 +1,20 @@
 # Handoff to the meal-planner agent — the shared Gordon model is wrong
 
+> ## ⚠️ UPDATE — 2026-08-25: SUPERSEDED. We did NOT land on q8_0.
+> This note (24 Aug) was the first fix — it moved us off the text-only
+> `qwen2.5:14b-instruct` and off the bare Thinking `qwen3-vl:8b`, and landed on
+> **`qwen3-vl:8b-instruct-q8_0`**. That was correct-but-slow: q8_0 (9.8 GB) is
+> the *largest* tag, and speed is memory-bandwidth-bound. **One day later we
+> corrected it to `qwen3-vl:8b-instruct-q4_K_M` (6.1 GB)** — same vision +
+> Instruct, roughly half the footprint, faster.
+>
+> **The whole journey:** `qwen2.5:14b-instruct` (text-only) → bare `qwen3-vl:8b`
+> (Thinking, never answers) → `qwen3-vl:8b-instruct-q8_0` (largest/slowest) →
+> **`qwen3-vl:8b-instruct-q4_K_M` ← where we are now, shipped to both apps.**
+> Everything below is kept as the record of the q8_0 step; wherever it says
+> "the one to use = q8_0", read q4_K_M. **Canonical: `AI-STATE.md`** (repo root).
+> The follow-on correction is `MODEL-TAG-CHANGE-HANDOFF.md` in the recipe repo.
+
 **From the FlyerSnap session · 24 Aug 2026 · Logan asked me to bring this over.**
 
 Symptom Logan reported: **"Gordon is really slow now."** It is not the auth change

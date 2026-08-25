@@ -1,5 +1,22 @@
 # Adding a vision model so FlyerSnap can read flyers locally
 
+> ## ⚠️ UPDATE — 2026-08-25: the model choice is SETTLED. Use one tag.
+> This guide is where the vision-model search *started* (Aug, pre-standardization).
+> Since then we settled the whole universe on a single shared tag:
+> **`qwen3-vl:8b-instruct-q4_K_M`**. Both apps must request exactly that (they
+> share one GPU behind one proxy — see `AI-STATE.md`).
+>
+> **The journey:** `qwen2.5:14b-instruct` (text-only, can't read flyers) → bare
+> `qwen3-vl:8b` (the "Thinking" edition — reasons forever, never answers) →
+> `qwen3-vl:8b-instruct-q8_0` (correct, but the largest/slowest tag) →
+> **`qwen3-vl:8b-instruct-q4_K_M` ← use this.**
+>
+> So: **ignore the per-VRAM model recommendations below** (`qwen2.5vl:7b`, bare
+> `qwen3-vl:8b`, etc.) — they were the original research before we standardized.
+> The copy-paste commands in this file have been updated to the settled tag.
+> Everything else here — Tailscale, CORS/`OLLAMA_ORIGINS`, sleep, HTTPS — is
+> still exactly right. **Canonical model reference: `AI-STATE.md`** (repo root).
+
 Written for someone who has never pulled an Ollama model before. Every step has a
 check so you know it worked before moving on. Do them in order.
 
@@ -7,8 +24,8 @@ check so you know it worked before moving on. Do them in order.
 
 ## Why you need this at all
 
-Your Ollama server currently runs `qwen2.5:14b-instruct`. That is a **text-only**
-model. It has no eyes. Send it a photograph and it cannot see the photograph --
+When this guide was written, the Ollama server ran `qwen2.5:14b-instruct` — a
+**text-only** model (this is what started the whole model hunt). It has no eyes. Send it a photograph and it cannot see the photograph --
 not "sees it badly", but has no mechanism to receive it at all.
 
 FlyerSnap's whole scanner is images: flyer photos, PDF pages, recipe photos. So
@@ -74,10 +91,12 @@ Leave 2-3 GB of headroom. A model that *just barely* fits will swap and crawl.
 
 | Your VRAM | Pull this | Why |
 |---|---|---|
-| **6 GB** | `qwen3-vl:8b` | Best OCR at this size |
-| **8-12 GB** | `qwen2.5vl:7b` | ~6 GB, excellent document/table parsing |
-| **16 GB+** | `qwen3-vl:8b` or `llama3.2-vision` | More headroom, better quality |
-| **Under 4 GB** | `moondream` | Limited, but functional |
+| **6 GB+** | `qwen3-vl:8b-instruct-q4_K_M` | The settled tag — vision + Instruct, 6.1 GB, fastest. **Never the bare `qwen3-vl:8b`** (that's the Thinking edition). |
+| **Under 4 GB** | `moondream` | Limited, but functional (not for this universe) |
+
+> The historical rows that used to live here (`qwen2.5vl:7b`, bare `qwen3-vl:8b`,
+> `llama3.2-vision`) were the original comparison. They're settled now — use the
+> q4_K_M tag above regardless of VRAM (leave 2–3 GB headroom; 6.1 GB fits ~14 GiB).
 
 **The evidence for Qwen over Llama on your task**, since this is the choice that
 matters most: on **DocVQA** -- the benchmark for reading documents -- Qwen2.5-VL
@@ -90,8 +109,10 @@ Qwen2.5-VL also explicitly supports *"structured outputs of their contents"* for
 *"scans of invoices, forms, tables"* -- which is precisely what FlyerSnap asks
 for (JSON out of a schedule grid).
 
-**I recommend `qwen2.5vl:7b`** unless you have 16 GB+, in which case try
-`qwen3-vl:8b` first.
+**Settled recommendation: `qwen3-vl:8b-instruct-q4_K_M`** — the research above is
+why Qwen3-VL won for document OCR; we then pinned the fast Instruct quant of it.
+(This supersedes the earlier "`qwen2.5vl:7b`, or `qwen3-vl:8b` at 16 GB+" call —
+the bare `qwen3-vl:8b` turned out to be the Thinking edition and never answers.)
 
 ---
 
@@ -123,7 +144,7 @@ model needs.
 In Command Prompt:
 
 ```
-ollama pull qwen2.5vl:7b
+ollama pull qwen3-vl:8b-instruct-q4_K_M
 ```
 
 This downloads roughly 6 GB. It will take a while on a normal connection. You
@@ -143,7 +164,7 @@ if something fails you know which half is broken.
 2. Run:
 
 ```
-ollama run qwen2.5vl:7b "Read every date and time on this image. C:\Users\Logan\Desktop\flyer.jpg"
+ollama run qwen3-vl:8b-instruct-q4_K_M "Read every date and time on this image. C:\Users\Logan\Desktop\flyer.jpg"
 ```
 
 ✅ **Check:** it describes actual text from your flyer.
@@ -195,7 +216,7 @@ On your phone, in FlyerSnap:
    recipe app's Admin panel. It must be `https://` -- a page served over HTTPS
    cannot call a plain `http://` address (browsers block mixed content), and it
    must be the Tailscale hostname, not an IP.
-4. **Model:** `qwen2.5vl:7b`
+4. **Model:** `qwen3-vl:8b-instruct-q4_K_M`
 5. Leave **Fall back to Anthropic if the desktop is offline** ticked
 6. **Save**, then **Test**
 
@@ -262,10 +283,10 @@ shows you every extracted item before anything is saved. Keep that habit.
 ## Quick reference
 
 ```
-ollama --version                    # check version first
-ollama pull qwen2.5vl:7b            # ~6 GB download
+ollama --version                    # check version first (need 0.12.7+ for qwen3-vl)
+ollama pull qwen3-vl:8b-instruct-q4_K_M   # ~6 GB download — the settled tag
 ollama list                         # confirm it is there
-ollama run qwen2.5vl:7b "Read the dates. C:\path\to\flyer.jpg"
+ollama run qwen3-vl:8b-instruct-q4_K_M "Read the dates. C:\path\to\flyer.jpg"
 
 setx OLLAMA_HOST "0.0.0.0"          # then REBOOT
 setx OLLAMA_ORIGINS "https://lfaley.github.io"

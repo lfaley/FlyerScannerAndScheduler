@@ -91,7 +91,7 @@ Checked against every `logProblem` call site in the app:
 | `where` | `detail` today | sent after the change |
 |---|---|---|
 | `Email: office@school.org` | `Braelyn's Field Trip - Maple Elementary` | **withheld** |
-| `Local model` | `qwen3-vl:8b-instruct-q8_0` | kept |
+| `Local model` | `qwen3-vl:8b-instruct-q4_K_M` | kept |
 | `Scanning` | scan context | kept |
 | `Assistant` | *(empty)* | n/a |
 

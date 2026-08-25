@@ -69,7 +69,7 @@ One (occasionally two, if it asks a clarifier) **structured-output** call over t
   "notesOffer": [{ "entryId": 3, "text": "Report to the choir room by 6:15; wear black." }],
   "ask": null }
 ```
-`field` is `"title"` or `"notes"` — chosen from the user's instruction (Logan's decision). `mode` says how (`prefix`/`suffix`/`replace` for title, `append` for notes) so a preview can show the exact result, e.g. title `"Fall Concert"` → `"Band — Fall Concert"`. Code validates it against the real fields, previews every change in the review screen, and writes only on confirm. No native tool-calling required (model-agnostic — works on `qwen3-vl:8b` regardless of its tool-call reliability).
+`field` is `"title"` or `"notes"` — chosen from the user's instruction (Logan's decision). `mode` says how (`prefix`/`suffix`/`replace` for title, `append` for notes) so a preview can show the exact result, e.g. title `"Fall Concert"` → `"Band — Fall Concert"`. Code validates it against the real fields, previews every change in the review screen, and writes only on confirm. No native tool-calling required (model-agnostic — works on `qwen3-vl:8b-instruct-q4_K_M`, the shared tag, regardless of its tool-call reliability).
 
 ---
 
@@ -86,8 +86,8 @@ No Gmail-watcher change. No inbox search. No new network surface.
 
 ## 5. Model & backend
 - Runs through the **Gordon proxy** (live, gated).
-- **Model:** `qwen3-vl:8b` (already serves extraction + vision) handles this; it's reasoning over text the app supplies. No model swap needed.
-- **Thinking mode:** a short reasoning pass helps theme-inference — leave **on** for the enrichment call; keep it **off** for the raw extraction call. Keep the model warm (`OLLAMA_KEEP_ALIVE`).
+- **Model:** `qwen3-vl:8b-instruct-q4_K_M` — the shared tag (already serves extraction + vision); handles this reasoning over text the app supplies. No model swap needed.
+- **Thinking mode:** the shared tag is the **Instruct** edition (deliberately not the bare `qwen3-vl:8b` "Thinking" model, which never returns an answer), so "thinking" here means a light `reasoning_effort` nudge on the enrichment call, not a model swap — keep the raw extraction call at none. Keep the model warm (`OLLAMA_KEEP_ALIVE`).
 
 ---
 

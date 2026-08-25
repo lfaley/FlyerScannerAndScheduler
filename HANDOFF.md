@@ -1,5 +1,19 @@
 # FlyerSnap — Handoff Notes
 
+> ## ✅ UPDATE — 2026-08-25: current state (this brief is from Aug 23)
+> Since this Aug-23 handoff, the app moved forward a lot. Current facts:
+> - **Live version is `v9.38`** (`sw.js` CACHE `flyersnap-v121`), not v9.31.
+> - **AI model settled on `qwen3-vl:8b-instruct-q4_K_M`.** Everywhere below that
+>   names `qwen3-vl:8b` (the Thinking edition — the failures logged in this file)
+>   or `qwen3-vl:8b-instruct-q8_0` (measured here), read **q4_K_M**. The journey:
+>   `qwen2.5:14b-instruct` (text-only) → bare `qwen3-vl:8b` (Thinking, no answer) →
+>   q8_0 (largest/slowest) → **q4_K_M** (vision + Instruct, fastest). The measured
+>   numbers below were taken on q8_0 and are kept as the historical record.
+> - **Gordon is live behind the auth proxy;** sign-in gates AI (Firebase ID token +
+>   verified email + `allowedUsers` allowlist), Anthropic fallback kept ON.
+> - **EA assistant shipped** (conversational EA + Professional/Casual tone setting).
+> - **Canonical AI reference: `AI-STATE.md`** (repo root) — it wins on any AI detail.
+
 **Updated:** August 23, 2026 · **Live version:** v9.31 · **Tests:** 562 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
