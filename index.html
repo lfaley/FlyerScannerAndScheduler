@@ -4318,7 +4318,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.45';
+const APP_VERSION = 'v9.47';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5467,25 +5467,43 @@ function renderEvents(m){
 
 function conflictKey(c){ return c.type + '|' + c.date + '|' + c.events.map(e=>e.id).sort().join(','); }
 
+// Which of several live conflicts the banner is currently showing. Lets the
+// user page through them (Logan's request) instead of having to dismiss one to
+// see the next. Reset/clamped whenever the live list shrinks.
+let conflictViewIndex = 0;
+
 function conflictBanner(){
   const dismissed = new Set(S.settings.dismissedConflicts || []);
   const all = findConflicts(S.events, todayISO());
   const live = all.filter(c => !dismissed.has(conflictKey(c)));
   if(!live.length) return '';
-  const c = live[0];
-  const more = live.length - 1;
+  if(conflictViewIndex >= live.length) conflictViewIndex = 0;   // a dismiss shrank the list
+  const c = live[conflictViewIndex];
+  const n = live.length;
   return `<div class="card" style="border-left:5px solid var(--amber-accent)">
     <div class="row">
       <div class="grow">
         <div style="font-weight:800;font-size:14px;margin-bottom:2px">
           ${ico('alert')}${esc(describeConflict(c))}</div>
-        <div class="meta" style="font-size:12px">${friendly(c.date)}${more ? ` · ${more} more to look at` : ''}</div>
+        <div class="meta" style="font-size:12px">${friendly(c.date)}${n > 1 ? ` · ${conflictViewIndex + 1} of ${n}` : ''}</div>
       </div>
       <button class="linkbtn" aria-label="Dismiss this warning"
         onclick="event.stopPropagation();dismissConflict('${esc(conflictKey(c))}')">${ico('x')}</button>
     </div>
     <div class="actionrow" style="margin:10px 0 0">${conflictActions(c)}</div>
+    ${n > 1 ? `<div class="row" style="justify-content:space-between;align-items:center;margin-top:10px">
+      <span class="meta" style="font-size:12px">${n - 1} other clash${n - 1 === 1 ? '' : 'es'} to review</span>
+      <button class="linkbtn" onclick="stepConflict()">See next clash</button>
+    </div>` : ''}
     </div>`;
+}
+
+// Page to the next live conflict without dismissing the current one.
+function stepConflict(){
+  const dismissed = new Set(S.settings.dismissedConflicts || []);
+  const live = findConflicts(S.events, todayISO()).filter(c => !dismissed.has(conflictKey(c)));
+  if(live.length > 1) conflictViewIndex = (conflictViewIndex + 1) % live.length;
+  render();
 }
 
 // HAX G9 is "support efficient correction": make it easy to FIX the thing,
@@ -5499,9 +5517,10 @@ function conflictActions(c){
     return `<button class="btn sm" onclick="markHandled('${esc(e.id)}')">${ico('check-circle')}Mark as handled</button>
       <button class="btn alt sm" onclick="eventActions('${esc(e.id)}')">${ico('edit')}Open it</button>`;
   }
-  // Overlaps and busy days: there is nothing to "resolve", so surface enough of
-  // each event -- time, place, who -- to judge the clash without opening both,
-  // then tap either to edit. (Was just two bare title buttons.)
+  // Overlaps and busy days: the fix is to move one of them, so each row goes
+  // STRAIGHT to that event's editor (reschedule), not the generic add/edit/remove
+  // sheet -- which for a clash just repeated what tapping any event does. Shows
+  // time, place, who so you can judge which to move without opening both.
   const people = allPeople();
   return `<div style="width:100%;display:flex;flex-direction:column;gap:6px">`
     + c.events.slice(0, 5).map(ev => {
@@ -5511,9 +5530,10 @@ function conflictActions(c){
           .map(id => (people.find(p => p.id === id) || {}).name).filter(Boolean).join(', ');
         const meta = [t, ev.location || '', who].filter(Boolean).join(' · ');
         return `<button class="btn alt sm" style="width:100%;text-align:left;white-space:normal;padding:10px 12px"
-          onclick="eventActions('${esc(ev.id)}')">
+          onclick="openEventEdit('${esc(ev.id)}')">
           <span style="font-weight:700;display:block">${esc(ev.title || 'Untitled')}${ev.kind === 'deadline' ? ' · deadline' : ''}</span>
           <span class="meta" style="font-size:12px;display:block;margin-top:2px">${esc(meta)}</span>
+          <span class="meta" style="font-size:11px;display:block;margin-top:3px;color:var(--accent)">${ico('edit')}Tap to reschedule</span>
         </button>`;
       }).join('')
     + (c.events.length > 5 ? `<div class="meta" style="font-size:12px">and ${c.events.length - 5} more overlapping</div>` : '')
@@ -6954,7 +6974,7 @@ async function extractFromRawItems(items){
 
   for(let i = 0; i < items.length; i++){
     const it = items[i];
-    const label = it.subject ? String(it.subject).slice(0,60) : '';
+    const label = it.subject ? String(it.subject).slice(0,60) : '(no subject)';
     sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…', hint: label});
     try{
       const payload = await fetchMessage(it.msgId);
@@ -6967,33 +6987,38 @@ async function extractFromRawItems(items){
         { msgId: it.msgId, from: payload.from || it.from || null,
           source: 'Email - ' + (payload.subject || it.subject || ''),
           aiSource: stamp })));
+      // Keep msgId + a retriable flag on each failure so the review box can act:
+      // an extraction problem is worth retrying (a transient model/proxy error);
+      // "no dates found" is deterministic -- re-reading the same email ends the
+      // same way -- so it is NOT retriable, just reported.
       problems.forEach(p => {
-        failures.push(label + ' — ' + p);
+        failures.push({ subject: label, reason: p, msgId: it.msgId, retriable: true });
         logProblem('Email: ' + (payload.from || it.from || 'unknown'), p, label);
       });
       if(!events.length && !problems.length){
-        failures.push(label + ' — no dates found');
+        failures.push({ subject: label, reason: 'No dates found', msgId: it.msgId, retriable: false });
         logProblem('Email: ' + (payload.from || it.from || 'unknown'),
           'No dates found in this email', label);
       }
     }catch(err){
-      failures.push(label + ' — ' + err.message);
+      failures.push({ subject: label, reason: err.message, msgId: it.msgId, retriable: true });
       logProblem('Email: ' + (it.from || 'unknown'), err.message, label);
     }
   }
 
-  // Failures must be visible. console.log is invisible on a phone.
-  if(failures.length){
-    lastEmailProblems = failures;
-  }
-  return out;
+  // Return both, so the caller surfaces failures (the review box) and a retry can
+  // reconcile succeeded vs still-failing without relying on a global side effect.
+  return { out, failures };
 }
 
 async function openEmailReview(fresh){
   const rawItems = fresh.filter(isMessageRef);
   if(rawItems.length){
-    const extracted = await extractFromRawItems(rawItems);
-    fresh = fresh.filter(i => !isMessageRef(i)).concat(extracted);
+    const { out, failures } = await extractFromRawItems(rawItems);
+    lastEmailProblems = failures;   // this batch's failures (set even if empty)
+    fresh = fresh.filter(i => !isMessageRef(i)).concat(out);
+  } else {
+    lastEmailProblems = [];
   }
   pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
   pendingEvents = markDuplicates(fresh.map(i => {
@@ -7007,6 +7032,45 @@ async function openEmailReview(fresh){
   pendingSource = 'Email';
   S.settings.pendingEmailCount = 0;
   save();
+  sub('review');
+}
+
+// The "couldn't be read" box is a notification the user must be able to clear.
+// If nothing else is left to review, leave the (now empty) review screen too,
+// rather than stranding them on "Found 0 items".
+function dismissEmailTrouble(){
+  lastEmailProblems = [];
+  if(!pendingEvents.length){ nav('events'); return; }
+  render();
+}
+
+// Retry only the retriable failures (transient errors), merge anything that now
+// succeeds into the batch under review, and keep only what still failed. The
+// non-retriable "no dates found" rows are preserved untouched. Recovery without
+// starting the whole import over (NN/g: help users recover, don't make them redo).
+async function retryEmailTrouble(){
+  const retriable = lastEmailProblems.filter(p => p && p.retriable && p.msgId);
+  if(!retriable.length) return;
+  const keep = lastEmailProblems.filter(p => !(p && p.retriable && p.msgId));
+  try{
+    const { out, failures } = await extractFromRawItems(
+      retriable.map(p => ({ msgId: p.msgId, subject: p.subject })));
+    if(out.length){
+      const mapped = markDuplicates(out.map(i => ({
+        title:i.title, date:i.date, time:i.time, endTime:i.endTime||null, location:i.location,
+        kind:i.kind, notes:i.notes, source:i.source, from:i.from||null,
+        personIds: personsForSender(i.from).slice(), kidId: personsForSender(i.from)[0] || null,
+      })), pendingEvents);
+      pendingEvents = pendingEvents.concat(mapped);
+      pendingMsgIds = [...new Set(pendingMsgIds.concat(out.map(i => i.msgId)))];
+    }
+    lastEmailProblems = keep.concat(failures);
+    save();
+    const got = out.length;
+    toast(got ? `Read ${got} more — added below` : 'Still no luck on those');
+  }catch(err){
+    toast('Could not retry: ' + (err && err.message || 'unknown'));
+  }
   sub('review');
 }
 
@@ -7711,12 +7775,22 @@ function renderReview(m){
   const dups = pendingEvents.filter(e=>e.dup).length;
   let html = '';
   if(lastEmailProblems.length){
+    const probs = lastEmailProblems;
+    const nRetry = probs.filter(p => p && p.retriable).length;
     html += `<div class="card" style="border-left:5px solid var(--amber)">
-      <div style="font-weight:800;font-size:var(--t-sm);margin-bottom:4px">
-        ${lastEmailProblems.length} email${lastEmailProblems.length===1?'':'s'} had trouble</div>
-      <div class="meta" style="font-size:var(--t-cap)">
-        ${lastEmailProblems.slice(0,5).map(p=>esc(p)).join('<br>')}
-        ${lastEmailProblems.length>5?'<br>and '+(lastEmailProblems.length-5)+' more':''}</div>
+      <div class="row">
+        <div class="grow" style="font-weight:800;font-size:var(--t-sm)">
+          ${ico('alert')}${probs.length} email${probs.length===1?'':'s'} couldn’t be read</div>
+        <button class="linkbtn" aria-label="Dismiss" onclick="dismissEmailTrouble()">${ico('x')}</button>
+      </div>
+      <div class="meta" style="font-size:var(--t-cap);margin-top:4px">
+        ${probs.slice(0,6).map(p => `<div style="margin-top:3px">${esc(p.subject || '(no subject)')} — ${esc(p.retriable ? (p.reason || 'could not read it') : 'no dates to import')}</div>`).join('')}
+        ${probs.length>6?`<div style="margin-top:3px">and ${probs.length-6} more</div>`:''}</div>
+      <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+        ${nRetry ? `<button class="btn sm" onclick="retryEmailTrouble()">Try ${nRetry===probs.length?'':nRetry+' '}again</button>` : ''}
+        <button class="btn alt sm" style="width:auto" onclick="dismissEmailTrouble()">Dismiss</button>
+      </div>
+      <div class="help" style="font-size:11px;margin-top:6px">Also saved in your Problem Log (Settings → Diagnostics) with the full detail.</div>
     </div>`;
   }
   html += `<div class="help">Found ${pendingEvents.length} item${pendingEvents.length===1?'':'s'}. Tap to include or skip.${dups?` ${dups} already tracked (unchecked for you).`:''}</div>`;
