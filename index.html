@@ -4324,7 +4324,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.54';
+const APP_VERSION = 'v9.55';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -6350,6 +6350,12 @@ async function saveSenders(list){
 
 let watchedSenders = null;
 let lastEmailProblems = [];
+// Gordon's executive-assistant briefs for the emails that had no dates to import,
+// keyed by msgId: { from, gist, category:'action'|'fyi'|'trash', deadline, missedDate, suggestedAction }.
+// Lets the user see WHAT each un-imported email actually was — worth acting on, keep
+// for reference, or trash — instead of a bare "no dates to import".
+let emailReviews = {};
+let emailReviewBusy = false;
 
 // --- inlined from js/errorReport.js (drift-checked; edit the source file, then re-inline) ---
 // errorReport.js — remote error reporting, the PURE half (v9.24).
@@ -7091,8 +7097,135 @@ async function openEmailReview(fresh){
 // rather than stranding them on "Found 0 items".
 function dismissEmailTrouble(){
   lastEmailProblems = [];
+  emailReviews = {};
   if(!pendingEvents.length){ nav('events'); return; }
   render();
+}
+
+// Ask Gordon to act as an executive assistant and brief the user on the emails that
+// had no dates to import — so a "no dates to import" line becomes "here's what this
+// actually was, and whether it's worth your time." Fields follow standard EA triage
+// (sender, one-line gist, a Do/Delegate/Defer/Delete-style disposition, any deadline,
+// whether a date was likely MISSED, and a recommended next step). One batched AI call.
+async function reviewEmailTrouble(){
+  const setupErr = aiSetupError();
+  if(setupErr){ alert(setupErr); return; }
+  // One entry per distinct email (a single email can log several problems).
+  const seen = new Set();
+  const items = [];
+  for(const p of lastEmailProblems){
+    if(!p || !p.msgId || seen.has(p.msgId)) continue;
+    seen.add(p.msgId);
+    items.push(p);
+  }
+  if(!items.length){ toast('Nothing to review'); return; }
+  emailReviewBusy = true; render();
+  try{
+    // Pull each email's real content (from/subject/body) so the brief is grounded in
+    // what the message actually says, not just its subject line.
+    const emails = [];
+    for(let i=0;i<items.length;i++){
+      sub('busy', { msg:'Gordon is reviewing email ' + (i+1) + ' of ' + items.length + '…',
+                    hint: items[i].subject || '' });
+      try{
+        const payload = await fetchMessage(items[i].msgId);
+        emails.push({
+          msgId: items[i].msgId,
+          from: payload.from || items[i].from || 'unknown',
+          subject: payload.subject || items[i].subject || '(no subject)',
+          body: (payload.text || '').slice(0, 2500),
+          hasAttachment: Array.isArray(payload.attachments) && payload.attachments.length > 0,
+        });
+      }catch(err){
+        emails.push({ msgId: items[i].msgId, from: items[i].from || 'unknown',
+          subject: items[i].subject || '(no subject)', body: '', hasAttachment: false,
+          fetchError: err && err.message });
+      }
+    }
+    sub('busy', { msg:'Gordon is writing your briefing…' });
+    const prompt = eaReviewPrompt(emails);
+    const raw = await callAI([{ type:'text', text: prompt }], 2000, EA_REVIEW_GROUNDING, 'email.review');
+    const briefs = parseEaReview(raw);
+    const map = {};
+    briefs.forEach(b => { if(b && b.msgId) map[b.msgId] = b; });
+    // Make sure every requested email gets SOME brief, even if the model skipped it.
+    emails.forEach(e => { if(!map[e.msgId]) map[e.msgId] = {
+      msgId:e.msgId, from:e.from, gist: e.fetchError ? 'Could not open this email to read it.' : 'Could not summarise this one.',
+      category:'fyi', deadline:null, missedDate:false, suggestedAction:'Open it in your mail app to check.' }; });
+    emailReviews = map;
+    toast('Gordon reviewed ' + emails.length + ' email' + (emails.length===1?'':'s'));
+  }catch(err){
+    logProblem('Gordon', 'Email review failed: ' + (err && err.message || 'unknown'), aiModelName());
+    toast('Could not review those: ' + (err && err.message || 'unknown'));
+  }finally{
+    emailReviewBusy = false;
+    sub('review');
+  }
+}
+
+// The EA persona + strict-JSON contract for the review. Kept terse: this is triage,
+// one scannable line per field, not prose.
+function eaReviewPrompt(emails){
+  const list = emails.map((e,i) =>
+    `EMAIL ${i+1}\nid: ${e.msgId}\nfrom: ${e.from}\nsubject: ${e.subject}` +
+    (e.hasAttachment ? '\n(has an attachment such as a flyer image)' : '') +
+    `\nbody:\n${e.body || '(no readable text — likely an image-only flyer)'}\n`).join('\n');
+  return `You are a sharp, trusted executive assistant for a busy parent. These emails were scanned for calendar dates and NONE were imported. For EACH email, write a one-glance brief so the parent can decide fast whether it matters.
+
+Respond with ONLY a JSON array (no markdown, no commentary). One object per email, in the same order:
+{"id":"<the id above>","from":"who it's from, plainly","gist":"ONE sentence: what this email is actually about","category":"action" | "fyi" | "trash","deadline":"any date/time or soft due-date mentioned, else null","missedDate": true only if the email clearly names a date/event that SHOULD be on the calendar but wasn't, else false,"suggestedAction":"one short next step, max ~8 words"}
+
+Rules for category:
+- "action" = the parent needs to DO something (reply, sign/return a form, pay, RSVP, respond).
+- "fyi" = useful information to keep, but nothing to do.
+- "trash" = newsletter, promotion, receipt, or noise — safe to ignore.
+If body text is missing (image-only flyer), say so in the gist and suggest opening it.
+
+Emails:
+${list}`;
+}
+
+const EA_REVIEW_GROUNDING = 'Be accurate and specific to each email. Never invent a date, deadline, or sender. If unsure, say so plainly. Keep every field short and scannable.';
+
+function parseEaReview(raw){
+  try{
+    let t = String(raw || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('['), b = t.lastIndexOf(']');
+    if(a >= 0 && b > a) t = t.slice(a, b+1);
+    const arr = JSON.parse(t);
+    if(!Array.isArray(arr)) return [];
+    return arr.map(o => ({
+      msgId: o && (o.id || o.msgId),
+      from: o && o.from || 'unknown',
+      gist: o && o.gist || '',
+      category: (o && ['action','fyi','trash'].includes(o.category)) ? o.category : 'fyi',
+      deadline: o && o.deadline || null,
+      missedDate: !!(o && o.missedDate),
+      suggestedAction: o && o.suggestedAction || '',
+    })).filter(o => o.msgId);
+  }catch(e){ return []; }
+}
+
+// Colour + label for a brief's disposition chip. action=needs you, fyi=keep, trash=ignore.
+function eaCatMeta(cat){
+  if(cat === 'action') return { label: 'Action needed', color: 'var(--amber)' };
+  if(cat === 'trash')  return { label: 'Probably trash', color: 'var(--muted)' };
+  return { label: 'Keep — info', color: 'var(--accent)' };
+}
+
+// One email's EA brief as HTML (used inside the trouble box once Gordon has reviewed).
+function emailBriefHtml(b){
+  const m = eaCatMeta(b.category);
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+    <div class="row" style="gap:6px;align-items:center">
+      <span class="chip" style="border-color:${m.color};color:${m.color};font-size:11px;padding:2px 8px">${esc(m.label)}</span>
+      <span class="grow" style="font-size:11px;color:var(--muted)">${esc(b.from||'')}</span>
+    </div>
+    <div style="margin-top:4px;font-size:var(--t-cap)">${esc(b.gist||'')}</div>
+    ${b.deadline ? `<div style="margin-top:3px;font-size:11px;color:var(--amber)"><b>When:</b> ${esc(b.deadline)}</div>` : ''}
+    ${b.missedDate ? `<div style="margin-top:3px;font-size:11px;color:var(--amber)">Looks like it names a date — you may want to add it by hand.</div>` : ''}
+    ${b.suggestedAction ? `<div style="margin-top:3px;font-size:11px"><b>Suggested:</b> ${esc(b.suggestedAction)}</div>` : ''}
+  </div>`;
 }
 
 // Retry only the retriable failures (transient errors), merge anything that now
@@ -7116,6 +7249,9 @@ async function retryEmailTrouble(){
       pendingMsgIds = [...new Set(pendingMsgIds.concat(out.map(i => i.msgId)))];
     }
     lastEmailProblems = keep.concat(failures);
+    // Drop briefs for emails that are no longer in the trouble list (they imported).
+    const stillThere = new Set(lastEmailProblems.map(p => p && p.msgId).filter(Boolean));
+    emailReviews = Object.fromEntries(Object.entries(emailReviews).filter(([id]) => stillThere.has(id)));
     save();
     const got = out.length;
     toast(got ? `Read ${got} more — added below` : 'Still no luck on those');
@@ -7832,14 +7968,33 @@ function renderReview(m){
           ${ico('alert')}${probs.length} email${probs.length===1?'':'s'} couldn’t be read</div>
         <button class="linkbtn" aria-label="Dismiss" onclick="dismissEmailTrouble()">${ico('x')}</button>
       </div>
-      <div class="meta" style="font-size:var(--t-cap);margin-top:4px">
-        ${probs.slice(0,6).map(p => `<div style="margin-top:3px">${esc(p.subject || '(no subject)')} — ${esc(p.retriable ? (p.reason || 'could not read it') : 'no dates to import')}</div>`).join('')}
-        ${probs.length>6?`<div style="margin-top:3px">and ${probs.length-6} more</div>`:''}</div>
+      ${(() => {
+        // Distinct emails (one email can log several problems). If Gordon has reviewed
+        // an email, show his brief; otherwise the plain subject + reason.
+        const seen = new Set(); const rows = [];
+        for(const p of probs){
+          const key = p && p.msgId;
+          if(key && seen.has(key)) continue;
+          if(key) seen.add(key);
+          const brief = key ? emailReviews[key] : null;
+          if(brief){
+            rows.push(`<div style="margin-top:3px;font-weight:600;font-size:var(--t-cap)">${esc(p.subject || brief.from || '(no subject)')}</div>${emailBriefHtml(brief)}`);
+          } else {
+            rows.push(`<div style="margin-top:3px">${esc(p.subject || '(no subject)')} — ${esc(p.retriable ? (p.reason || 'could not read it') : 'no dates to import')}</div>`);
+          }
+        }
+        const shown = rows.slice(0, 8).join('');
+        const more = rows.length > 8 ? `<div style="margin-top:3px">and ${rows.length-8} more</div>` : '';
+        return `<div class="meta" style="font-size:var(--t-cap);margin-top:4px">${shown}${more}</div>`;
+      })()}
       <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+        ${(aiEnabled() && probs.some(p => p && p.msgId && !emailReviews[p.msgId]))
+          ? `<button class="btn sm" ${emailReviewBusy?'disabled':''} onclick="reviewEmailTrouble()">${emailReviewBusy ? 'Reviewing…' : (Object.keys(emailReviews).length ? 'Review the rest' : `${ico('sparkles')}Ask ${esc(aiName())} to review`)}</button>`
+          : ''}
         ${nRetry ? `<button class="btn sm" onclick="retryEmailTrouble()">Try ${nRetry===probs.length?'':nRetry+' '}again</button>` : ''}
         <button class="btn alt sm" style="width:auto" onclick="dismissEmailTrouble()">Dismiss</button>
       </div>
-      <div class="help" style="font-size:11px;margin-top:6px">Also saved in your Problem Log (Settings → Diagnostics) with the full detail.</div>
+      <div class="help" style="font-size:11px;margin-top:6px">${Object.keys(emailReviews).length ? `${esc(aiName())} skims each email so you can see what it was — act, keep, or bin it. ` : ''}Also saved in your Problem Log (Settings → Diagnostics).</div>
     </div>`;
   }
   html += `<div class="help">Found ${pendingEvents.length} item${pendingEvents.length===1?'':'s'}. Tap to include or skip.${dups?` ${dups} already tracked (unchecked for you).`:''}</div>`;
