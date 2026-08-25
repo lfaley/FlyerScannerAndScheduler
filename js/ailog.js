@@ -193,6 +193,12 @@ export function summarize(log){
   const rows = Array.isArray(log) ? log : [];
   const ok = rows.filter(r => r.ok);
   const bad = rows.filter(r => !r.ok);
+  // A call that fell back to Anthropic is NOT a user-facing failure -- the user
+  // got an answer. Counting those as "failed" made the Diagnostics line read
+  // "74 failed" when every one of them had actually been answered by the
+  // fallback (and grouped into a single Problem Log entry). "Failed" now means
+  // no answer at all; fell-backs are reported separately as `fellBack`.
+  const trueFail = bad.filter(r => !r.fellBackTo);
   const byType = {};
   bad.forEach(r => { byType[r.errorType || 'unknown'] = (byType[r.errorType || 'unknown'] || 0) + 1; });
   const times = ok.map(r => r.ms).filter(n => typeof n === 'number').sort((a, b) => a - b);
@@ -201,8 +207,8 @@ export function summarize(log){
   return {
     calls: rows.length,
     ok: ok.length,
-    failed: bad.length,
-    failureRate: rows.length ? bad.length / rows.length : 0,
+    failed: trueFail.length,
+    failureRate: rows.length ? trueFail.length / rows.length : 0,
     medianMs: median,
     slowestMs: slowest,
     byErrorType: byType,

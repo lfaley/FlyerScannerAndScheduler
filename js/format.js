@@ -72,3 +72,28 @@ export function formatProblemForCopy(p){
 export function formatAnswerForCopy(turn){
   return String(turn && turn.a != null ? turn.a : '').trim();
 }
+
+// --- problem guidance ------------------------------------------------------
+// Pure: read a logged problem's text (message + detail) and return how urgent
+// it is and one line on what to do about it. A log that only names the symptom
+// leaves the reader stuck; NN/g's error guidance is to offer the next step.
+// `tier`: 'act' = won't fix itself, you must do something (red);
+//         'wait' = transient, retrying may work (amber);
+//         '' = unknown, no specific advice (amber default).
+// Matches on the text so it needs no schema change to the stored entry.
+export function problemGuidance(text){
+  const t = String(text || '').toLowerCase();
+  if(/not signed in|sign in|unauthor|forbidden|\b401\b|\b403\b/.test(t))
+    return { tier:'act', hint:'Sign in to Gordon — Settings → Gordon and AI.' };
+  if(/only reasoning|thinking|produced no answer|never (?:replied|answered)/.test(t))
+    return { tier:'act', hint:'Wrong model tag — it must be the Instruct build, not the Thinking one.' };
+  if(/pdf|unsupported|cannot read|only photos/.test(t))
+    return { tier:'act', hint:'PDFs need Anthropic — photograph the page, or turn on the fallback.' };
+  if(/rate.?limit|too many requests|\b429\b|is busy/.test(t))
+    return { tier:'wait', hint:'Gordon was busy (rate limited) — wait a moment and try again.' };
+  if(/timeout|timed out|took too long|three minutes/.test(t))
+    return { tier:'wait', hint:'It took too long — try one page at a time.' };
+  if(/failed to fetch|network|unreachable|connection|offline|econnrefused|\b502\b|\b503\b/.test(t))
+    return { tier:'wait', hint:'Could not reach the desktop — wake it and check Tailscale, then retry.' };
+  return { tier:'', hint:'' };
+}

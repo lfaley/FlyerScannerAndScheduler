@@ -118,4 +118,24 @@ the Critical finding (PL-1) and the reason "I can't copy them on the phone" happ
   shortly" instead of the generic "did not answer." New migration test + the two `tests-cases`
   schema assertions updated 5→6. Bundled with P0 under **v9.40 / sw v123**. Proxy-side per-user
   rate limit remains Logan's infra call. Deploy: `deploy.ps1`.
-- **P1, P2:** designed, queued.
+- **P1a: SHIPPED to the working tree (2026-08-25), tests green (v9.41 / sw v124).**
+  AG-4 — the Ask error card now offers **Retry** (re-runs the remembered last question) and
+  **Copy**, alongside the plain-language reason it already showed. PL-3/PL-4 — Problem Log
+  rows get a one-line "what to do" hint and a **red (act) / amber (transient)** stripe, from a
+  new pure `problemGuidance(text)` in `js/format.js` (tested, inlined) that reads the entry's
+  own text — no schema change. **Bonus fix (your "74 failed" report):** `summarize()` no longer
+  counts a call that **fell back to Anthropic** as *failed* — "failed" now means no answer at
+  all, fell-backs are reported separately. That's why the Diagnostics line read "74 failed"
+  while the Problem Log showed one grouped entry. Regression-guarded in `tests-modules.js`.
+- **P1b (queued):** the slow-wait UX for Ask — token streaming, or staged progress + elapsed +
+  **Cancel** (AG-2). Held back because it threads an abort signal through the async call path
+  and deserves its own careful pass.
+- **P2 (queued):** bubble alignment, multiline composer, accessible chips, relative timestamps.
+
+## Field confirmation (2026-08-25)
+- The schema-6 migration **worked**: a live error report now shows
+  `model: qwen3-vl:8b-instruct-q4_K_M` on v9.40 (was the bare thinking tag). And an on-device
+  extraction benchmark on q4_K_M scored **F1 0.96** (precision 0.93, recall 1.0; title/kind/
+  endTime 100%) in ~2.2 s/case — the correct model performs well.
+- Remaining Gordon failure is the proxy **429 rate limit** (`server/ollama-proxy.mjs` per-user
+  cap) — infra, Logan's call — now surfaced honestly as "Gordon is busy; try again shortly."

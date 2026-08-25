@@ -17,8 +17,25 @@ module.exports = async function runModuleTests(test){
   const fmt = await import('./js/format.js');
 
   test('format module exports what the app needs', () => {
-    ['todayISO','daysUntil','fmt12','fmtTimeRange','esc','formatProblemForCopy','formatAnswerForCopy']
+    ['todayISO','daysUntil','fmt12','fmtTimeRange','esc','formatProblemForCopy','formatAnswerForCopy','problemGuidance']
       .forEach(k => assert.strictEqual(typeof fmt[k], 'function', 'missing: ' + k));
+  });
+
+  test('problemGuidance reads a problem and offers a next step + urgency tier', () => {
+    // The exact field failure: fell back to Anthropic on a 429 → transient, wait.
+    const busy = fmt.problemGuidance('Fell back to Anthropic: model error 429 rate limited');
+    assert.strictEqual(busy.tier, 'wait');
+    assert.ok(/try again/i.test(busy.hint));
+    // Not signed in → you must act.
+    const auth = fmt.problemGuidance('Fell back to Anthropic: not signed in to Gordon');
+    assert.strictEqual(auth.tier, 'act');
+    assert.ok(/sign in/i.test(auth.hint));
+    // The bare thinking tag → act (wrong model).
+    const think = fmt.problemGuidance('the model produced no answer, only reasoning');
+    assert.strictEqual(think.tier, 'act');
+    // Unknown text → no false advice.
+    assert.deepStrictEqual(fmt.problemGuidance('some unrelated problem'), { tier:'', hint:'' });
+    assert.deepStrictEqual(fmt.problemGuidance(null), { tier:'', hint:'' });
   });
 
   test('formatProblemForCopy turns an entry into plain, pasteable text', () => {
@@ -2466,8 +2483,11 @@ module.exports = async function runModuleTests(test){
     const s = ailog.summarize(log);
     assert.strictEqual(s.calls, 6);
     assert.strictEqual(s.ok, 3);
-    assert.strictEqual(s.failed, 3);
-    assert.strictEqual(s.failureRate, 0.5);
+    // A call that fell back to Anthropic got an answer, so it is NOT counted as
+    // failed -- only the two with no answer are. (This is the "74 failed" fix:
+    // before, a fell-back call inflated the failure count on the menu.)
+    assert.strictEqual(s.failed, 2);
+    assert.strictEqual(s.failureRate, 1 / 3);
     assert.strictEqual(s.medianMs, 200, 'median ignores failed calls, which have no honest duration');
     assert.strictEqual(s.slowestMs, 300);
     assert.deepStrictEqual(s.byErrorType, { network:2, auth:1 });

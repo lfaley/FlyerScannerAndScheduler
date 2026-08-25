@@ -521,6 +521,31 @@ function formatAnswerForCopy(turn){
   return String(turn && turn.a != null ? turn.a : '').trim();
 }
 
+// --- problem guidance ------------------------------------------------------
+// Pure: read a logged problem's text (message + detail) and return how urgent
+// it is and one line on what to do about it. A log that only names the symptom
+// leaves the reader stuck; NN/g's error guidance is to offer the next step.
+// `tier`: 'act' = won't fix itself, you must do something (red);
+//         'wait' = transient, retrying may work (amber);
+//         '' = unknown, no specific advice (amber default).
+// Matches on the text so it needs no schema change to the stored entry.
+function problemGuidance(text){
+  const t = String(text || '').toLowerCase();
+  if(/not signed in|sign in|unauthor|forbidden|\b401\b|\b403\b/.test(t))
+    return { tier:'act', hint:'Sign in to Gordon — Settings → Gordon and AI.' };
+  if(/only reasoning|thinking|produced no answer|never (?:replied|answered)/.test(t))
+    return { tier:'act', hint:'Wrong model tag — it must be the Instruct build, not the Thinking one.' };
+  if(/pdf|unsupported|cannot read|only photos/.test(t))
+    return { tier:'act', hint:'PDFs need Anthropic — photograph the page, or turn on the fallback.' };
+  if(/rate.?limit|too many requests|\b429\b|is busy/.test(t))
+    return { tier:'wait', hint:'Gordon was busy (rate limited) — wait a moment and try again.' };
+  if(/timeout|timed out|took too long|three minutes/.test(t))
+    return { tier:'wait', hint:'It took too long — try one page at a time.' };
+  if(/failed to fetch|network|unreachable|connection|offline|econnrefused|\b502\b|\b503\b/.test(t))
+    return { tier:'wait', hint:'Could not reach the desktop — wake it and check Tailscale, then retry.' };
+  return { tier:'', hint:'' };
+}
+
 // ===== inlined from js/matching.js =====
 /**
  * Event matching and grouping. Pure -- no DOM, no app state.
@@ -3232,6 +3257,12 @@ function summarize(log){
   const rows = Array.isArray(log) ? log : [];
   const ok = rows.filter(r => r.ok);
   const bad = rows.filter(r => !r.ok);
+  // A call that fell back to Anthropic is NOT a user-facing failure -- the user
+  // got an answer. Counting those as "failed" made the Diagnostics line read
+  // "74 failed" when every one of them had actually been answered by the
+  // fallback (and grouped into a single Problem Log entry). "Failed" now means
+  // no answer at all; fell-backs are reported separately as `fellBack`.
+  const trueFail = bad.filter(r => !r.fellBackTo);
   const byType = {};
   bad.forEach(r => { byType[r.errorType || 'unknown'] = (byType[r.errorType || 'unknown'] || 0) + 1; });
   const times = ok.map(r => r.ms).filter(n => typeof n === 'number').sort((a, b) => a - b);
@@ -3240,8 +3271,8 @@ function summarize(log){
   return {
     calls: rows.length,
     ok: ok.length,
-    failed: bad.length,
-    failureRate: rows.length ? bad.length / rows.length : 0,
+    failed: trueFail.length,
+    failureRate: rows.length ? trueFail.length / rows.length : 0,
     medianMs: median,
     slowestMs: slowest,
     byErrorType: byType,
@@ -4256,7 +4287,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.40';
+const APP_VERSION = 'v9.41';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -5543,6 +5574,10 @@ function renderAsk(m){
     ${a.error ? `<div class="card" style="border-left:5px solid var(--red-accent)">
       <div class="title" style="font-size:15px">Could not answer that</div>
       <div class="meta">${esc(a.error)}</div>
+      <div class="row" style="justify-content:flex-end;gap:2px;margin-top:8px">
+        ${a.lastQ?`<button class="linkbtn" onclick="runAsk(askState.lastQ)">Retry</button>`:''}
+        <button class="linkbtn" onclick="copyTextValue(askState.error, 'Copied the error')">${ico('clipboard')}Copy</button>
+      </div>
       <div class="help" style="margin:8px 0 0">Everything still works by hand — the
         Events list, its search, and the person filters are all unaffected.</div>
     </div>` : ''}
@@ -5595,6 +5630,7 @@ async function runAsk(explicit){
   const el = document.getElementById('askQ');
   const q = String(explicit || (el && el.value) || askState.draft || '').trim();
   if(!q || askState.busy) return;
+  askState.lastQ = q;   // remembered so a failed turn can offer Retry
   askState.draft = '';
   askState.busy = true; askState.error = ''; pendingAction = null;
   render();
@@ -6475,7 +6511,12 @@ function renderProblems(m){
   const picking = !!problemSel;
   const nPicked = problemSel ? problemSel.size : 0;
 
-  const row = (p) => `<div class="card" style="border-left:5px solid ${p.done?'var(--line)':'var(--amber)'}">
+  const row = (p) => {
+    // Tier the stripe and offer a next step, read from the entry's own text
+    // (no schema change). Red = you must act; amber = transient/unknown.
+    const g = p.done ? { tier:'', hint:'' } : problemGuidance((p.message || '') + ' ' + (p.detail || ''));
+    const stripe = p.done ? 'var(--line)' : (g.tier === 'act' ? 'var(--red-accent)' : 'var(--amber)');
+    return `<div class="card" style="border-left:5px solid ${stripe}">
     <div class="row">
       ${picking ? `<input type="checkbox" style="margin-right:10px;flex:none"
         aria-label="Select: ${esc(p.message)}"
@@ -6489,6 +6530,7 @@ function renderProblems(m){
           ${esc(p.where)}${p.count>1?' · happened '+p.count+' times':''} · last ${esc(String(p.last).slice(0,10))}
         </div>
         ${p.detail?`<div style="font-size:var(--t-sm);word-break:break-word;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;-webkit-user-select:text;user-select:text;margin-top:6px">${esc(p.detail)}</div>`:''}
+        ${g.hint?`<div class="meta" style="font-size:var(--t-cap);margin-top:6px;font-weight:600;color:var(--${g.tier==='act'?'red-accent':'accent'})">→ ${esc(g.hint)}</div>`:''}
       </div>
       <button class="linkbtn" onclick="${p.done?"reopenProblem('"+p.id+"')":"resolveProblem('"+p.id+"')"}">${p.done?'Reopen':'Done'}</button>
     </div>
@@ -6496,6 +6538,7 @@ function renderProblems(m){
       <button class="linkbtn" onclick="copyProblem('${p.id}')">${ico('clipboard')}Copy</button>
       <button class="linkbtn" onclick="shareProblem('${p.id}')">${ico('share')}Share</button>
     </div>`}</div>`;
+  };
 
   let html = '';
 
