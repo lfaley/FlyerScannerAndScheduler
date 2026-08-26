@@ -2543,3 +2543,138 @@ test('marking a non-existent event does nothing and does not throw', () => {
   markHandled('nope');
   assert.strictEqual(S.events.length, 0);
 });
+
+console.log('\nClash banner — keeping only one (v9.59)');
+
+// Two overlapping events on the same future day, plus the conflict's key.
+function clashPair(){
+  boot(null);
+  const d = dayAhead(3);
+  S.events.push({ id:'x1', title:'Recital', date:d, time:'17:00', endTime:'18:30',
+    kind:'event', deleted:false });
+  S.events.push({ id:'x2', title:'Volleyball', date:d, time:'17:30', endTime:'19:00',
+    kind:'event', deleted:false });
+  const c = findConflicts(S.events, todayISO()).find(x => x.type === 'overlap');
+  assert.ok(c, 'the two events do not register as a clash');
+  return { key: conflictKey(c), d };
+}
+function withConfirm(answer, fn){
+  const real = confirm;
+  confirm = () => answer;
+  try { return fn(); } finally { confirm = real; }
+}
+function captureUndo(fn){
+  const real = toast;
+  let undo = null;
+  toast = (msg, action) => { if(action && action.fn) undo = action.fn; };
+  try { fn(); } finally { toast = real; }
+  return undo;
+}
+
+test('keeping one removes the other, and the clash stops being reported', () => {
+  const { key } = clashPair();
+  withConfirm(true, () => keepOnlyEvent('x1', key));
+  const kept = S.events.find(e => e.id === 'x1');
+  const gone = S.events.find(e => e.id === 'x2');
+  assert.strictEqual(kept.deleted, false, 'the kept event was removed');
+  assert.strictEqual(gone.deleted, true, 'the other event was not removed');
+  assert.strictEqual(findConflicts(S.events, todayISO()).length, 0,
+    'the warning survived its own resolution');
+});
+
+test('the removed event is soft-deleted and marked dirty, like every other bulk delete', () => {
+  const { key } = clashPair();
+  withConfirm(true, () => keepOnlyEvent('x2', key));
+  const gone = S.events.find(e => e.id === 'x1');
+  assert.strictEqual(gone.deleted, true);
+  assert.strictEqual(gone.dirty, 1, 'not marked dirty — applyDedupe and bulkDelete both do');
+  assert.strictEqual(S.events.length, 2, 'the row was destroyed instead of soft-deleted');
+});
+
+test('declining the confirm changes nothing at all', () => {
+  const { key } = clashPair();
+  withConfirm(false, () => keepOnlyEvent('x1', key));
+  assert.strictEqual(S.events.find(e => e.id === 'x2').deleted, false,
+    'it deleted anyway after the user said no');
+  assert.strictEqual(findConflicts(S.events, todayISO()).length, 1, 'the warning vanished');
+});
+
+test('the undo restores the exact flags that were there before', () => {
+  const { key } = clashPair();
+  // x2 already carries a dirty marker from some earlier edit. The undo must
+  // put THAT back, not assume the field was unset.
+  S.events.find(e => e.id === 'x2').dirty = 7;
+  const undo = captureUndo(() => withConfirm(true, () => keepOnlyEvent('x1', key)));
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  const back = S.events.find(e => e.id === 'x2');
+  assert.strictEqual(back.deleted, false, 'undo did not restore the event');
+  assert.strictEqual(back.dirty, 7, 'undo clobbered a flag it did not set');
+  assert.strictEqual(findConflicts(S.events, todayISO()).length, 1,
+    'the clash did not come back with the event');
+});
+
+test('the choice survives a reload — it is saved, not just re-rendered', () => {
+  const { key } = clashPair();
+  withConfirm(true, () => keepOnlyEvent('x1', key));
+  S = load();
+  assert.strictEqual(S.events.find(e => e.id === 'x2').deleted, true,
+    'the removal came back after a reload');
+});
+
+test('a key for a clash that is already resolved does nothing and does not throw', () => {
+  const { key } = clashPair();
+  withConfirm(true, () => keepOnlyEvent('x1', key));
+  // Same key, second tap (a stale banner, a double tap, another tab).
+  let asked = 0;
+  const real = confirm;
+  confirm = () => { asked++; return true; };
+  keepOnlyEvent('x1', key);
+  confirm = real;
+  assert.strictEqual(asked, 0, 'it asked about a clash that no longer exists');
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 1, 'it removed something else');
+});
+
+test('on a crowded day, keeping one removes all the others', () => {
+  boot(null);
+  const d = dayAhead(4);
+  ['a','b','c','d'].forEach((id, i) => S.events.push({
+    id, title:'Thing ' + id, date:d, time:'1' + (i+2) + ':00', kind:'event', deleted:false }));
+  const c = findConflicts(S.events, todayISO()).find(x => x.type === 'busy-day');
+  assert.ok(c, 'four things on one day should read as a busy day');
+  assert.strictEqual(c.events.length, 4);
+  withConfirm(true, () => keepOnlyEvent('b', conflictKey(c)));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 1, 'not everything else went');
+  assert.strictEqual(S.events.find(e => !e.deleted).id, 'b', 'kept the wrong one');
+});
+
+test('the banner offers the new choice WITHOUT losing any of the old ones', () => {
+  // Logan's constraint, as a test: "do not remove any functionality."
+  clashPair();
+  const html = conflictBanner();
+  assert.ok(/dismissConflict\(/.test(html), 'Keep both is gone');
+  assert.ok(/Keep both/.test(html), 'the keep-both wording is gone');
+  assert.ok(/openEventEdit\(/.test(html), 'the reschedule buttons are gone');
+  assert.ok(/Tap to reschedule/.test(html), 'the reschedule hint is gone');
+  assert.ok(/Dismiss this warning/.test(html), 'the dismiss x is gone');
+  assert.ok(/keepOnlyEvent\('x1'/.test(html) && /keepOnlyEvent\('x2'/.test(html),
+    'every clashing event needs its own keep-only choice');
+});
+
+test('each keep-only control names the event it keeps, for a screen reader', () => {
+  clashPair();
+  const html = conflictBanner();
+  assert.ok(/aria-label="Keep only Recital and remove the other event"/.test(html),
+    'the keep-only link has no accessible name naming the event');
+});
+
+test('the pager still works, and keep-only does not silence the pair permanently', () => {
+  const { key } = clashPair();
+  const undo = captureUndo(() => withConfirm(true, () => keepOnlyEvent('x1', key)));
+  undo();
+  // dismissedConflicts must NOT have been written: an undone removal has to
+  // bring the warning back with it.
+  assert.ok(!(S.settings.dismissedConflicts || []).includes(key),
+    'keep-only also dismissed the clash, so the undo left a silenced pair');
+  assert.ok(/Recital/.test(conflictBanner()), 'the banner did not come back');
+});

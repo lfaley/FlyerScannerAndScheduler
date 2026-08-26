@@ -3161,6 +3161,31 @@ module.exports = async function runModuleTests(test){
       'the date test now runs before the reference test -- undated refs get dropped');
   });
 
+  console.log('\nClash banner — keep only one (v9.59)');
+
+  test('keepOnlyEvent is exported to window, or its links do nothing', () => {
+    const win = (html.match(/Object\.assign\(window, \{[\s\S]*?\n\}\);/) || [''])[0];
+    assert.ok(win, 'the window export block is gone');
+    assert.ok(/\n  keepOnlyEvent,/.test(win), 'keepOnlyEvent is not exported to window');
+    assert.ok(html.includes('function keepOnlyEvent('), 'keepOnlyEvent is not defined');
+  });
+
+  test('keep-only confirms AND undoes — it deletes something you did not tap', () => {
+    // The only control in the app where the row you press is not the row that
+    // disappears. Comments and strings are stripped before the checks, so prose
+    // containing the words cannot satisfy them (CLAUDE.md rule 21).
+    const body = html.split('function keepOnlyEvent(')[1].split('\n}\n')[0];
+    const code = body.replace(/\/\/[^\n]*/g, ' ')
+                     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+                     .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    assert.ok(/\bconfirm\(/.test(code), 'keepOnlyEvent does not confirm');
+    assert.ok(/label:'Undo'/.test(body), 'keepOnlyEvent offers no undo');
+    assert.ok(/findConflicts\(/.test(code),
+      'it trusts a captured conflict instead of re-deriving it from the key');
+    assert.ok(!/dismissedConflicts/.test(code),
+      'it also writes a dismissal, which would survive an undo');
+  });
+
   console.log('\nProblem Log — multi-select and clear (v9.39)');
 
   test('every new Problem Log control is reachable from an inline handler', () => {
