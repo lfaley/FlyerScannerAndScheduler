@@ -306,7 +306,7 @@ test('a v1 save migrates without losing anything', () => {
   v1.recipes = [{ id:'old1', title:'Legacy Chili', ingredients:'beef', deleted:false }];
   v1.meals = [{ id:'m1', date:'2026-01-01', slot:'dinner', title:'Legacy Chili', recipeId:'old1' }];
   boot(JSON.stringify(v1));
-  assert.strictEqual(S.schemaVersion, 7, 'stamped with the current version');
+  assert.strictEqual(S.schemaVersion, SCHEMA_VERSION, 'stamped with the current version');
   assert.strictEqual(S.legacyRecipes.length, 1, 'retired recipes preserved, not deleted');
   assert.strictEqual(S.legacyMeals.length, 1, 'retired meals preserved');
   assert.strictEqual(S.events.length, 1, 'real data untouched');
@@ -318,7 +318,7 @@ test('migration is not re-run on an already-current save', () => {
   save();
   const raw = localStorage.getItem('flyersnap');
   S = load();
-  assert.strictEqual(S.schemaVersion, 7);
+  assert.strictEqual(S.schemaVersion, SCHEMA_VERSION);
   assert.strictEqual(S.legacyRecipes.length, 1, 'not clobbered by a second migration');
 });
 
@@ -438,10 +438,28 @@ function fakeField(id, val){
   return store;
 }
 
+// Swap the watcher fields in WITHOUT leaking.
+//
+// These four tests used to assign `document.getElementById` a plain-object
+// factory and never put it back, so every test that ran afterwards -- for the
+// rest of the file -- got elements with no focus(), blur() or
+// setSelectionRange(). Any handler that moves the caret was therefore
+// untestable, and nobody knew until v9.60 tried to test one. A fixture that
+// outlives its test is a fixture that can make unrelated code look broken.
+const realGetById = document.getElementById;
+function stubFields(fields){
+  document.getElementById = (id) => {
+    const node = realGetById.call(document, id);
+    node.value = id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken;
+    return node;
+  };
+}
+function restoreFields(){ document.getElementById = realGetById; }
+
 test('a pasted full URL is split into URL and token', () => {
   boot(GOOD);
   const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/exec?token=snap123', watcherToken:'' };
-  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  stubFields(fields);
   saveWatcher();
   assert.strictEqual(S.settings.watcherUrl, 'https://script.google.com/macros/s/AKfy123/exec');
   assert.strictEqual(S.settings.watcherToken, 'snap123', 'token lifted out of the URL');
@@ -450,7 +468,7 @@ test('a pasted full URL is split into URL and token', () => {
 test('an explicit token field wins over one in the URL', () => {
   boot(GOOD);
   const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/exec?token=stale', watcherToken:'fresh' };
-  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  stubFields(fields);
   saveWatcher();
   assert.strictEqual(S.settings.watcherToken, 'fresh');
 });
@@ -458,7 +476,7 @@ test('an explicit token field wins over one in the URL', () => {
 test('a /dev URL is rejected with an explanation', () => {
   boot(GOOD);
   const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/dev', watcherToken:'x' };
-  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  stubFields(fields);
   globalThis.lastAlert = null;
   saveWatcher();
   assert.ok(/dev URL will not work/.test(globalThis.lastAlert || ''), 'user is told why');
@@ -468,10 +486,12 @@ test('a /dev URL is rejected with an explanation', () => {
 test('trailing slashes are trimmed', () => {
   boot(GOOD);
   const fields = { watcherUrl:'https://script.google.com/macros/s/AKfy123/exec/', watcherToken:'t' };
-  document.getElementById = (id) => ({ value: id === 'watcherUrl' ? fields.watcherUrl : fields.watcherToken });
+  stubFields(fields);
   saveWatcher();
   assert.strictEqual(S.settings.watcherUrl, 'https://script.google.com/macros/s/AKfy123/exec');
 });
+
+restoreFields();
 
 test('the request URL carries exactly one token', () => {
   boot(GOOD);
@@ -2677,4 +2697,319 @@ test('the pager still works, and keep-only does not silence the pair permanently
   assert.ok(!(S.settings.dismissedConflicts || []).includes(key),
     'keep-only also dismissed the clash, so the undo left a silenced pair');
   assert.ok(/Recital/.test(conflictBanner()), 'the banner did not come back');
+});
+
+console.log('\nEditing a list item, and renaming a list (v9.60)');
+
+// Before v9.60 the only way to fix a typo on a list was: check the item, tap
+// "Clear checked items" (which cleared every other checked item too), and type
+// it again. These drive the real handlers, not the markup.
+function oneList(){
+  boot(null);
+  S.lists.push({ id:'l1', name:'Grocerys', deleted:false });
+  S.listItems.push({ id:'i1', listId:'l1', text:'Mlik', checked:false, deleted:false });
+  S.listItems.push({ id:'i2', listId:'l1', text:'Bread', checked:true, deleted:false });
+  listEditId = null; listRenameId = null;
+  view = { tab:'lists', sub:'listDetail', data:{ id:'l1' } };
+}
+function withBox(id, value, fn){
+  const real = document.getElementById;
+  // A real element, with the value swapped in -- so the handler's focus() and
+  // setSelectionRange() calls behave the way they do in a browser.
+  document.getElementById = (want) => {
+    const node = real.call(document, want);
+    if(want === id) node.value = value;
+    return node;
+  };
+  try { return fn(); } finally { document.getElementById = real; }
+}
+
+test('an item can be renamed, and the rename survives a reload', () => {
+  oneList();
+  editItem('i1');
+  assert.strictEqual(listEditId, 'i1', 'edit mode did not open on that item');
+  withBox('editItem', 'Milk', () => saveItemEdit('i1'));
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').text, 'Milk');
+  assert.strictEqual(listEditId, null, 'the editor stayed open after saving');
+  S = load();
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').text, 'Milk',
+    'the rename came back as the old text after a reload');
+});
+
+test('saving an EMPTY edit cancels — it never destroys the text', () => {
+  // Clearing the box and tapping Save would otherwise wipe the item with no
+  // undo, and delete already has its own labelled control beside it.
+  oneList();
+  editItem('i1');
+  withBox('editItem', '   ', () => saveItemEdit('i1'));
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').text, 'Mlik',
+    'an empty save destroyed the item text');
+  assert.strictEqual(listEditId, null, 'the editor did not close');
+});
+
+test('cancelling an edit changes nothing', () => {
+  oneList();
+  editItem('i1');
+  cancelItemEdit();
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').text, 'Mlik');
+  assert.strictEqual(listEditId, null);
+});
+
+test('an item can be deleted from the editor, undoably', () => {
+  oneList();
+  let undo = null;
+  const realToast = toast;
+  toast = (msg, action) => { if(action && action.fn) undo = action.fn; };
+  editItem('i1');
+  delItem('i1');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').deleted, true, 'not deleted');
+  assert.strictEqual(listEditId, null, 'the editor stayed open over a deleted item');
+  assert.ok(undo, 'no undo was offered — softDelete was bypassed');
+  undo();
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').deleted, false, 'undo did not restore');
+  toast = realToast;
+});
+
+test('editing one item leaves the others, and the checked ones, alone', () => {
+  oneList();
+  editItem('i1');
+  withBox('editItem', 'Milk', () => saveItemEdit('i1'));
+  const other = S.listItems.find(i => i.id === 'i2');
+  assert.strictEqual(other.text, 'Bread');
+  assert.strictEqual(other.checked, true, 'the checked state of another item moved');
+});
+
+test('a list can be renamed without touching its items', () => {
+  oneList();
+  renameList('l1');
+  assert.strictEqual(listRenameId, 'l1');
+  assert.strictEqual(listEditId, null, 'both editors were open at once');
+  withBox('renameList', 'Groceries', () => saveListRename('l1'));
+  assert.strictEqual(S.lists.find(l => l.id === 'l1').name, 'Groceries');
+  assert.strictEqual(S.listItems.filter(i => i.listId === 'l1' && !i.deleted).length, 2,
+    'renaming the list disturbed its items');
+});
+
+test('an empty list rename cancels too', () => {
+  oneList();
+  renameList('l1');
+  withBox('renameList', '', () => saveListRename('l1'));
+  assert.strictEqual(S.lists.find(l => l.id === 'l1').name, 'Grocerys');
+});
+
+test('the row still toggles, and the edit control is a visible word', () => {
+  // Rule 1: adding an edit path must not take the primary action away.
+  oneList();
+  toggleItem('i1');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').checked, true,
+    'tapping the row no longer toggles');
+  const m = { innerHTML:'' };
+  renderListDetail(m);
+  assert.ok(/>Edit</.test(m.innerHTML), 'the edit control has no visible label');
+  assert.ok(/toggleItem\('i1'\)/.test(m.innerHTML), 'the row lost its toggle');
+});
+
+console.log('\nNotes (v9.60)');
+
+function someNotes(){
+  boot(null);
+  S.notes = [
+    { id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:false, personIds:[],
+      created:'2026-08-20T10:00:00.000Z', updated:'2026-08-20T10:00:00.000Z', deleted:false },
+    { id:'n2', title:'', body:'Office number 555-0100\nAsk for Karen', pinned:false, personIds:[],
+      created:'2026-08-25T10:00:00.000Z', updated:'2026-08-25T10:00:00.000Z', deleted:false },
+  ];
+  noteSearch = '';
+  view = { tab:'notes', sub:null, data:null };
+}
+
+test('a note with no title borrows the first non-empty line of the body', () => {
+  // Apple Notes' convention; Keep gives a dedicated title line. Doing both means
+  // quick capture needs no title and the board still reads properly.
+  someNotes();
+  assert.strictEqual(noteTitleOf(S.notes[1]), 'Office number 555-0100');
+  assert.strictEqual(noteTitleOf(S.notes[0]), 'Uniform sizes', 'an explicit title must win');
+  assert.strictEqual(noteTitleOf({ title:'', body:'\n\n  \n' }), 'Untitled note',
+    'an empty note must still have a name');
+  assert.strictEqual(noteTitleOf({ title:'  Padded  ', body:'x' }), 'Padded');
+});
+
+test('the preview never repeats the line the title was borrowed from', () => {
+  someNotes();
+  assert.strictEqual(notePreviewOf(S.notes[1]), 'Ask for Karen');
+  assert.strictEqual(notePreviewOf(S.notes[0]), 'Braelyn medium',
+    'a note with its own title should preview from line one');
+});
+
+test('quick capture creates a note, seeds it, and opens it', () => {
+  someNotes();
+  let opened = null;
+  const realSub = sub;
+  sub = (name, data) => { opened = { name, data }; };
+  withBox('newNote', 'Coach said cleats by Friday', () => newNote());
+  sub = realSub;
+  assert.strictEqual(S.notes.length, 3);
+  assert.strictEqual(S.notes[0].body, 'Coach said cleats by Friday', 'not newest-first, or not seeded');
+  assert.ok(opened && opened.name === 'noteDetail', 'it did not open the new note');
+  assert.strictEqual(opened.data.id, S.notes[0].id);
+  S = load();
+  assert.strictEqual(S.notes.length, 3, 'the new note did not survive a reload');
+});
+
+test('typing autosaves, without re-rendering the screen out from under the caret', () => {
+  someNotes();
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  let rendered = 0;
+  const realRender = render;
+  render = () => { rendered++; };
+  const real = document.getElementById;
+  document.getElementById = (want) => {
+    const node = real.call(document, want);
+    if(want === 'noteTitle') node.value = 'Uniform sizes';
+    if(want === 'noteBody')  node.value = 'Braelyn medium — 10.5 shoe';
+    return node;
+  };
+  writeNote('n1');
+  document.getElementById = real;
+  render = realRender;
+  assert.strictEqual(S.notes[0].body, 'Braelyn medium — 10.5 shoe', 'the edit was not written');
+  assert.strictEqual(rendered, 0, 'writing re-rendered — that destroys focus mid-word');
+  assert.notStrictEqual(S.notes[0].updated, '2026-08-20T10:00:00.000Z', 'updated did not move');
+});
+
+test('a pending autosave is flushed rather than lost when the note is left', () => {
+  someNotes();
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  const real = document.getElementById;
+  document.getElementById = (want) => {
+    const node = real.call(document, want);
+    if(want === 'noteTitle') node.value = 'Uniform sizes';
+    if(want === 'noteBody')  node.value = 'typed but not yet debounced';
+    return node;
+  };
+  noteEdited('n1');                       // schedules, does not write
+  assert.strictEqual(S.notes[0].body, 'Braelyn medium', 'the debounce wrote immediately');
+  flushNote();                            // what blur and Done call
+  document.getElementById = real;
+  assert.strictEqual(S.notes[0].body, 'typed but not yet debounced',
+    'tapping away lost what was typed');
+});
+
+test('pinning splits the board into two groups, pinned first', () => {
+  someNotes();
+  togglePinNote('n1');
+  assert.strictEqual(S.notes.find(n => n.id === 'n1').pinned, true);
+  const m = { innerHTML:'' };
+  renderNotes(m);
+  assert.ok(/Pinned/.test(m.innerHTML) && /Others/.test(m.innerHTML),
+    'pinned and unpinned are not shown as separate groups');
+  assert.ok(m.innerHTML.indexOf('Uniform sizes') < m.innerHTML.indexOf('Office number'),
+    'the pinned note is not at the top');
+  togglePinNote('n1');
+  assert.strictEqual(S.notes.find(n => n.id === 'n1').pinned, false, 'unpin does not work');
+});
+
+test('search covers title and body, and can be cleared', () => {
+  someNotes();
+  noteSearch = 'karen';
+  assert.strictEqual(S.notes.filter(noteMatches).length, 1, 'body text is not searched');
+  noteSearch = 'uniform';
+  assert.strictEqual(S.notes.filter(noteMatches).length, 1, 'titles are not searched');
+  noteSearch = 'zzz';
+  assert.strictEqual(S.notes.filter(noteMatches).length, 0);
+  noteSearch = '';
+  assert.strictEqual(S.notes.filter(noteMatches).length, 2, 'an empty query must match everything');
+});
+
+test('search finds a note by the person it is tagged to', () => {
+  someNotes();
+  S.kids.push({ id:'k9', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false });
+  S.notes[0].personIds = ['k9'];
+  noteSearch = 'olivia';
+  assert.strictEqual(S.notes.filter(noteMatches).length, 1,
+    'people are this app\'s labels — searching one should find the note');
+  noteSearch = '';
+});
+
+test('deleting a note is soft and undoable, and does not strand the screen', () => {
+  someNotes();
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  let undo = null;
+  const realToast = toast;
+  toast = (msg, action) => { if(action && action.fn) undo = action.fn; };
+  delNote('n1');
+  toast = realToast;
+  assert.strictEqual(S.notes.find(n => n.id === 'n1').deleted, true);
+  assert.strictEqual(S.notes.length, 2, 'the row was destroyed instead of soft-deleted');
+  assert.strictEqual(view.sub, null, 'it left you sitting on a deleted note');
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  assert.strictEqual(S.notes.find(n => n.id === 'n1').deleted, false);
+});
+
+test('a deleted note renders a real state, not a crash', () => {
+  someNotes();
+  S.notes[0].deleted = true;
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  const m = { innerHTML:'' };
+  renderNoteDetail(m);
+  assert.ok(/That note is gone/.test(m.innerHTML), 'a missing note is not handled');
+});
+
+test('tagging a person marks the note edited without losing the body', () => {
+  someNotes();
+  S.kids.push({ id:'k9', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false });
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  toggleNotePerson('n1', 'k9');
+  assert.deepStrictEqual(S.notes[0].personIds, ['k9']);
+  assert.strictEqual(S.notes[0].body, 'Braelyn medium', 'tagging clobbered the body');
+  toggleNotePerson('n1', 'k9');
+  assert.deepStrictEqual(S.notes[0].personIds, [], 'a second tap should untag');
+});
+
+test('the empty board explains itself instead of showing a bare screen', () => {
+  boot(null); S.notes = []; noteSearch = '';
+  const m = { innerHTML:'' };
+  renderNotes(m);
+  assert.ok(/No notes yet/.test(m.innerHTML));
+  assert.ok(/Take a note/.test(m.innerHTML), 'no way to add the first note');
+});
+
+test('notes ride along in a backup and come back from one', () => {
+  someNotes();
+  save();
+  const backup = JSON.parse(localStorage.getItem('flyersnap'));
+  assert.strictEqual(backup.notes.length, 2, 'notes are not in the saved blob');
+  boot(JSON.stringify(backup));
+  assert.strictEqual(S.notes.length, 2, 'notes did not come back');
+  assert.strictEqual(S.notes[0].title, 'Uniform sizes');
+});
+
+test('an old save with no notes key loads with an empty one, not undefined', () => {
+  const old = JSON.parse(GOOD);
+  delete old.notes;
+  old.schemaVersion = 1;
+  boot(JSON.stringify(old));
+  assert.ok(Array.isArray(S.notes), 'notes is not an array on an upgraded save');
+  assert.strictEqual(S.notes.length, 0);
+  const m = { innerHTML:'' };
+  renderNotes(m);                        // must not throw
+  assert.ok(/No notes yet/.test(m.innerHTML));
+});
+
+test('a save whose notes key is junk is coerced, not trusted', () => {
+  const bad = JSON.parse(GOOD);
+  bad.notes = 'not an array';
+  bad.schemaVersion = 7;
+  boot(JSON.stringify(bad));
+  assert.ok(Array.isArray(S.notes), 'a junk notes value reached the app');
+});
+
+test('pruning drops deleted notes and counts them', () => {
+  someNotes();
+  S.notes[0].deleted = true;
+  const before = S.notes.length;
+  manualPrune();
+  assert.strictEqual(S.notes.length, before - 1, 'a deleted note survived the prune');
+  assert.strictEqual(S.notes[0].id, 'n2', 'the wrong note was pruned');
 });

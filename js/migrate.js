@@ -18,7 +18,7 @@
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -106,6 +106,16 @@ export function migrate(s, fromVersion){
     if(Array.isArray(s.problems)){
       s.problems = s.problems.filter(p => !/^Fell back to Anthropic/.test(String(p && p.message || '')));
     }
+  }
+
+  if(from < 8){
+    // Notes arrived in v9.60. blank() already provides `notes: []` and load()
+    // merges onto blank(), so an old save gets the empty array for free -- this
+    // block exists for the case blank() cannot cover: a save whose `notes` key
+    // exists but is not an array (hand-edited file, a truncated import, a
+    // restore from a future version). Coercing here is cheaper than making
+    // every reader defensive, and it destroys nothing that was ever usable.
+    if(!Array.isArray(s.notes)) s.notes = [];
   }
 
   s.schemaVersion = SCHEMA_VERSION;

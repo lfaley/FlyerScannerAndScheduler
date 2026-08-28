@@ -23,8 +23,16 @@ const store = {
   key(i){ return Object.keys(this._d)[i]; },
   get length(){ return Object.keys(this._d).length; }
 };
+// A stand-in element. It must carry everything a REAL element carries that the
+// app actually calls, or a code path is untestable for a reason that has
+// nothing to do with the code: focus/blur/setSelectionRange were missing until
+// v9.60, so every caret-preserving handler in the app (onEventSearch, addItem,
+// the list-item editor, the notes search) threw "focus is not a function" the
+// moment a test touched it, and so none of them had ever been tested.
 const el = () => ({ innerHTML:'', className:'', value:'', textContent:'',
   classList:{ add(){}, remove(){}, toggle(){} },
+  selectionStart:0, selectionEnd:0,
+  focus(){}, blur(){}, select(){}, setSelectionRange(){},
   appendChild(){}, append(){}, remove(){}, click(){}, set href(v){} });
 
 const box = {

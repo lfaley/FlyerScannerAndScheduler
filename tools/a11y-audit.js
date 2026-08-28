@@ -106,6 +106,13 @@ const SCREENS = [
   { key:'events',   setup:`nav('events')` },
   { key:'chores',   setup:`nav('chores')` },
   { key:'lists',    setup:`nav('lists')` },
+  { key:'notes',    setup:`nav('notes')` },
+  // The board with content is a different DOM from the empty state: search box,
+  // a pinned group, and a Pin/Unpin control on every card.
+  { key:'notes-filled', setup:`S.notes = [
+      { id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:true, personIds:[], created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false },
+      { id:'n2', title:'', body:'Office number 555-0100\\nAsk for Karen', pinned:false, personIds:[], created:'2026-08-26T10:00:00.000Z', updated:'2026-08-26T10:00:00.000Z', deleted:false }
+    ]; nav('notes')` },
   { key:'meals',    setup:`nav('meals')` },
   { key:'settings', setup:`nav('settings')` },
 
@@ -154,6 +161,7 @@ const SCREENS = [
   // Back behaviour, so it is a different DOM and gets its own audit row.
   { key:'eventEdit-new', setup:`openNewEvent()` },
   { key:'listDetail', setup:`view = { tab:'lists', sub:'listDetail', data:{ id:'l1' } }` },
+  { key:'noteDetail', setup:`S.notes = [{ id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:false, personIds:[], created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } }` },
   { key:'rewards',    setup:`sub('rewards')` },
   { key:'ledger',     setup:`sub('ledger')` },
   { key:'problems',   setup:`sub('problems')` },
