@@ -3258,42 +3258,63 @@ module.exports = async function runModuleTests(test){
     assert.ok(html.includes('function keepOnlyEvent('), 'keepOnlyEvent is not defined');
   });
 
-  test('keep-only confirms AND undoes — it deletes something you did not tap', () => {
-    // The only control in the app where the row you press is not the row that
-    // disappears. Comments and strings are stripped before the checks, so prose
-    // containing the words cannot satisfy them (CLAUDE.md rule 21).
-    const body = html.split('function keepOnlyEvent(')[1].split('\n}\n')[0];
+  test('the one removal path confirms, marks dirty, undoes, and never dismisses', () => {
+    // v9.70: keepOnlyEvent, removeOneEvent, removeSelectedClash and
+    // keepOnlySelectedClash are all one-liners over removeFromClash, so these
+    // properties are asserted once, where they now live. Comments and strings
+    // are stripped before the checks, so prose containing the words cannot
+    // satisfy them (CLAUDE.md rule 21).
+    const body = html.split('function removeFromClash(')[1].split('\n}\n')[0];
     const code = body.replace(/\/\/[^\n]*/g, ' ')
                      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
                      .replace(/"(?:[^"\\]|\\.)*"/g, '""');
-    assert.ok(/\bconfirm\(/.test(code), 'keepOnlyEvent does not confirm');
-    assert.ok(/label:'Undo'/.test(body), 'keepOnlyEvent offers no undo');
+    assert.ok(/\bconfirm\(/.test(code), 'removeFromClash does not confirm');
+    assert.ok(/label:'Undo'/.test(body), 'removeFromClash offers no undo');
+    assert.ok(/dirty = 1/.test(code), 'the removed events are not marked dirty');
     assert.ok(/findConflicts\(/.test(code),
       'it trusts a captured conflict instead of re-deriving it from the key');
     assert.ok(!/dismissedConflicts/.test(code),
-      'it also writes a dismissal, which would survive an undo');
+      'it also writes a dismissal, which would outlive the events and survive an undo');
   });
 
-  test('removeOneEvent is the inverse of keepOnlyEvent, and is exported to window (v9.69)', () => {
-    // The banner's controls all acted on the WHOLE conflict until v9.69, so a
-    // four-event busy day had no way to drop one event -- "keep only this"
-    // would have deleted the other three. This is the inverse, and it must
-    // share the safety properties of the control it sits beside.
-    const code = (html.match(/function removeOneEvent\([\s\S]*?\n\}/) || [''])[0];
-    assert.ok(code, 'removeOneEvent is not defined');
-    assert.ok(/findConflicts\(/.test(code),
-      'it trusts a rendered id instead of re-deriving the conflict from the key');
-    assert.ok(/confirm\(/.test(code), 'it removes an event without confirming');
-    assert.ok(/dirty = 1/.test(code), 'the removed event is not marked dirty');
-    assert.ok(/label:'Undo'/.test(code), 'removeOneEvent offers no undo');
-    assert.ok(!/dismissedConflicts/.test(code),
-      'it also writes a dismissal, which would outlive the event and survive an undo');
+  test('every clash action routes through removeFromClash — no second copy of the loop', () => {
+    // Before v9.70 there were three near-copies of "soft-delete these, remember
+    // the flags, offer an undo", and they had already drifted in what they
+    // confirmed. One implementation, four entry points.
+    ['keepOnlyEvent', 'removeOneEvent', 'removeSelectedClash', 'keepOnlySelectedClash']
+      .forEach(fn => {
+        const body = (html.match(new RegExp('function ' + fn + '\\([\\s\\S]*?\\n\\}')) || [''])[0];
+        assert.ok(body, fn + ' is not defined');
+        assert.ok(/(removeFromClash|keepOnlyInClash)\(/.test(body),
+          fn + ' has its own removal loop again instead of routing through removeFromClash');
+        assert.ok(!/dirty = 1/.test(body), fn + ' soft-deletes on its own');
+      });
+  });
 
-    // Inline onclick handlers resolve against global scope: a handler missing
-    // from this block is a button that throws on tap and reads as dead.
+  test('every clash select-mode control is reachable from an inline handler (v9.70)', () => {
+    // index.html handlers resolve against the GLOBAL scope. A function that is
+    // defined but never added to the Object.assign(window, {...}) block is a
+    // button that silently does nothing.
     const win = (html.match(/Object\.assign\(window, \{[\s\S]*?\n\}\);/) || [''])[0];
     assert.ok(win, 'the window export block is gone');
-    assert.ok(/\n  removeOneEvent,/.test(win), 'removeOneEvent is not exported to window');
+    ['toggleClashSelect', 'toggleClashPick', 'selectAllClash',
+     'removeSelectedClash', 'keepOnlySelectedClash', 'keepOnlyEvent', 'removeOneEvent']
+      .forEach(fn => {
+        assert.ok(new RegExp('\\n  ' + fn + ',').test(win), fn + ' is not exported to window');
+        assert.ok(html.includes('function ' + fn + '('), fn + ' is not defined');
+      });
+  });
+
+  test('clash selection is view state — it never reaches saved data or a backup', () => {
+    // A Set is not JSON-serialisable and a selection is not the user's data.
+    // Parked on S it would be written by save(), shipped in an export, and come
+    // back as {} -- the same reasoning as problemSel (v9.39).
+    assert.ok(/\nlet clashSel = null;/.test(html),
+      'clashSel is not a module-level let — check it has not moved onto S');
+    assert.ok(/\nlet clashSelKey = null;/.test(html), 'clashSelKey is missing');
+    assert.ok(!/S\.clashSel/.test(html), 'select state was parked on S');
+    const blank = html.split('function blank(){')[1].split('\n}')[0];
+    assert.ok(!/clashSel/.test(blank), 'select state leaked into the saved shape');
   });
 
   console.log('\nProblem Log — multi-select and clear (v9.39)');

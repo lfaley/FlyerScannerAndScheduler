@@ -2640,6 +2640,7 @@ function clashPair(){
     kind:'event', deleted:false });
   S.events.push({ id:'x2', title:'Volleyball', date:d, time:'17:30', endTime:'19:00',
     kind:'event', deleted:false });
+  clearClashSel();   // module-level view state outlives boot(); each fixture starts clean
   const c = findConflicts(S.events, todayISO()).find(x => x.type === 'overlap');
   assert.ok(c, 'the two events do not register as a clash');
   return { key: conflictKey(c), d };
@@ -2747,15 +2748,52 @@ test('the banner offers the new choice WITHOUT losing any of the old ones', () =
   // the whole code review (P7-01). Assert the WORD, not the aria-label.
   assert.ok(/>Dismiss</.test(html), 'the dismiss control lost its visible label');
   assert.ok(/dismissConflict\(/.test(html), 'the dismiss control is gone');
-  assert.ok(/keepOnlyEvent\('x1'/.test(html) && /keepOnlyEvent\('x2'/.test(html),
-    'every clashing event needs its own keep-only choice');
+  // v9.70: the per-event choices moved INTO select mode rather than sitting as
+  // two red links under every row. The default view must therefore carry the
+  // one link that reaches them -- and nothing destructive per event.
+  assert.ok(/toggleClashSelect\(/.test(html), 'there is no way into select mode');
+  assert.ok(/Select…/.test(html), 'the select control has no visible text');
+  assert.ok(!/keepOnlyEvent\(/.test(html) && !/removeOneEvent\(/.test(html),
+    'the default view is carrying per-event destructive links again');
 });
 
-test('each keep-only control names the event it keeps, for a screen reader', () => {
-  clashPair();
+test('select mode offers both directions, on any number of events', () => {
+  // Logan, 28 Aug: "I should be able to choose one or multiple." v9.69 gave him
+  // two per-event links and no way to say "these two".
+  const { key } = clashPair();
+  toggleClashSelect(key);
+  let html = conflictBanner();
+  assert.ok(/0 selected/.test(html), 'the count bar is missing');
+  assert.ok(/Select all/.test(html) && /Cancel/.test(html), 'no select-all or escape hatch');
+  assert.ok(/toggleClashPick\('x1'/.test(html) && /toggleClashPick\('x2'/.test(html),
+    'not every event is tickable');
+  // Both actions are present but refuse an empty selection.
+  assert.ok(/removeSelectedClash\(/.test(html) && /keepOnlySelectedClash\(/.test(html),
+    'select mode is missing one of its two directions');
+  assert.strictEqual((html.match(/disabled/g) || []).length, 2,
+    'the actions are tappable with nothing selected');
+
+  toggleClashPick('x1', key);
+  html = conflictBanner();
+  assert.ok(/1 selected/.test(html), 'the count did not follow the tick');
+  assert.ok(/Remove selected \(1\)/.test(html), 'the remove button does not carry its count');
+  // Rule 26: a destructive control wears its consequence.
+  assert.ok(/Keep only this — remove 1/.test(html),
+    'the keep-only button does not say how many it removes');
+});
+
+test('each row in select mode names its event and reports its ticked state', () => {
+  const { key } = clashPair();
+  toggleClashSelect(key);
+  toggleClashPick('x1', key);
   const html = conflictBanner();
-  assert.ok(/aria-label="Keep only Recital and remove the other event"/.test(html),
-    'the keep-only link has no accessible name naming the event');
+  // The row IS the control, so its own text is its accessible name; the state
+  // has to be announced separately or a screen reader cannot tell them apart.
+  console.log('PROBE2:' + JSON.stringify(html.slice(0, 400)));
+  assert.ok(/role="checkbox" aria-checked="true"[\s\S]{0,600}Recital/.test(html),
+    'the ticked row does not announce itself as checked');
+  assert.ok(/role="checkbox" aria-checked="false"[\s\S]{0,600}Volleyball/.test(html),
+    'the unticked row does not announce itself as unchecked');
 });
 
 test('the pager still works, and keep-only does not silence the pair permanently', () => {
@@ -3571,6 +3609,7 @@ function busyDay(){
   S.events.push({ id:'b2', title:'Volleyball Practices Begin', date:d, time:'15:15', kind:'event', deleted:false });
   S.events.push({ id:'b3', title:'Costume Deposits Due', date:d, kind:'deadline', deleted:false });
   S.events.push({ id:'b4', title:'ELA Notebook Bring', date:d, kind:'deadline', deleted:false });
+  clearClashSel();   // module-level view state outlives boot(); each fixture starts clean
   const c = findConflicts(S.events, todayISO()).find(x => x.type === 'busy-day');
   assert.ok(c, 'four events on one day do not register as a busy day');
   assert.strictEqual(c.events.length, 4, 'the busy-day conflict is not holding all four');
@@ -3650,19 +3689,93 @@ test('a stale key, a deleted event, or an unknown id is refused rather than acte
   assert.strictEqual(S.events.filter(e => !e.deleted).length, 3, 'an already-deleted event was re-removed');
 });
 
-test('every row on the banner offers BOTH directions, and both handlers are on window', () => {
-  // The control is an inline onclick, so a handler missing from the window
-  // bridge is a button that throws on tap and reads as simply dead.
+test('acting on a selection of several removes exactly those, and keeps the rest', () => {
+  // The case v9.69 could not express at all: four events, drop two, keep two.
   const { key } = busyDay();
-  const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
-  const html = conflictActions(c);
-  ['b1', 'b2', 'b3', 'b4'].forEach(id => {
-    assert.ok(html.includes("removeOneEvent('" + id + "'"), 'no "remove just this one" for ' + id);
-    assert.ok(html.includes("keepOnlyEvent('" + id + "'"), '"keep only this" was removed for ' + id);
-  });
-  assert.ok(/Remove just this one/.test(html), 'the new control has no visible text');
-  // Rule 26: a destructive control wears its consequence. "the others" hides
-  // that three events are going.
-  assert.ok(/remove the other 3/.test(html),
-    'the keep-only label still says "the others" on a four-event busy day');
+  toggleClashSelect(key);
+  toggleClashPick('b2', key);
+  toggleClashPick('b3', key);
+  withConfirm(true, () => removeSelectedClash(key));
+  const live = S.events.filter(e => !e.deleted).map(e => e.id).sort();
+  assert.deepStrictEqual(live, ['b1', 'b4'],
+    'removing a selection of two did not leave exactly the other two: ' + live.join(','));
+});
+
+test('keep-only on a selection removes everything that was not ticked', () => {
+  const { key } = busyDay();
+  toggleClashSelect(key);
+  toggleClashPick('b1', key);
+  toggleClashPick('b4', key);
+  withConfirm(true, () => keepOnlySelectedClash(key));
+  const live = S.events.filter(e => !e.deleted).map(e => e.id).sort();
+  assert.deepStrictEqual(live, ['b1', 'b4'], 'the wrong events survived: ' + live.join(','));
+});
+
+test('Select all ticks everything, and a second tap clears it', () => {
+  const { key } = busyDay();
+  toggleClashSelect(key);
+  selectAllClash(key);
+  assert.strictEqual(clashSel.size, 4, 'select all did not tick every event');
+  selectAllClash(key);
+  assert.strictEqual(clashSel.size, 0, 'a second tap should clear the selection');
+});
+
+test('a selection cannot act on a different clash than the one it was made in', () => {
+  // dedupeKeep was keyed by list POSITION and deleted both members of a group
+  // when the list shifted (P5-07). findConflicts() re-derives on every render,
+  // so a clash selection is pinned to its own key for the same reason.
+  const { key } = busyDay();
+  toggleClashSelect(key);
+  toggleClashPick('b2', key);
+  const otherKey = 'busy-day|1999-01-01|nope';
+  withConfirm(true, () => removeSelectedClash(otherKey));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 4,
+    'a selection made on one clash acted on another');
+  // Paging away drops it, rather than leaving it armed against whatever loads.
+  stepConflict();
+  assert.strictEqual(clashSel, null, 'the selection survived paging to another clash');
+});
+
+test('a selection made on one clash does not put a DIFFERENT clash into select mode', () => {
+  // The observable job of clashSelKey. removeFromClash re-derives and filters by
+  // membership, so a stale selection could never delete the wrong event -- but
+  // without the key pin the banner renders whatever clash it is showing as
+  // "0 selected", with tick boxes and armed buttons, for a selection made
+  // somewhere else. (Found by mutation: dropping the pin killed no test.)
+  boot(null);
+  clearClashSel();
+  const d1 = dayAhead(3), d2 = dayAhead(5);
+  S.events.push({ id:'p1', title:'Recital', date:d1, time:'17:00', endTime:'18:30', kind:'event', deleted:false });
+  S.events.push({ id:'p2', title:'Volleyball', date:d1, time:'17:30', endTime:'19:00', kind:'event', deleted:false });
+  S.events.push({ id:'q1', title:'Dentist', date:d2, time:'09:00', endTime:'10:00', kind:'event', deleted:false });
+  S.events.push({ id:'q2', title:'Assembly', date:d2, time:'09:30', endTime:'10:30', kind:'event', deleted:false });
+  const live = findConflicts(S.events, todayISO()).filter(c => c.type === 'overlap');
+  assert.strictEqual(live.length, 2, 'expected two separate overlaps');
+
+  conflictViewIndex = 0;
+  const keyA = conflictKey(live[0]);
+  toggleClashSelect(keyA);
+  assert.ok(/selected/.test(conflictBanner()), 'the clash it was made on is not in select mode');
+
+  // Page to the other clash WITHOUT clearing -- the state stepConflict() would
+  // normally tidy up, reached here by a re-render after an undo or a dismiss.
+  conflictViewIndex = 1;
+  const other = conflictBanner();
+  assert.ok(!/selected/.test(other),
+    'the other clash rendered its select bar for a selection made elsewhere');
+  assert.ok(!/toggleClashPick\('q1'/.test(other),
+    'the other clash rendered tick boxes for a selection made elsewhere');
+  assert.ok(/Select…/.test(other), 'the other clash lost its normal view');
+  clearClashSel();
+});
+
+test('select mode ends when the removal happens, and the empty selection is refused', () => {
+  const { key } = busyDay();
+  toggleClashSelect(key);
+  withConfirm(true, () => removeSelectedClash(key));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 4,
+    'it removed something with nothing ticked');
+  toggleClashPick('b1', key);
+  withConfirm(true, () => removeSelectedClash(key));
+  assert.strictEqual(clashSel, null, 'select mode stayed on after the removal');
 });

@@ -4377,7 +4377,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.69';
+const APP_VERSION = 'v9.70';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -5626,6 +5626,46 @@ function conflictKey(c){ return c.type + '|' + c.date + '|' + c.events.map(e=>e.
 // see the next. Reset/clamped whenever the live list shrinks.
 let conflictViewIndex = 0;
 
+/**
+ * Select mode on the clash banner (v9.70). `null` = not selecting (the normal
+ * state); a Set of event ids = selecting. Same shape as problemSel, and held
+ * outside S for the same reason: it is view state, so it must never be saved
+ * or reach a backup, and a Set would serialise to {} if it were.
+ *
+ * clashSelKey pins the selection to the conflict it was made in. findConflicts()
+ * re-derives on every render, so without it a selection made on one clash could
+ * act on whatever the banner happens to be showing after a dismiss, a page, or
+ * an undo -- which is exactly the failure P5-07 found in dedupeKeep, where the
+ * key was the group's position in a list that changes shape.
+ */
+let clashSel = null;
+let clashSelKey = null;
+
+function clashSelecting(key){ return !!clashSel && clashSelKey === key; }
+
+function toggleClashSelect(key){
+  if(clashSelecting(key)){ clashSel = null; clashSelKey = null; }
+  else { clashSel = new Set(); clashSelKey = key; }
+  render();
+}
+function toggleClashPick(id, key){
+  if(!clashSelecting(key)) return;
+  if(clashSel.has(id)) clashSel.delete(id); else clashSel.add(id);
+  render();
+}
+function selectAllClash(key){
+  const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
+  if(!c) return;
+  const ids = c.events.map(e => e.id);
+  // One control, both directions: tapping it again when everything is picked
+  // clears, which is the only sane second meaning of "Select all".
+  const all = clashSel && ids.every(id => clashSel.has(id)) && clashSel.size === ids.length;
+  clashSel = all ? new Set() : new Set(ids);
+  clashSelKey = key;
+  render();
+}
+function clearClashSel(){ clashSel = null; clashSelKey = null; }
+
 function conflictBanner(){
   const dismissed = new Set(S.settings.dismissedConflicts || []);
   const all = findConflicts(S.events, todayISO());
@@ -5654,6 +5694,7 @@ function conflictBanner(){
 
 // Page to the next live conflict without dismissing the current one.
 function stepConflict(){
+  clearClashSel();          // a selection belongs to the clash it was made in
   const dismissed = new Set(S.settings.dismissedConflicts || []);
   const live = findConflicts(S.events, todayISO()).filter(c => !dismissed.has(conflictKey(c)));
   if(live.length > 1) conflictViewIndex = (conflictViewIndex + 1) % live.length;
@@ -5685,13 +5726,37 @@ function conflictActions(c){
   const tagged = c.events.map(ev => (ev.personIds || []).map(nameOf).filter(Boolean).sort().join(', ')).filter(Boolean);
   const differentPeople = new Set(tagged).size > 1;
   const keepLabel = c.events.length > 2 ? 'Keep all' : 'Keep both';
+  // v9.70: select mode, the same shape the Problem Log has used since v9.39.
+  // The default view carries NO per-event destructive control -- v9.69 put two
+  // red links under every row, which on a four-event busy day is eight of them
+  // and still could not express "these two".
+  const picking = clashSelecting(key);
+  const nPicked = picking ? clashSel.size : 0;
+  const nTotal = c.events.length;
   const note = differentPeople
     ? `Looks like these are for different people${tagged.length === c.events.length ? ' (' + tagged.join(' vs ') + ')' : ''} — keeping ${c.events.length > 2 ? 'them all' : 'both'} is usually right.`
     : 'Overlaps aren’t always a problem — keep them if that’s intended, or move one below.';
   return `<div style="width:100%;display:flex;flex-direction:column;gap:6px">`
-    + `<button class="btn sm" style="width:100%" onclick="event.stopPropagation();dismissConflict('${esc(key)}')">${ico('check-circle')}${keepLabel} — dismiss this warning</button>`
-    + `<div class="meta" style="font-size:12px;margin:2px 0 4px">${esc(note)}</div>`
-    + `<div class="meta" style="font-size:11px;color:var(--muted)">Or pick one — move it, remove just it, or keep only it:</div>`
+    + (picking ? '' : `<button class="btn sm" style="width:100%" onclick="event.stopPropagation();dismissConflict('${esc(key)}')">${ico('check-circle')}${keepLabel} — dismiss this warning</button>`)
+    + (picking ? '' : `<div class="meta" style="font-size:12px;margin:2px 0 4px">${esc(note)}</div>`)
+    + (picking ? `<div class="card" style="padding:10px;margin:0 0 6px;border-left:4px solid var(--accent)">
+        <div class="row">
+          <div class="grow" style="font-weight:700;font-size:var(--t-sm)">${nPicked} selected</div>
+          <button class="linkbtn" onclick="event.stopPropagation();selectAllClash('${esc(key)}')">${nPicked === nTotal ? 'Select none' : 'Select all'}</button>
+          <button class="linkbtn" onclick="event.stopPropagation();toggleClashSelect('${esc(key)}')">Cancel</button>
+        </div>
+        <div class="formrow" style="margin-top:8px">
+          <button class="btn sm alt" ${nPicked ? '' : 'disabled'}
+            style="border-color:var(--red-accent);color:var(--red-accent)"
+            onclick="event.stopPropagation();removeSelectedClash('${esc(key)}')">Remove selected${nPicked ? ' (' + nPicked + ')' : ''}</button>
+          <button class="btn sm alt" ${nPicked && nPicked < nTotal ? '' : 'disabled'}
+            style="border-color:var(--red-accent);color:var(--red-accent)"
+            onclick="event.stopPropagation();keepOnlySelectedClash('${esc(key)}')">Keep only ${nPicked === 1 ? 'this' : 'these'}${nPicked && nPicked < nTotal ? ' — remove ' + (nTotal - nPicked) : ''}</button>
+        </div>
+      </div>` : '')
+    + `<div class="meta" style="font-size:11px;color:var(--muted)">${picking
+        ? 'Tick the ones you mean:'
+        : 'Or tap one to move it:'}</div>`
     + c.events.slice(0, 5).map(ev => {
         const t = fmtTimeRange(ev) || (ev.time ? fmt12(ev.time)
           : (ev.kind === 'deadline' ? 'due (no time)' : 'all day'));
@@ -5701,31 +5766,32 @@ function conflictActions(c){
         // The reschedule button is unchanged. The "keep only this" link is new,
         // and sits UNDER the row it belongs to so the event it keeps is the one
         // named directly above it.
-        const others = c.events.length - 1;
-        // TWO directions, not one. Until v9.69 the only per-event action was
-        // "keep only this", which on a busy day of four means deleting three
-        // events to be rid of one. Both are offered now, and both name the
-        // number of events they will actually remove.
-        return `<div style="display:flex;flex-direction:column;gap:2px">
-          <button class="btn alt sm" style="width:100%;text-align:left;white-space:normal;padding:10px 12px"
-            onclick="openEventEdit('${esc(ev.id)}')">
-            <span style="font-weight:700;display:block">${esc(ev.title || 'Untitled')}${ev.kind === 'deadline' ? ' · deadline' : ''}</span>
-            <span class="meta" style="font-size:12px;display:block;margin-top:2px">${esc(meta)}</span>
-            <span class="meta" style="font-size:11px;display:block;margin-top:3px;color:var(--accent)">${ico('edit')}Tap to reschedule</span>
-          </button>
-          <div class="row" style="justify-content:flex-end;gap:10px;flex-wrap:wrap">
-            <button class="linkbtn red" style="font-size:12px;padding:2px 4px"
-              aria-label="Remove ${esc(ev.title || 'Untitled')} and keep the other ${others === 1 ? 'event' : others + ' events'}"
-              onclick="event.stopPropagation();removeOneEvent('${esc(ev.id)}','${esc(key)}')">
-              Remove just this one</button>
-            <button class="linkbtn red" style="font-size:12px;padding:2px 4px"
-              aria-label="Keep only ${esc(ev.title || 'Untitled')} and remove the other ${others === 1 ? 'event' : others + ' events'}"
-              onclick="event.stopPropagation();keepOnlyEvent('${esc(ev.id)}','${esc(key)}')">
-              Keep only this — remove the other${others === 1 ? '' : ' ' + others}</button>
-          </div>
-        </div>`;
+        // In select mode the row IS the checkbox -- tapping it toggles rather
+        // than opening the editor, so the whole card is the target on a phone.
+        // Out of select mode it is exactly what it always was.
+        if(picking){
+          const on = clashSel.has(ev.id);
+          return `<button class="btn alt sm" role="checkbox" aria-checked="${on ? 'true' : 'false'}"
+            style="width:100%;text-align:left;white-space:normal;padding:10px 12px;display:flex;align-items:flex-start;gap:10px${on ? ';border-color:var(--accent)' : ''}"
+            onclick="event.stopPropagation();toggleClashPick('${esc(ev.id)}','${esc(key)}')">
+            <span class="check ${on ? 'on' : ''}" style="width:22px;height:22px;border-radius:11px;margin-top:1px" aria-hidden="true">${on ? '✓' : ''}</span>
+            <span class="grow">
+              <span style="font-weight:700;display:block">${esc(ev.title || 'Untitled')}${ev.kind === 'deadline' ? ' · deadline' : ''}</span>
+              <span class="meta" style="font-size:12px;display:block;margin-top:2px">${esc(meta)}</span>
+            </span>
+          </button>`;
+        }
+        return `<button class="btn alt sm" style="width:100%;text-align:left;white-space:normal;padding:10px 12px"
+          onclick="openEventEdit('${esc(ev.id)}')">
+          <span style="font-weight:700;display:block">${esc(ev.title || 'Untitled')}${ev.kind === 'deadline' ? ' · deadline' : ''}</span>
+          <span class="meta" style="font-size:12px;display:block;margin-top:2px">${esc(meta)}</span>
+          <span class="meta" style="font-size:11px;display:block;margin-top:3px;color:var(--accent)">${ico('edit')}Tap to reschedule</span>
+        </button>`;
       }).join('')
     + (c.events.length > 5 ? `<div class="meta" style="font-size:12px">and ${c.events.length - 5} more overlapping</div>` : '')
+    + (picking ? '' : `<div class="row" style="justify-content:flex-end;margin-top:2px">
+        <button class="linkbtn" onclick="event.stopPropagation();toggleClashSelect('${esc(key)}')">Select…</button>
+      </div>`)
     + `</div>`;
 }
 
@@ -5746,31 +5812,79 @@ function conflictActions(c){
  * the key into dismissedConflicts as well would leave a dead entry there
  * forever, and would silence the pair if an undo brought them both back.
  */
-function keepOnlyEvent(keepId, key){
+/**
+ * THE one implementation of "remove these events from this clash" (v9.70).
+ *
+ * Everything else on the banner routes through here: keeping one, removing one,
+ * removing a selection, keeping a selection. Before v9.70 there were three
+ * near-copies of this loop and they had already drifted in what they confirmed
+ * and what their undo restored.
+ *
+ * Soft delete plus `dirty`, exactly as applyDedupe() and bulkDelete() do, and
+ * an undo that restores each row's PRIOR flags rather than assuming they were
+ * unset.
+ *
+ * No dismissConflict() call is needed or wanted: eventsClash() returns false
+ * the moment either side is deleted, and a busy day that drops below the
+ * threshold stops being one, so the warning goes on its own. Writing the key
+ * into dismissedConflicts as well would leave a dead entry there forever, and
+ * would silence the group if an undo brought the events back.
+ */
+function removeFromClash(ids, key, opts){
   // Re-derive rather than trusting a rendered index -- see stepConflict().
   const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
   if(!c){ toast('That clash is already resolved'); render(); return; }
 
-  const keep = c.events.find(e => e.id === keepId);
-  const losers = c.events.filter(e => e.id !== keepId && !e.deleted);
-  if(!keep || !losers.length){ render(); return; }
+  const set = new Set(ids || []);
+  const losers = c.events.filter(e => set.has(e.id) && !e.deleted);
+  if(!losers.length){ render(); return; }
+  const staying = c.events.filter(e => !set.has(e.id) && !e.deleted).length;
 
   const names = losers.map(e => '“' + (e.title || 'Untitled') + '”').join(', ');
-  if(!confirm('Keep “' + (keep.title || 'Untitled') + '” and remove ' + names + '?'
-    + '\n\nThey are removed from your list. Anything already added to your calendar stays there — delete those in the Calendar app.')) return;
+  const lead = (opts && opts.lead) || ('Remove ' + names + '?');
+  if(!confirm(lead
+    + (staying ? '\n\nThe other ' + staying + (staying === 1 ? ' event stays' : ' events stay') + '.' : '')
+    + '\n\n' + (losers.length === 1 ? 'It is' : 'They are')
+    + ' removed from your list. Anything already added to your calendar stays there — delete those in the Calendar app.')) return;
 
-  // Remember each row's prior flags so the undo restores the state that was
-  // actually there, rather than assuming both were unset.
   const before = losers.map(e => ({ e, deleted: e.deleted, dirty: e.dirty }));
   losers.forEach(e => { e.deleted = true; e.dirty = 1; });
+  clearClashSel();
   save();
   render();
-  toast('Kept “' + (keep.title || 'Untitled') + '” — removed ' + losers.length,
+  toast((opts && opts.toast) || ('Removed ' + losers.length + ' event' + (losers.length === 1 ? '' : 's')),
     { label:'Undo', fn:() => {
       before.forEach(b => { b.e.deleted = b.deleted; b.e.dirty = b.dirty; });
       save(); render(); toast('Put back');
     }});
 }
+
+/**
+ * Keep the named events and remove the rest of the clash. The inverse selection
+ * of removeFromClash, expressed through it so there is one code path.
+ */
+function keepOnlyInClash(keepIds, key){
+  const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
+  if(!c){ toast('That clash is already resolved'); render(); return; }
+  const keepSet = new Set(keepIds || []);
+  const keeping = c.events.filter(e => keepSet.has(e.id));
+  const losers = c.events.filter(e => !keepSet.has(e.id) && !e.deleted);
+  if(!keeping.length || !losers.length){ render(); return; }
+
+  const kept = keeping.map(e => '“' + (e.title || 'Untitled') + '”').join(', ');
+  const gone = losers.map(e => '“' + (e.title || 'Untitled') + '”').join(', ');
+  removeFromClash(losers.map(e => e.id), key, {
+    lead: 'Keep ' + kept + ' and remove ' + gone + '?',
+    toast: 'Kept ' + keeping.length + ' — removed ' + losers.length
+  });
+}
+
+/**
+ * Keep exactly one event and remove the rest (v9.59). Unchanged in name,
+ * signature and behaviour -- it is now the one-id case of keepOnlyInClash, so
+ * the loop it used to own lives in a single place.
+ */
+function keepOnlyEvent(keepId, key){ keepOnlyInClash([keepId], key); }
 
 /**
  * Resolve a clash by removing ONE of its events and keeping the rest (v9.69).
@@ -5794,28 +5908,17 @@ function keepOnlyEvent(keepId, key){
  * written into dismissedConflicts would outlive the events it names and would
  * silence the group if the Undo brought this one back.
  */
-function removeOneEvent(evId, key){
-  // Re-derive rather than trusting a rendered index -- see stepConflict().
-  const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
-  if(!c){ toast('That clash is already resolved'); render(); return; }
+/** Remove exactly one event and keep the rest. The one-id case. */
+function removeOneEvent(evId, key){ removeFromClash([evId], key); }
 
-  const ev = c.events.find(e => e.id === evId);
-  if(!ev || ev.deleted){ render(); return; }
-  const keeping = c.events.filter(e => e.id !== evId && !e.deleted).length;
-
-  if(!confirm('Remove “' + (ev.title || 'Untitled') + '”?'
-    + (keeping ? '\n\nThe other ' + keeping + (keeping === 1 ? ' event stays' : ' events stay') + '.' : '')
-    + '\n\nIt is removed from your list. Anything already added to your calendar stays there — delete those in the Calendar app.')) return;
-
-  const before = { deleted: ev.deleted, dirty: ev.dirty };
-  ev.deleted = true; ev.dirty = 1;
-  save();
-  render();
-  toast('Removed “' + (ev.title || 'Untitled') + '”',
-    { label:'Undo', fn:() => {
-      ev.deleted = before.deleted; ev.dirty = before.dirty;
-      save(); render(); toast('Put back');
-    }});
+/** The two select-mode actions. Both refuse an empty selection. */
+function removeSelectedClash(key){
+  if(!clashSelecting(key) || !clashSel.size) return;
+  removeFromClash([...clashSel], key);
+}
+function keepOnlySelectedClash(key){
+  if(!clashSelecting(key) || !clashSel.size) return;
+  keepOnlyInClash([...clashSel], key);
 }
 
 // The real field, set here and read by findConflicts. Undoable, like every
@@ -5840,6 +5943,7 @@ function markHandled(id){
 function dismissConflict(key){
   const list = S.settings.dismissedConflicts || (S.settings.dismissedConflicts = []);
   if(list.includes(key)) return;                 // already silenced; nothing to undo
+  clearClashSel();
   list.push(key);
   save(); render();
   toast('Warning dismissed', { label:'Undo', fn:() => {
@@ -11105,7 +11209,14 @@ Object.assign(window, {
   forgetImportedEmails,
   goToEvents,
   keepOnlyEvent,
+  keepOnlyInClash,
+  keepOnlySelectedClash,
+  removeFromClash,
   removeOneEvent,
+  removeSelectedClash,
+  selectAllClash,
+  toggleClashPick,
+  toggleClashSelect,
   manualPrune,
   markAllRead,
   mealActions,
