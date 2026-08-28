@@ -1,7 +1,14 @@
 # FlyerSnap full-app code review — PLAN
 
-**Status: DRAFT, not started. Written 27 Aug 2026, before any review work, so the
-scope cannot quietly shrink later.**
+**Status: IN PROGRESS. Written 27 Aug 2026 before any review work, so the scope
+cannot quietly shrink later. P1 complete 28 Aug 2026 — see
+`CODE-REVIEW-FINDINGS.md`. P2–P9 not started.**
+
+**Baseline re-measured at the start of P1**, per §4: the repo is at `00d6521`
+(v9.61), `index.html` is now **10,892** lines (was 10,493), the window bridge
+carries **113** names (was 96), and the suite is **656 passed, 0 failed** (was
+623). The §3 counts below were taken at v9.59 and have moved with three
+releases; `CODE-REVIEW-FINDINGS.md` carries the current numbers.
 
 Adapted from the methodology proved on `meal-planner-shoppin` (the portable
 write-up Logan supplied, referred to below as **the source methodology**). That
