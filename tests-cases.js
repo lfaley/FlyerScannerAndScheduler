@@ -3516,3 +3516,44 @@ test('the Settings hub shows how much is silenced', () => {
   assert.ok(/2 silenced/.test(m.innerHTML), 'the hub row does not say how many');
   assert.ok(/setDismissed/.test(m.innerHTML), 'the row points nowhere');
 });
+
+console.log('\nThree confirmed review findings (v9.67)');
+
+test('citations above the 99th are no longer silently dropped', () => {
+  // Verified by execution before the fix: a "next 3 months" scope with 140
+  // events emitted 140 refs, and citedEvents('see [140]') returned 0.
+  const refs = [];
+  for(let i = 1; i <= 140; i++) refs.push({ ref:i, id:'e'+i, line:'x', rel:'' });
+  assert.strictEqual(citedEvents('see [140]', refs).length, 1, 'ref 140 is dropped');
+  assert.strictEqual(citedEvents('see [100]', refs).length, 1, 'ref 100 is dropped');
+  assert.strictEqual(citedEvents('see [7]', refs).length, 1, 'ordinary refs broke');
+  assert.strictEqual(citedEvents('see [1400]', refs).length, 0,
+    'the regex now matches something that is not a ref');
+});
+
+test('a progress note is not filed as a failure when the extraction succeeded', () => {
+  // 'combined read found nothing; trying each part separately' used to go into
+  // `problems`, and every entry there became a review-box failure AND a Problem
+  // Log row -- so an email the app then read correctly still left a
+  // "couldn't be read" trace. Same symptom migration v7 was written to clear.
+  const src = String(extractFromEmailPayload);
+  assert.ok(/const notes = \[\]/.test(src), 'progress notes share the failure list again');
+  assert.ok(/notes\.push\('combined read found nothing/.test(src),
+    'the progress note is back in `problems`');
+  assert.ok(!/problems\.push\('combined read/.test(src),
+    'a progress note is still being filed as a problem');
+  assert.ok(/return \{ events, problems, notes \}/.test(src), 'notes are not returned');
+});
+
+test('the fallback toast and its log entry wait until Anthropic has answered', () => {
+  // They used to fire before `return await callClaude(...)`, so a failing
+  // Anthropic left the user told it had answered and the log claiming a
+  // recovery that never happened. Same mistake P4-01 fixed in sign-out.
+  const src = String(callAI);
+  const call = src.indexOf('await callClaude(');
+  const logged = src.indexOf("fellBackTo:'anthropic'");
+  const toasted = src.indexOf("'Read by Anthropic — sign in");
+  assert.ok(call > 0 && logged > 0 && toasted > 0, 'the fallback path changed shape');
+  assert.ok(logged > call, 'the fellBackTo entry is still written before the call');
+  assert.ok(toasted > call, 'the toast still fires before the call');
+});

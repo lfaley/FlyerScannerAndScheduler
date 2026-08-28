@@ -1271,6 +1271,24 @@ audited in both its states).
 
 ---
 
+## The last three confirmed findings — CLOSED in v9.67
+
+| Finding | Fix | Mutation |
+|---|---|---|
+| **Citations capped at 99.** Verified by execution: a "next 3 months" scope with 140 events emitted 140 refs, and `citedEvents('[140]')` returned 0 — every citation past the 99th silently dropped, so the answer showed no source for it | `\d{1,2}` → `\d{1,3}` in `js/ask.js` **and** the inlined copy | reverting turns the test **and** the drift guard red |
+| **A progress note filed as a failure.** `'combined read found nothing; trying each part separately'` went into `problems`, and the caller turned every entry into a review-box failure *and* a Problem Log row — so an email the app then read correctly still left a "couldn't be read" trace | progress notes get their own `notes` array, surfaced only when nothing was extracted, where they actually explain what was tried | **RED** |
+| **The fallback toast fired before Anthropic answered.** `recordAiCall(fellBackTo)` and *"Read by Anthropic…"* both ran before `return await callClaude(...)` | both moved after the call returns | **RED** |
+
+The last two are the same mistake in two more places, and it is the one P4-01
+was about: **telling the user something happened before checking that it did.**
+Sign-out claimed success it never verified; the fallback claimed a recovery that
+had not happened yet; the Problem Log recorded a failure at something the app
+went on to do. Three instances, three phases, one habit.
+
+**679 passed, 0 failed.**
+
+---
+
 # The review, in summary
 
 Nine phases, `00d6521` (v9.61) → **659 passing, 0 failing**.

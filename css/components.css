@@ -120,7 +120,13 @@
   .check{width:28px;height:28px;border-radius:14px;border:2px solid var(--placeholder);flex-shrink:0;
     display:flex;align-items:center;justify-content:center;color:var(--on-accent);font-weight:800;font-size:14px}
   .check.on{background:var(--green);border-color:var(--green)}
-  input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],textarea{
+  /* Every text-entry type the app actually ships. `email` was missing until
+     v9.68, so the one type=email input in the app -- Gordon sign-in -- got no
+     styling at all and rendered as a narrow UA-default box with Safari's
+     autofill wash showing through, directly above a correctly styled password
+     field. tests-cases.js pins this: any input type in the shipped markup that
+     is not checkbox/file/radio/image must appear in this selector. */
+  input[type=text],input[type=email],input[type=password],input[type=number],input[type=date],input[type=time],textarea{
     width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
     padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
   textarea{min-height:90px;resize:vertical}

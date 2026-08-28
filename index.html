@@ -193,7 +193,13 @@
   .check{width:28px;height:28px;border-radius:14px;border:2px solid var(--placeholder);flex-shrink:0;
     display:flex;align-items:center;justify-content:center;color:var(--on-accent);font-weight:800;font-size:14px}
   .check.on{background:var(--green);border-color:var(--green)}
-  input[type=text],input[type=password],input[type=number],input[type=date],input[type=time],textarea{
+  /* Every text-entry type the app actually ships. `email` was missing until
+     v9.68, so the one type=email input in the app -- Gordon sign-in -- got no
+     styling at all and rendered as a narrow UA-default box with Safari's
+     autofill wash showing through, directly above a correctly styled password
+     field. tests-cases.js pins this: any input type in the shipped markup that
+     is not checkbox/file/radio/image must appear in this selector. */
+  input[type=text],input[type=email],input[type=password],input[type=number],input[type=date],input[type=time],textarea{
     width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
     padding:12px;font-size:16px;font-family:inherit;color:var(--ink)}
   textarea{min-height:90px;resize:vertical}
@@ -909,8 +915,19 @@ const GORDON_AUTH = {
   // Turn Identity Toolkit's error codes into something a parent can read.
   signInErrorMessage(json){
     const code = (json && json.error && json.error.message) || '';
-    if(/EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_LOGIN_CREDENTIALS/.test(code))
-      return 'That email or password is not right.';
+    // SAY ONLY WHAT IS KNOWN. Firebase sends three different things here and
+    // until v9.68 all three printed "That email or password is not right",
+    // which reads as an accusation about the email -- Logan hit it on 28 Aug
+    // with an email that was correct. EMAIL_NOT_FOUND and INVALID_PASSWORD are
+    // definite, so name the one that is actually wrong. INVALID_LOGIN_
+    // CREDENTIALS is Firebase collapsing the two on purpose (email-enumeration
+    // protection), and the honest answer there is that we cannot tell.
+    if(/EMAIL_NOT_FOUND/.test(code))
+      return 'No account for that email address.';
+    if(/INVALID_PASSWORD/.test(code))
+      return 'That password is not right. The email address is fine.';
+    if(/INVALID_LOGIN_CREDENTIALS/.test(code))
+      return 'Sign-in was refused. Google does not say which is wrong, so check the password first \u2014 it is the usual one.';
     if(/USER_DISABLED/.test(code)) return 'This account has been disabled.';
     if(/TOO_MANY_ATTEMPTS/.test(code)) return 'Too many attempts — wait a moment and try again.';
     if(/MISSING_PASSWORD|MISSING_EMAIL/.test(code)) return 'Enter both your email and password.';
@@ -1664,7 +1681,11 @@ QUESTION: ${question}`,
  */
 function citedEvents(answer, refs){
   const nums = new Set();
-  for(const m of String(answer || '').matchAll(/\[(\d{1,2})\]/g)) nums.add(Number(m[1]));
+  // \d{1,2} capped this at 99. A wide scope really can emit more than that --
+  // measured: 140 refs for "the next 3 months" on a busy calendar -- and every
+  // citation above the 99th was silently dropped, so the answer displayed no
+  // source for it (code review, verified by execution 28 Aug).
+  for(const m of String(answer || '').matchAll(/\[(\d{1,3})\]/g)) nums.add(Number(m[1]));
   return (refs || []).filter(r => nums.has(r.ref));
 }
 
@@ -4356,7 +4377,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.66';
+const APP_VERSION = 'v9.68';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -4439,22 +4460,30 @@ async function callAI(contentBlocks, maxTokens, system, op){
         throw new Error('Sign in to use Gordon.\n\nOpen Settings → Gordon and AI and sign in — or turn on "Fall back to Anthropic".');
       }
       if(aiFallbackOn()){
-        recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
         // WORDING MATTERS. This used to read "Local model unavailable — using
         // Anthropic", which on a phone toast reads as "...unavailable ...
         // Anthropic" -- Logan reported repeated "Anthropic couldn't be
         // reached" alerts when the log showed Anthropic succeeding every time.
-        // Lead with the outcome, name the thing that failed second.
+        // Lead with the outcome, name the thing that failed second. The toast
+        // itself now fires below, once there is an outcome to report.
+        // A successful fallback RECOVERED -- the user got an answer -- so it is
+        // NOT a "problem to look at." It is recorded in the AI call log with
+        // fellBackTo, which Diagnostics summarises as "fell back N×". Logging it
+        // as a Problem too made the "N problems to look at" count never drop
+        // even though nothing was actually broken.
+        //
+        // ORDER MATTERS. Until v9.67 the toast and the fellBackTo entry were
+        // emitted BEFORE this call, so a failing Anthropic left the user having
+        // been told it answered and the log claiming a recovery that never
+        // happened. Announce the outcome after there IS one -- the same mistake
+        // P4-01 fixed in sign-out.
+        const answer = await callClaude(contentBlocks, maxTokens, system);
+        recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
         toast(needAuth ? 'Read by Anthropic — sign in (Settings) to use Gordon'
                        : rateLimited ? 'Read by Anthropic — Gordon is busy (rate limited); try again shortly'
                        : (unsupported ? 'Read by Anthropic instead — PDFs need it'
                           : 'Read by Anthropic instead — your local model did not answer'));
-        // A successful fallback RECOVERED -- the user got an answer -- so it is
-        // NOT a "problem to look at." It is already in the AI call log above
-        // (fellBackTo), which Diagnostics summarises as "fell back N×". Logging
-        // it as a Problem too made the "N problems to look at" count never drop
-        // even though nothing was actually broken.
-        return await callClaude(contentBlocks, maxTokens, system);
+        return answer;
       }
       recordAiCall(localFail);
       if(unsupported){
@@ -7136,6 +7165,10 @@ function emailBlocks(payload, includeAttachments){
 async function extractFromEmailPayload(payload){
   const found = [];
   const problems = [];
+  // PROGRESS, not failure. "The combined read found nothing, so I am trying
+  // each part" is worth keeping for diagnosis, but filing it as a problem made
+  // the Problem Log accuse the app of failing at something it then did.
+  const notes = [];
   const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
 
   // Preferred path: everything in one request, so notes can be drawn from
@@ -7147,10 +7180,10 @@ async function extractFromEmailPayload(payload){
       blocks.push({ type:'text', text: eventPrompt() });
       const text = await callAI(blocks, 8000, GROUNDING_EVENTS, 'email.combined');
       const events = parseExtractedEvents(text) || [];
-      if(events.length) return { events, problems };
-      problems.push('combined read found nothing; trying each part separately');
+      if(events.length) return { events, problems, notes };
+      notes.push('combined read found nothing; trying each part separately');
     }catch(err){
-      problems.push('combined read failed (' + err.message + '); trying each part separately');
+      notes.push('combined read failed (' + err.message + '); trying each part separately');
     }
   }
 
@@ -7205,7 +7238,7 @@ async function extractFromEmailPayload(payload){
     if(!hit.location && e.location) hit.location = e.location;
     if((e.title||'').length > (hit.title||'').length) hit.title = e.title;
   });
-  return { events: merged, problems };
+  return { events: merged, problems, notes };
 }
 
 async function extractFromRawItems(items){
@@ -7223,7 +7256,7 @@ async function extractFromRawItems(items){
         sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…',
                      hint: label + ' (+' + payload.attachments.length + ' attachment)'});
       }
-      const { events, problems } = await extractFromEmailPayload(payload);
+      const { events, problems, notes } = await extractFromEmailPayload(payload);
       events.forEach(e => out.push(Object.assign({}, e,
         { msgId: it.msgId, from: payload.from || it.from || null,
           source: 'Email - ' + (payload.subject || it.subject || ''),
@@ -7237,7 +7270,11 @@ async function extractFromRawItems(items){
         logProblem('Email: ' + (payload.from || it.from || 'unknown'), p, label);
       });
       if(!events.length && !problems.length){
-        failures.push({ subject: label, reason: 'No dates found', msgId: it.msgId, retriable: false });
+        // Nothing was extracted and nothing errored. The progress notes are
+        // worth showing HERE, where they explain what was tried -- and only
+        // here. When events did come back, the same notes are just noise.
+        const why = (notes || []).length ? notes.join('; ') : 'No dates found';
+        failures.push({ subject: label, reason: why, msgId: it.msgId, retriable: false });
         logProblem('Email: ' + (payload.from || it.from || 'unknown'),
           'No dates found in this email', label);
       }
@@ -9784,13 +9821,16 @@ function gordonAuthCard(){
     <div class="title" style="font-size:14px">Sign in to use Gordon</div>
     <div class="help" style="margin:4px 0 8px">The local model is per-person now. Sign in with an allow-listed email and password. The app and manual features work without signing in; the Anthropic fallback uses your own key.</div>
     <input type="email" id="gordonEmail" aria-label="Email" placeholder="you@example.com"
-      autocapitalize="none" autocorrect="off" spellcheck="false" style="margin-bottom:6px">
+      autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username"
+      inputmode="email" style="margin-bottom:6px">
     <input type="password" id="gordonPassword" aria-label="Password" placeholder="Password"
+      autocomplete="current-password"
       onkeydown="if(event.key==='Enter')gordonSignInUI()">
     <div class="formrow" style="margin-top:8px">
       <button class="btn" onclick="gordonSignInUI()">Sign in</button>
     </div>
-    <div id="gordonAuthMsg" class="help" style="margin-top:6px;min-height:1em" role="status" aria-live="polite"></div>`;
+    <div id="gordonAuthMsg" class="help" style="margin-top:6px;min-height:1em" role="status" aria-live="polite"></div>
+  </div>`;
 }
 
 async function gordonSignInUI(){

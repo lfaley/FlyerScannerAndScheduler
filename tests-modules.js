@@ -3922,8 +3922,12 @@ module.exports = async function runModuleTests(test){
   });
 
   test('signInErrorMessage turns Firebase codes into human text', () => {
-    assert.ok(/not right/.test(ga.signInErrorMessage({ error:{ message:'INVALID_PASSWORD' } })));
-    assert.ok(/not right/.test(ga.signInErrorMessage({ error:{ message:'INVALID_LOGIN_CREDENTIALS' } })));
+    // v9.68: the three refusal codes stopped sharing one message. Firebase can
+    // name the wrong field for two of them, and the app now says so rather than
+    // implicating the email in every refusal.
+    assert.ok(/password is not right/.test(ga.signInErrorMessage({ error:{ message:'INVALID_PASSWORD' } })));
+    assert.ok(/No account/.test(ga.signInErrorMessage({ error:{ message:'EMAIL_NOT_FOUND' } })));
+    assert.ok(/refused/.test(ga.signInErrorMessage({ error:{ message:'INVALID_LOGIN_CREDENTIALS' } })));
     assert.ok(/disabled/.test(ga.signInErrorMessage({ error:{ message:'USER_DISABLED' } })));
     assert.ok(/Sign-in failed/.test(ga.signInErrorMessage({})));
   });
@@ -4136,6 +4140,85 @@ module.exports = async function runModuleTests(test){
       'performRoute does not preview enrich_batch');
     const conf = src.match(/function confirmPendingAction\([\s\S]*?\n\}/);
     assert.ok(conf && /case 'enrich_batch'/.test(conf[0]), 'confirm path does not apply enrich_batch');
+  });
+
+
+  // ---------------------------------------------------------------- v9.68
+  test('every text-entry input type the app ships is covered by the CSS input rule', () => {
+    // css/components.css:123 listed text|password|number|date|time and NOT
+    // email, so #gordonEmail -- the app's only type=email input -- received no
+    // app styling and fell back to the UA default: a narrow, intrinsically
+    // sized box wearing Safari's autofill wash, directly above a full-width
+    // password field. Logan reported it from a screenshot on 28 Aug.
+    //
+    // Derived from the SHIPPED markup rather than a hard-coded list, so the
+    // next new input type cannot slip through the same way. Non-text controls
+    // are excluded: they are styled elsewhere or hidden entirely.
+    const NOT_TEXT_ENTRY = new Set(['checkbox','radio','file','image','hidden','range','color','submit','button']);
+    const html = fs.readFileSync('index.html', 'utf8');
+    const css = fs.readFileSync('css/components.css', 'utf8');
+
+    const used = new Set();
+    for(const m of html.matchAll(/<input\b[^>]*\btype\s*=\s*"([a-z]+)"/g))
+      if(!NOT_TEXT_ENTRY.has(m[1])) used.add(m[1]);
+    assert.ok(used.has('email'), 'the type=email input vanished; this guard is now testing nothing');
+
+    const rule = css.match(/^\s*input\[type=[^{]*\{/m);
+    assert.ok(rule, 'the shared input rule is gone from css/components.css');
+    const covered = new Set([...rule[0].matchAll(/input\[type=([a-z]+)\]/g)].map(m => m[1]));
+    const missing = [...used].filter(t => !covered.has(t)).sort();
+    assert.strictEqual(missing.length, 0,
+      'input type(s) with no styling, so they render as raw UA defaults: ' + missing.join(', '));
+
+    // ...and the inlined <style> copy says the same thing. A fix applied to one
+    // and not the other is exactly the drift a single-file build invites.
+    assert.ok(html.includes(rule[0].trim()), 'index.html’s inlined copy of the input rule has drifted');
+  });
+
+  test('the signed-out Gordon card closes the div it opens', () => {
+    // Code review P5-08, verified Aug 2026 and left unfixed until v9.68. The
+    // signed-out branch opened <div class="card"> and never closed it, so with
+    // provider `local` and signed out, every section below -- Base URL, Model,
+    // fallback, Save/Test, the Anthropic key -- rendered INSIDE the amber
+    // sign-in card.
+    const html = fs.readFileSync('index.html', 'utf8');
+    const body = html.slice(html.indexOf('function gordonAuthCard(){'),
+                            html.indexOf('async function gordonSignInUI'));
+    assert.ok(body.length > 100, 'gordonAuthCard moved; this guard is reading the wrong text');
+    const signedOut = body.slice(body.indexOf('return `<div class="card" style="border-left:4px solid var(--amber-accent'));
+    const opens = (signedOut.match(/<div\b/g) || []).length;
+    const closes = (signedOut.match(/<\/div>/g) || []).length;
+    assert.strictEqual(closes, opens,
+      'the signed-out sign-in card leaks ' + (opens - closes) + ' unclosed div(s)');
+  });
+
+  test('a sign-in refusal never blames the email unless Google named the email', () => {
+    // All three refusal codes used to print "That email or password is not
+    // right." Logan, 28 Aug: "im getting an alert that the email isnt correct
+    // too, but it is correct" -- with a correct email and, per Firebase's
+    // deliberately collapsed code, no way for the app to know which was wrong.
+    const html = fs.readFileSync('index.html', 'utf8');
+    const vm = require('vm');
+    const src = html.match(/const GORDON_AUTH = \{[\s\S]*?\n\};/);
+    assert.ok(src, 'GORDON_AUTH literal not found');
+    const AUTH = vm.runInNewContext(src[0] + '\nGORDON_AUTH');
+    const msg = (code) => AUTH.signInErrorMessage({ error:{ message: code } });
+
+    const collapsed = msg('INVALID_LOGIN_CREDENTIALS');
+    assert.ok(!/email/i.test(collapsed) || /does not say which/i.test(collapsed),
+      'the collapsed code still asserts something about the email: ' + collapsed);
+
+    const wrongPw = msg('INVALID_PASSWORD');
+    assert.ok(/password/i.test(wrongPw) && !/^No account/.test(wrongPw),
+      'a definite wrong-password no longer says so: ' + wrongPw);
+    assert.ok(/email/i.test(msg('EMAIL_NOT_FOUND')),
+      'a definite unknown-email no longer says so: ' + msg('EMAIL_NOT_FOUND'));
+    assert.notStrictEqual(msg('EMAIL_NOT_FOUND'), wrongPw,
+      'the two distinguishable codes are collapsed into one message again');
+
+    // The unrelated codes must keep working.
+    assert.ok(/disabled/i.test(msg('USER_DISABLED')));
+    assert.ok(/UNKNOWN_THING/.test(msg('UNKNOWN_THING')), 'an unknown code must still surface itself');
   });
 
 };

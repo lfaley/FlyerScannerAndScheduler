@@ -60,8 +60,19 @@ export const GORDON_AUTH = {
   // Turn Identity Toolkit's error codes into something a parent can read.
   signInErrorMessage(json){
     const code = (json && json.error && json.error.message) || '';
-    if(/EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_LOGIN_CREDENTIALS/.test(code))
-      return 'That email or password is not right.';
+    // SAY ONLY WHAT IS KNOWN. Firebase sends three different things here and
+    // until v9.68 all three printed "That email or password is not right",
+    // which reads as an accusation about the email -- Logan hit it on 28 Aug
+    // with an email that was correct. EMAIL_NOT_FOUND and INVALID_PASSWORD are
+    // definite, so name the one that is actually wrong. INVALID_LOGIN_
+    // CREDENTIALS is Firebase collapsing the two on purpose (email-enumeration
+    // protection), and the honest answer there is that we cannot tell.
+    if(/EMAIL_NOT_FOUND/.test(code))
+      return 'No account for that email address.';
+    if(/INVALID_PASSWORD/.test(code))
+      return 'That password is not right. The email address is fine.';
+    if(/INVALID_LOGIN_CREDENTIALS/.test(code))
+      return 'Sign-in was refused. Google does not say which is wrong, so check the password first \u2014 it is the usual one.';
     if(/USER_DISABLED/.test(code)) return 'This account has been disabled.';
     if(/TOO_MANY_ATTEMPTS/.test(code)) return 'Too many attempts — wait a moment and try again.';
     if(/MISSING_PASSWORD|MISSING_EMAIL/.test(code)) return 'Enter both your email and password.';

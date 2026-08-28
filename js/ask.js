@@ -240,6 +240,10 @@ QUESTION: ${question}`,
  */
 export function citedEvents(answer, refs){
   const nums = new Set();
-  for(const m of String(answer || '').matchAll(/\[(\d{1,2})\]/g)) nums.add(Number(m[1]));
+  // \d{1,2} capped this at 99. A wide scope really can emit more than that --
+  // measured: 140 refs for "the next 3 months" on a busy calendar -- and every
+  // citation above the 99th was silently dropped, so the answer displayed no
+  // source for it (code review, verified by execution 28 Aug).
+  for(const m of String(answer || '').matchAll(/\[(\d{1,3})\]/g)) nums.add(Number(m[1]));
   return (refs || []).filter(r => nums.has(r.ref));
 }
