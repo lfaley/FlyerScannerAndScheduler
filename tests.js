@@ -83,13 +83,32 @@ const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
 // from js/format.js, which tests-modules.js covers on its own.
 const openTag = html.indexOf('<script type="module">') >= 0
   ? '<script type="module">' : '<script>';
+// P9 guard (code review, 28 Aug 2026). The two comment banners below decide
+// HOW MUCH OF THE APP THIS SUITE EXECUTES. Reword either -- an ordinary edit,
+// and nothing used to say otherwise -- and the suite silently changes what it
+// runs. Proven in P8: removing the first one made the sandbox load the file-
+// input wiring it normally excludes, and the whole run died with
+// "addEventListener is not a function" before a single test executed.
+//
+// This check cannot live in a test: by the time tests run, the damage is done.
+// It fails here, early, with a message that says what to do.
+const BOUNDARIES = ['// ---------- File input wiring ----------', '// Bridge for inline handlers.'];
+BOUNDARIES.forEach(mk => {
+  if (html.includes(mk)) return;
+  console.error('\n  FAIL  the test harness boundary marker is gone from index.html');
+  console.error('        missing: ' + mk);
+  console.error('        tests.js splits the app on this exact comment to decide what to');
+  console.error('        execute. Restore the wording, or update BOUNDARIES in tests.js.\n');
+  process.exit(1);
+});
+
 let app = html.split(openTag)[1].split('</script>')[0]
-  .split('// ---------- File input wiring ----------')[0]
+  .split(BOUNDARIES[0])[0]
   .replace(/^import\s+\{[^}]*\}\s+from\s+'[^']*';\s*$/gm, '');
 
 // The bridge assigns to window, which the sandbox does not need and which would
 // fail on names trimmed off with the file-input wiring above.
-app = app.split('// Bridge for inline handlers.')[0]
+app = app.split(BOUNDARIES[1])[0]
          .replace(/Object\.assign\(window,\s*\{[\s\S]*$/, '');
 
 vm.runInContext(app, box, { filename: 'index.html' });

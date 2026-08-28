@@ -1086,4 +1086,97 @@ work rather than by looking:
 Both are the same shape as P1-02. That is now five occurrences of one class in
 this project, which is the strongest argument in the plan for running P8 at all.
 
-## P9 — Prevention  ·  status: NOT STARTED
+## P9 — Prevention  ·  status: COMPLETE  ·  28 Aug 2026
+
+**Question:** what stops each class recurring?
+
+There is no lint layer to put a rule in, so every guard here is a **test**, and
+every one was **mutation-tested** — broken deliberately, watched go red.
+
+### Guards added (3 tests, +3 → 659 passing)
+
+| Guard | Class | Mutation | Result |
+|---|---|---|---|
+| `tests.js` refuses to run if a harness boundary marker is gone | P8-02 | reword `// ---------- File input wiring ----------` | **clear early failure** naming the marker, instead of a stack trace |
+| …and a test that the early check itself is not deleted | P8-02 | comment out its `process.exit(1)` | **RED** |
+| the meal-plan storage key is named once, not twice | P3-01 | reintroduce a raw `'mealplan-out'` literal | **RED** |
+| the app and the watcher agree on every Anthropic constant | P3-02 | drift the model | **RED** |
+| " | P3-02 | drift `anthropic-version` | **RED** |
+| " | P3-02 | rename the watcher's `unauthorized` string | **RED** |
+
+**One design decision worth recording.** The boundary guard was first written as
+an ordinary test — and mutation-testing showed **it could never fire**.
+Rewording a marker crashes the sandbox at load time, before any test executes;
+the suite died with a stack trace and my guard never ran. The check had to move
+into `tests.js` itself, ahead of `runInContext`. *A guard that runs after the
+damage is not a guard*, and only mutation testing revealed the difference.
+
+### The one fix applied in this phase
+
+`mealPlanDiagnostic()` now reads `MEALPLAN_KEY` instead of a raw
+`'mealplan-out'` literal (`index.html:9381`). **One word**, no behaviour change —
+applied because a guard for that class cannot exist while the violation does.
+Everything else remains listed, not fixed.
+
+### Rules added to `CLAUDE.md` (25–28)
+
+Each names the bug that justifies it. A rule with no bug behind it gets ignored.
+
+**25. An analysis result is not evidence until it has reproduced something
+already known to be true.** Nine tools were written for this review and **all
+nine were wrong on their first run**. Two would have published false findings;
+one would have *deleted* two confirmed ones. This generalises rule 21 from
+guards to the things written to check the guards.
+
+**26. Dismiss is as permanent as delete here, and wears none of its manners.**
+
+**27. A constant shared with `gmail-watcher.gs` has no import path — pin it.**
+
+**28. The instrument you reach for when something is wrong must not be the thing
+that is wrong.** Three independent instances in one review.
+
+### What is NOT guarded, and why
+
+Honest scope. A guard cannot pass while the thing it forbids is still present,
+so these need their fix first:
+
+| Class | Guard blocked by |
+|---|---|
+| every empty `catch` states a reason | 22 empty catches (P4) — 11 already comply, so the convention exists |
+| a permanent control has visible text | the dismiss family (P7) |
+| an accumulating settings key has a clearing path | `dismissedConflicts`, `notDuplicates` (P6) |
+| the working copy matches the repo | needs a `git ls-files` check in `deploy.ps1` (P1-01) |
+
+Each is one guard away, on the far side of one fix.
+
+---
+
+# The review, in summary
+
+Nine phases, `00d6521` (v9.61) → **659 passing, 0 failing**.
+
+| Phase | Result |
+|---|---|
+| P1 reachability | **zero dead code**; 4 documentation inconsistencies |
+| P2 write paths | **1 real defect**, reproduced: `compareProviders` persists `aiFallback:false` |
+| P3 one fact one place | 9 shared facts, **1 guarded** → now 3 |
+| P4 silent failures | 111 catches; **5 worth acting on**, 1 security-adjacent |
+| P5 index.html read | **28 candidates, 16 verified** — the richest phase |
+| P6 one-way doors | class enumerated: **exactly 2 members** |
+| P7 affordance | the trigger finding, generalised |
+| P8 suite honesty | **653/656 survive comment deletion**; 1 prose guard, 1 harness hazard |
+| P9 prevention | 3 guards, 4 rules, 1 fix |
+
+**The five I would fix first**, in order:
+
+1. **P5-07** — `applyDedupe` deletes **both** events after a group is dismissed.
+2. **P4-01** — sign-out reports success it never verified.
+3. **P2-01** — `aiFallback:false` persisted for the length of two model calls.
+4. **P5-06** — "Select all" on the export picker has never worked.
+5. **P5-01** — unrelated events silently merged as duplicates.
+
+**The finding that outlives all of them** is rule 25. Nine tools, nine wrong
+first drafts, on a codebase whose own conventions file already had a rule about
+reading prose instead of code. The method is not "be careful". It is: point the
+instrument at a known answer before believing anything else it says.
+

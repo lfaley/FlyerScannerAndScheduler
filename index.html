@@ -4338,7 +4338,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.61';
+const APP_VERSION = 'v9.62';
 const APP_TAGLINE = 'errors that explain themselves';
 
 function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
@@ -9378,7 +9378,7 @@ function setErrorReports(on){
 
 function mealPlanDiagnostic(){
   let raw = null, err = null;
-  try{ raw = localStorage.getItem('mealplan-out'); }catch(e){ err = e.message; }
+  try{ raw = localStorage.getItem(MEALPLAN_KEY); }catch(e){ err = e.message; }
 
   const lines = [];
   if(err){

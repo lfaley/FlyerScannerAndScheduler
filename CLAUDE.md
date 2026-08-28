@@ -278,6 +278,41 @@ having checked it.
    mutation-test the registration.
 24. Run `node tests.js` before every deploy; add a regression test with every
    bug fix; document every fix the turn it ships.
+25. AN ANALYSIS RESULT IS NOT EVIDENCE UNTIL IT HAS REPRODUCED SOMETHING
+   ALREADY KNOWN TO BE TRUE. The Aug 2026 code review wrote nine analysis
+   tools; **all nine were wrong on their first run** -- reading comments as
+   code, matching after a dot, brace-matching through template literals, a
+   `\b` that can never match after `[]`, an index mixed up between absolute
+   and relative. Two of those would have published false findings and one
+   would have DELETED two confirmed ones. The only reason they did not is
+   that each tool was pointed at a fact already established by hand before
+   its other output was believed. This generalises rule 21: it is not just
+   guards that read prose instead of code, it is the things you write to
+   check the guards. Validate the instrument on a known answer first.
+26. DISMISS IS AS PERMANENT AS DELETE HERE, AND WEARS NONE OF ITS MANNERS.
+   Delete is red, confirms or offers undo, and says what goes. Dismiss --
+   `dismissConflict`, `dismissGroup` -- writes a suppression that NOTHING in
+   the app can ever clear (`dismissedConflicts`, `notDuplicates`), from a
+   control that is not red, does not confirm, offers no undo, and in one case
+   is an unlabelled x. Logan asked "how am I supposed to dismiss one of
+   these?" on 26 Aug and the answer was that he already could, from two
+   different controls, neither of which said "dismiss". Any new suppression
+   needs a way back, a visible name, and the same warning weight as a delete.
+27. A CONSTANT SHARED WITH `gmail-watcher.gs` HAS NO IMPORT PATH -- PIN IT IN A
+   TEST. The watcher is pasted by hand at script.google.com and does not
+   deploy with the push, so the two surfaces drift silently and for weeks.
+   That is exactly what the 24 Aug queue-shape bug was, and it swallowed every
+   email. The Anthropic model, API version, endpoint and the `unauthorized`
+   error string are now pinned by a test that reads both files.
+28. THE INSTRUMENT YOU REACH FOR WHEN SOMETHING IS WRONG MUST NOT BE THE THING
+   THAT IS WRONG. Three independent instances in one review:
+   `compareProviders` persisting `aiFallback:false` for the length of two model
+   calls; `mealPlanDiagnostic` reading a raw key literal instead of
+   `MEALPLAN_KEY`, so a rename would make the "why no meals?" tool report
+   nothing while the app read correctly; and `downloadQuarantine` building the
+   rescue file inside an empty catch, so a partial dump downloads silently at
+   the one moment the data is already in trouble. Diagnostics, comparisons and
+   recovery paths get MORE care than features, not less.
 
 ## Verification tooling
 

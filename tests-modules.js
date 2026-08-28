@@ -3166,6 +3166,82 @@ module.exports = async function runModuleTests(test){
       'the date test now runs before the reference test -- undated refs get dropped');
   });
 
+
+  console.log('\nP9 — prevention guards from the code review (28 Aug 2026)');
+
+  // Each guard below names the finding that justifies it. A rule with no bug
+  // behind it gets ignored; a rule with one gets followed.
+
+  test('P8-02: tests.js refuses to run if a harness boundary marker is gone', () => {
+    // tests.js decides HOW MUCH OF THE APP TO EXECUTE by splitting on two
+    // comment banners (:86 and :92). Reword either -- an ordinary edit, and
+    // nothing said not to -- and the suite silently changes what it runs.
+    // Proven during P8: stripping comments removed the first marker, the
+    // sandbox then loaded the file-input wiring it normally excludes, and the
+    // whole suite died with "addEventListener is not a function" before a
+    // single test ran. A crash was the lucky outcome; the same edit the other
+    // way shrinks the tested surface with everything still green.
+    // The real protection is in tests.js, which exits early with an explanation.
+    // It HAS to be there: rewording a marker crashes the sandbox at load time,
+    // before any test can run, so a test could never have caught it. This guard
+    // exists to stop that early check being deleted.
+    const runner = fs.readFileSync('tests.js', 'utf8');
+    const code = runner.replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+    assert.ok(/BOUNDARIES\s*=\s*\[/.test(runner), 'the BOUNDARIES list is gone from tests.js');
+    assert.ok(/process\.exit\(1\)/.test(code),
+      'the boundary check no longer stops the run');
+    const markers = [...runner.matchAll(/'(\/\/[^']+)'/g)].map(m => m[1]);
+    assert.ok(markers.length >= 2, 'expected two boundary markers, found ' + markers.length);
+    markers.forEach(mk => assert.ok(html.includes(mk),
+      'tests.js splits index.html on a marker that is no longer in it: ' + mk));
+  });
+
+  test('P3-01: the meal-plan storage key is named once, not twice', () => {
+    // The constant existed so the key lived in one place, and
+    // mealPlanDiagnostic() read a raw 'mealplan-out' literal instead. If the
+    // recipe app ever renamed the key and MEALPLAN_KEY were updated, the app
+    // would read the new key correctly and THE DIAGNOSTIC WOULD KEEP READING
+    // THE OLD ONE and report that nothing is there -- the instrument you reach
+    // for when something is wrong would be the one thing still lying to you.
+    const code = script.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+    const decl = (code.match(/const MEALPLAN_KEY\s*=\s*'([^']+)'/) || [])[1];
+    assert.ok(decl, 'MEALPLAN_KEY is gone');
+    const raw = [...code.matchAll(new RegExp("'" + decl + "'", 'g'))].length;
+    assert.strictEqual(raw, 1,
+      "'" + decl + "' appears " + raw + " times in code; it must appear only in the MEALPLAN_KEY declaration");
+  });
+
+  test('P3-02: the app and the watcher agree on every Anthropic constant', () => {
+    // gmail-watcher.gs does NOT deploy with the push -- it is pasted by hand at
+    // script.google.com -- so these two surfaces can drift silently for weeks.
+    // That is exactly what the 24 Aug queue-shape bug was, and it swallowed
+    // every email. There is no import path between them, so a guard that reads
+    // both files is the only thing that can keep them equal.
+    const watcher = fs.readFileSync('gmail-watcher.gs', 'utf8')
+      .split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    const pick = (src, re, what) => {
+      const m = re.exec(src);
+      assert.ok(m, 'could not find ' + what);
+      return m[1];
+    };
+    const appModel = pick(script, /const MODEL = '([^']+)'/, 'MODEL in index.html');
+    const wModel   = pick(watcher, /var MODEL = '([^']+)'/, 'MODEL in gmail-watcher.gs');
+    assert.strictEqual(wModel, appModel,
+      'the Anthropic model name has drifted between the app and the watcher');
+
+    const appVer = pick(script, /'anthropic-version'\s*:\s*'([^']+)'/, "anthropic-version in index.html");
+    const wVer   = pick(watcher, /'anthropic-version'\s*:\s*'([^']+)'/, 'anthropic-version in gmail-watcher.gs');
+    assert.strictEqual(wVer, appVer, 'the Anthropic API version has drifted');
+
+    const appUrl = pick(script, /'(https:\/\/api\.anthropic\.com[^']*)'/, 'the endpoint in index.html');
+    assert.ok(watcher.includes(appUrl), 'the Anthropic endpoint has drifted');
+
+    // The watcher returns this string and the app string-matches it to turn it
+    // into "Token rejected — check the secret matches the script."
+    assert.ok(/'unauthorized'/.test(watcher) && /'unauthorized'/.test(script),
+      "the 'unauthorized' contract is no longer shared — the app would show the raw string");
+  });
+
   console.log('\nClash banner — keep only one (v9.59)');
 
   test('keepOnlyEvent is exported to window, or its links do nothing', () => {
