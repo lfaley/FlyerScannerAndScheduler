@@ -946,7 +946,129 @@ verified in code (`watcherConfigured` gating) and corroborated by Logan's own
 report. **Nothing reproduced on a device. No code was changed.**
 
 
-## P8 — Is the suite honest?  ·  status: NOT STARTED
+## P8 — Is the suite honest?  ·  status: COMPLETE  ·  28 Aug 2026
+
+**Question:** would these 656 tests fail if the code were wrong?
+
+This project has shipped a guard that read prose instead of code **five times**
+(`CLAUDE.md` rule 21 records the third; a fourth and fifth followed). So the
+phase does not ask the suite politely — it attacks it.
+
+### The experiment: delete every comment in `index.html` and run the suite
+
+A guard that reads code cannot notice. A guard that reads prose must fail. One
+mutation flushes out the entire class at once.
+
+**Result: 653 of 656 tests still pass.**
+
+The three failures:
+
+| Test | Verdict |
+|---|---|
+| `the inlined copies match js/ exactly` | **correct** — `js/` still has its comments, the inlined copies no longer do, so they genuinely differ. The guard working. |
+| `the inlined <style> matches css/ exactly` | **correct**, same reason |
+| `a failed combined read falls back instead of losing the email` | **a real prose-reading guard.** See P8-01 |
+
+**That is a good result and it deserves saying plainly.** After five recorded
+occurrences, the suite now has exactly one guard of that class left in it.
+
+### P8-01 — An ordering guarantee checked by the position of a comment  ·  REAL, occurrence six
+
+**Where:** `tests-cases.js:1999-2005`.
+
+```js
+const src = String(extractFromEmailPayload);
+assert.ok(/trying each part separately/.test(src), 'per-source passes remain as a fallback');
+assert.ok(src.indexOf('Pass 1') > src.indexOf('combined read'), 'combined is attempted first');
+```
+
+The first assertion is defensible: `'combined read found nothing; trying each
+part separately'` is a **string literal** the app pushes into `problems`
+(`index.html:7070`, `:7072`), so it is checking a message the user can see.
+
+The second is not. **`Pass 1` exists only in a comment** —
+`index.html:7077  // Pass 1: the body text. Any model can do this.` The test's
+own message says *"combined is attempted first"*, and what it actually verifies
+is where an English phrase sits relative to another. Reorder the two passes for
+real while leaving the comments alone and **the guard still passes**. Delete the
+comment and it fails while behaviour is byte-identical — which is how it was
+found.
+
+**Fix:** assert on the operative expressions, the way the `deploy.ps1` guards
+were fixed after rule 21 — those strip `#` comments first (`tests-modules.js:3054`)
+and pin `$m -lt $headStamp` directly. The pattern is already in the repo.
+
+### P8-02 — The harness's own scope is defined by two comments  ·  REAL, and nothing guards it
+
+**Where:** `tests.js:86` and `:92`.
+
+```js
+let app = html.split(openTag)[1].split('</script>')[0]
+  .split('// ---------- File input wiring ----------')[0]   // :86
+app = app.split('// Bridge for inline handlers.')[0]        // :92
+```
+
+**The suite decides how much of the app to execute by splitting on two comment
+banners.** Reword either one — a perfectly ordinary edit, and nothing in the
+repo says not to — and the suite silently changes what it runs.
+
+This is not hypothetical. **The first run of this phase's experiment did exactly
+that**: stripping comments removed the "File input wiring" banner, the sandbox
+then loaded code it normally excludes, and the entire suite died with
+`TypeError: document.getElementById(...).addEventListener is not a function`
+before a single test ran. A hard crash is the lucky outcome; the same edit made
+the other way would silently *shrink* the tested surface with everything still
+green.
+
+**Fix:** a guard asserting both markers still exist verbatim in `index.html`, or
+a marker that is code rather than prose. Two lines.
+
+### Nothing else was wrong, and that is a result
+
+- **Assertion-free tests: zero.** All 650 parsed test blocks contain at least
+  one `assert`.
+- **Skipped or disabled tests: zero.** No `test.skip`, no commented-out `test(`.
+- **Test files not loaded by the runner: zero.** All three on disk
+  (`tests-cases.js`, `tests-refactor.js`, `tests-modules.js`) are loaded by
+  `tests.js`.
+
+### The load-bearing guards, mutation-tested
+
+`CODE-REVIEW-PLAN.md` P8 says to check these specifically, because they are what
+the whole workflow rests on and nothing guards *them*.
+
+| Guard | Mutation | Result |
+|---|---|---|
+| inlined copies match `js/` | `ASSUMED_MINUTES` 60 → 61 in `js/conflicts.js` | **RED** (done in P1) |
+| refuses a build older than its commit | `$m -lt $headStamp` → `$false` | **RED** |
+| written for PowerShell 5.1 | inject `&&` into `deploy.ps1` | **RED** |
+| tests gate the push on the summary line | `0 failed` → `0 failures` | **RED** |
+
+All four fire. The rule-21 fix held: the stale-build guard pins the operative
+expression, not the words next to it.
+
+### CORRECTION — my ninth method error in eight phases
+
+My first pass at "tests with no assertion" reported **28** of them in
+`tests-modules.js`, including several I wrote myself this week and know contain
+asserts. The block-extractor was brace-matching, and braces occur inside
+template literals and regexes, so it truncated bodies early. Re-parsed by
+splitting on `test(` boundaries instead: **the real number is zero.**
+
+Caught only because the output named tests I personally wrote. That is luck, not
+method — and it is the same shape as P6's near-miss, where the tool disagreed
+with a fact already established by hand.
+
+**This is now the most consistent finding of the entire review.** Nine analysis
+tools, nine first drafts wrong. The rule it produces is not "be careful"; it is
+concrete: **an analysis result is not evidence until it has reproduced something
+already known to be true.** Every tool from P6 onward was validated that way
+first, and that is the only reason P6 and P7 did not publish false findings.
+
+**Verified vs diagnosed:** every claim here was verified by running the suite —
+the comment-strip experiment and four separate guard mutations, all executed.
+**Nothing in P8 is diagnosed-only.** No code was changed.
+
 
 Two entries are already waiting for this phase, both found by ordinary feature
 work rather than by looking:
