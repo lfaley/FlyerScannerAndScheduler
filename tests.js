@@ -119,6 +119,12 @@ vm.runInContext(fs.readFileSync(__dirname + '/tests-cases.js', 'utf8'), box,
 // imports, so they must be awaited -- hence the async wrapper.
 (async () => {
   try {
+    // Async in-page tests register a promise instead of a result. Settle them
+    // BEFORE the summary, or an async failure is printed after the count and
+    // never counted (found 28 Aug when node exited 1 on "0 failed").
+    if (Array.isArray(box.pendingTests) && box.pendingTests.length) {
+      await Promise.all(box.pendingTests);
+    }
     const runRefactorTests = require(__dirname + '/tests-refactor.js');
     runRefactorTests((name, fn) => {
       try { fn(); box.results.passed++; console.log('  ok    ' + name); }

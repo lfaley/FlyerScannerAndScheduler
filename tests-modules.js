@@ -2801,9 +2801,14 @@ module.exports = async function runModuleTests(test){
     // the assistant is CALLED, whichever model actually answered.
     assert.ok(/function aiName\(\)\{ return ASSISTANT_NAME; \}/.test(script),
       'aiName has stopped being a plain display name');
-    const fn = script.split('function aiProvider(')[1].split('\n')[0];
+    // Read the whole BODY, not the first line. aiProvider() grew a second line
+    // in v9.63 (the in-memory override that replaced writing S.settings), and a
+    // guard that reads one line pins the SHAPE of a function rather than what
+    // it does -- the same defect fixed in the nav() guard in v9.61.
+    const fn = script.split('function aiProvider(')[1].split('\n}')[0];
     assert.ok(/'local' : 'anthropic'/.test(fn),
       'aiProvider now returns something other than local/anthropic: ' + fn);
+    assert.ok(!/aiOverride\s*=/.test(fn), 'aiProvider must READ the override, never set it');
     assert.ok(!/aiProvider\(\)\s*===\s*'gordon'|aiProvider:\s*'gordon'/i.test(script),
       "'gordon' is being used as a provider value");
   });

@@ -673,6 +673,75 @@ their status and are the first work of any P5 follow-up.**
 | P5-15 | `:5527` | `open = showPast \|\| !!eventSearch`, but the button still toggles `showPast` | With a search active, tapping "Past events (N)" **does nothing** |
 | P5-16 | `:9925` | `GORDON_BASE_URL` is a non-empty literal and `.replace(/\/+$/,'')` cannot empty it, so `if(!base)` is unreachable | The self-test can never report "Base URL: empty". A device with nothing configured **passes a check it should fail**, silently testing the hard-coded endpoint |
 
+### P8-03 — the suite could print "0 failed" while a test had failed  ·  REAL, found by the deploy gate
+
+**Found 28 Aug, not by looking — by `deploy.ps1` refusing a push:**
+
+```
+4. Tests
+    node tests.js
+X   Tests printed '666 passed, 0 failed' but node exited 1.
+X   Nothing was committed and nothing was pushed.
+```
+
+**Where:** `tests-cases.js`'s `test()` called `fn()` and counted the result
+immediately. An **async** test returns a promise, so it was counted as PASSED
+the instant it started, and any later rejection became an unhandled rejection —
+printed by Node *after* the summary line, never counted, never seen.
+
+`test('the comparison restores the original provider even when a side fails',
+async () => {…})` had failed. The summary said **0 failed**.
+
+**Two separate defects, both fixed:**
+
+1. **The harness.** `test()` now registers a promise in `pendingTests`, and
+   `tests.js` awaits them **before** printing the summary. An async failure is
+   now a failure like any other.
+2. **The test itself was passing by accident.** Being async, its assertions ran
+   long after the synchronous suite had finished and other tests had moved the
+   shared `S.settings` on. It only ever passed because the old
+   `compareProviders` wrote `'anthropic'` back into the shared object on its way
+   out. It now asserts only what is genuinely async and genuinely local — that a
+   **failed** comparison still drops `aiOverride`, so no later AI call inherits
+   it. The "never writes `S.settings`" guarantee is asserted synchronously,
+   where it can be trusted.
+
+**What this says about the gate.** `CLAUDE.md` rule 18 makes `deploy.ps1` check
+**both** the printed summary and the exit code. That redundancy looked like
+belt-and-braces. It is the only reason this was caught: the summary was lying
+and the exit code was not. **I had been grepping stdout for "passed," through
+eight phases and never once checked the exit code** — a straightforward failure
+to validate the gate in the form the gate runs it, which is standing rule 3 of
+this very review.
+
+**Honest note on the proof.** I planted a deliberately failing async test and
+confirmed it is now counted (`668 passed, 1 failed`, exit 1). My attempted
+"before" control did **not** reproduce the old behaviour — reverting only the
+runner's `await` still left the rejection handler attached, so it was counted
+anyway. The real evidence for the old behaviour is the observed run above and
+its reproduction here: `0 failed`, exit 1, `AssertionError` on stderr.
+
+### P5 follow-up — five of the twelve verified, 28 Aug 2026
+
+| # | Candidate | Verdict |
+|---|---|---|
+| `dismissOneEmail` `:7254` | dismissing an unreadable email records nothing | **CONFIRMED — and it costs money.** It filters the row off screen and never touches `seenMsgs`, so `fetchEmailQueue` offers the same msgId on the next check and the app fetches and re-extracts it. Every 20 minutes, indefinitely. `dismissPendingEmail()` has always recorded it; this path did not. **FIXED v9.64.** |
+| `checkEmail` `:7019` | `pendingEmailCount` never cleared on an empty check | **CONFIRMED.** `openEmailReviewNow()` resets it on empty; `checkEmail()` saves and returns without doing so, leaving "N waiting" on the Events tab with nothing behind it. **FIXED v9.64.** |
+| `extractFromEmailPayload` `:7114` | a progress note is filed as a failure | **CONFIRMED.** `'combined read found nothing; trying each part separately'` is pushed into `problems`, and `:7198` turns **every** entry into a review-box failure *and* a `logProblem()` row. An email whose per-part passes then succeed still produces a Problem Log entry and a retriable "trouble" row. Same symptom migration v7 was written to clean up. **Not fixed** — which notes count as failures is a judgement call about your Problem Log. |
+| `callAI` `:4448` | the fallback toast and log are emitted before Anthropic answers | **CONFIRMED, minor.** `recordAiCall(fellBackTo)` and *"Read by Anthropic…"* both run before `return await callClaude(...)`. If Anthropic then fails, the user has already been told it succeeded. Same family as P4-01: asserting an outcome not yet achieved. |
+| `retryEmailTrouble` `:7411` | retry does not de-duplicate by msgId | **NOT CONFIRMED — refuted.** `pendingMsgIds` is de-duped through `new Set` at `:7425`, and `markDuplicates(out, pendingEvents)` guards the entries. The reader's mechanism was wrong. |
+
+**Seven candidates still unverified**, and they stay marked as such: `:475`
+`daysUntil`, `:1667` the citation regex ceiling, `:3670` `contextFromPs`
+falling back to another model's window, `:4522` the cached context never
+invalidated, `:6151`/`:6156` the disambiguated `check_list_item`, `:5950` the
+clarify-options gate, `:8232` `saveReview` provenance, `:9473`/`:9508` the
+recipe batch counter and the discarded recipe, `:10065` the comparison setup
+error, `:10464` the person-colour collision.
+
+**One refutation out of five is the point of this pass.** A reader's report is a
+lead, not a finding.
+
 ### Reported, mechanism read, NOT yet independently verified
 
 Recorded so nothing is lost, and so the line between what I checked and what I
@@ -1167,7 +1236,35 @@ Nine phases, `00d6521` (v9.61) → **659 passing, 0 failing**.
 | P8 suite honesty | **653/656 survive comment deletion**; 1 prose guard, 1 harness hazard |
 | P9 prevention | 3 guards, 4 rules, 1 fix |
 
-**The five I would fix first**, in order:
+## FIXED in v9.63 — 28 Aug 2026
+
+All five, each with a regression test that fails without the fix, each
+mutation-tested (six mutations, six killed).
+
+| # | Fix | Guard |
+|---|---|---|
+| **P5-07** | `dedupeKeep` is keyed by the group's member ids (`dedupeGroupKey`), not its position, and a keep-id that belongs to no member of the group is refused | 2 tests; a full revert to index keying turns 4 tests red |
+| **P4-01** | `clearGordonSession()` reads the key back and returns whether it is really gone; `gordonSignOutUI()` alerts and logs a Problem instead of claiming success | 1 test driving a throwing `removeItem` |
+| **P2-01** | `compareProviders` forces a provider through an in-memory `aiOverride` and never writes `S.settings`; `aiFallbackOn()` is now the single read point for the fallback | 2 tests, one pinning that `S.settings.x =` appears nowhere in the function |
+| **P5-06** | `toggleAllExportPick()` takes no argument and derives the ids from `exportCandidates()` — the same helper the screen renders from | 2 tests |
+| **P5-01** | `titleSimilarity` compares **sets**, not multisets (fixed in `js/matching.js`, the source, and re-inlined) | 1 test asserting the false match is gone AND the real matches still work |
+
+Two follow-on improvements fell out of the fixes rather than being sought:
+`exportCandidates()` gives "which events can be exported" one definition
+instead of two, and `aiFallbackOn()` collapses four scattered reads of one fact
+into one — both P3 wins for free.
+
+**Three existing tests had to be updated**, none of them loosened: two dedupe
+tests called `setDedupeKeep(0, …)` and now use the group key; the comparison
+test pinned the *old* mechanism (`aiFallback = false`) and now pins the new one
+plus the guarantee it buys. A fourth — `Gordon is a display name, never a
+provider` — read only the **first line** after `function aiProvider(`, so it
+went red when the function grew a second line while behaving correctly. Same
+defect as the `nav()` guard in v9.61; widened to read the whole body.
+
+---
+
+**The five, before they were fixed**, in the order they were tackled:
 
 1. **P5-07** — `applyDedupe` deletes **both** events after a group is dismissed.
 2. **P4-01** — sign-out reports success it never verified.

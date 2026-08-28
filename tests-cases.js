@@ -9,8 +9,26 @@ sub = () => {};
 // don't want a 20s JSONP timeout logging noise over real failures.
 jsonpRequest = () => Promise.resolve({ ok: true, items: [] });
 
+// An ASYNC test used to be counted as passed the instant it returned its
+// promise, and any later rejection became an unhandled rejection -- printed
+// after the summary line, invisible to the count. `node tests.js` reported
+// "666 passed, 0 failed" while a test had actually failed; only deploy.ps1's
+// exit-code check caught it (CLAUDE.md rule 18 earning its keep).
+//
+// Promises are collected here and awaited by tests.js BEFORE the summary, so an
+// async failure is a failure like any other.
+const pendingTests = [];
 function test(name, fn){
-  try { fn(); results.passed++; console.log('  ok    ' + name); }
+  try {
+    const r = fn();
+    if(r && typeof r.then === 'function'){
+      pendingTests.push(r.then(
+        () => { results.passed++; console.log('  ok    ' + name); },
+        (e) => { results.failed++; console.error('  FAIL  ' + name + '\n        ' + (e && e.message)); }));
+      return;
+    }
+    results.passed++; console.log('  ok    ' + name);
+  }
   catch(e){ results.failed++; console.error('  FAIL  ' + name + '\n        ' + e.message); }
 }
 
@@ -660,7 +678,7 @@ test('choosing "keep both" removes nothing', () => {
     { id:'q', title:'Open House Night', date:d, kind:'event', deleted:false }
   ];
   openDedupe();
-  setDedupeKeep(0, null);
+  setDedupeKeep(dedupeGroupKey(duplicateGroups()[0]), null);   // "keep both"
   applyDedupe();
   assert.strictEqual(S.events.filter(e => !e.deleted).length, 2, 'both survive');
 });
@@ -1144,7 +1162,7 @@ test('choosing keep both stops the pair being flagged again', () => {
   ];
   assert.strictEqual(duplicateGroups().length, 1, 'flagged first');
   openDedupe();
-  setDedupeKeep(0, null);        // "keep both"
+  setDedupeKeep(dedupeGroupKey(duplicateGroups()[0]), null);   // "keep both"
   applyDedupe();
   assert.strictEqual(S.events.filter(e=>!e.deleted).length, 2, 'nothing deleted');
   assert.strictEqual(duplicateGroups().length, 0, 'banner clears');
@@ -1852,22 +1870,70 @@ test('extraction problems are recorded for the user, not swallowed', () => {
 
 console.log('\nSelf-test and comparison');
 
-test('the comparison restores the original provider even when a side fails', async () => {
-  boot(GOOD);
-  S.settings.aiProvider = 'anthropic';
-  S.settings.aiFallback = true;
-  // readImageDownscaled will throw on a non-file; the finally block must still run.
+test('the comparison leaves the saved provider alone, even when a side fails', async () => {
+  // This test used to assert that compareProviders RESTORED S.settings after
+  // mutating them. Since v9.63 it never mutates them, so there is nothing to
+  // restore -- the guarantee got stronger, and the assertion has to say so.
+  //
+  // It also used to pass by accident: being async, its assertions ran long
+  // after the synchronous suite had finished and other tests had moved the
+  // shared settings on. It now reads the values it set itself, and the harness
+  // awaits it.
+  // Asserts ONLY what is genuinely async and genuinely local to this test.
+  // Anything read from S after an await is read after the rest of the
+  // synchronous suite has run and moved the shared settings on -- which is how
+  // the old version of this test passed by accident for months. The
+  // "never writes S.settings" guarantee is asserted synchronously in the test
+  // below, where it can be trusted.
+  aiOverride = null;
+  // readImageDownscaled throws on a non-file, so the try never completes; the
+  // finally must still drop the override.
   await compareProviders({ name:'not-a-real-file' });
-  assert.strictEqual(S.settings.aiProvider, 'anthropic', 'provider restored');
-  assert.strictEqual(S.settings.aiFallback, true, 'fallback setting restored');
+  assert.strictEqual(aiOverride, null,
+    'the override outlived a failed comparison — every later AI call would inherit it');
 });
 
-test('comparison disables fallback so neither provider answers for the other', () => {
-  // Documented intent: without this, a failing local call silently returns
-  // Anthropic's answer and the comparison would show two identical columns.
+test('comparison forces a provider WITHOUT touching saved settings', () => {
+  // Intent unchanged: without forcing, a failing local call silently returns
+  // Anthropic's answer and the comparison shows two identical columns.
+  //
+  // What changed in v9.63 is HOW. It used to write S.settings and restore them
+  // in a finally -- and recordAiCall() saves on every AI call, so those
+  // temporary values reached localStorage for the length of two model calls.
+  // Kill the app there and the user keeps aiFallback:false with nothing saying
+  // so. Reproduced against the real code by
+  // tools/p2-repro-compare-provider.js (code review P2-01).
   const src = String(compareProviders);
-  assert.ok(/aiFallback = false/.test(src), 'fallback is switched off during the run');
-  assert.ok(/finally/.test(src), 'and restored in a finally block');
+  assert.ok(/aiOverride = \{ provider:null, fallback:false \}/.test(src),
+    'the comparison no longer forces the fallback off');
+  assert.ok(/aiOverride\.provider = 'anthropic'/.test(src) && /aiOverride\.provider = 'local'/.test(src),
+    'it no longer forces each provider in turn');
+  assert.ok(/finally\s*\{[^}]*aiOverride = null/.test(src),
+    'the override is not dropped in a finally');
+  // THE GUARANTEE: saved settings are never written at all, so a finally that
+  // never runs cannot leave anything wrong on disk.
+  assert.ok(!/S\.settings\.\w+\s*=/.test(src),
+    'compareProviders writes S.settings again — that is the bug P2-01 fixed');
+});
+
+test('the override is read, not just written — and it never reaches storage', () => {
+  boot(GOOD);
+  S.settings.aiProvider = 'local';
+  S.settings.aiFallback = true;
+  save();
+  assert.strictEqual(aiProvider(), 'local');
+  assert.strictEqual(aiFallbackOn(), true);
+
+  aiOverride = { provider:'anthropic', fallback:false };
+  assert.strictEqual(aiProvider(), 'anthropic', 'the override does not reach aiProvider()');
+  assert.strictEqual(aiFallbackOn(), false, 'the override does not reach aiFallbackOn()');
+  const disk = JSON.parse(localStorage.getItem('flyersnap'));
+  assert.strictEqual(disk.settings.aiProvider, 'local', 'the override was persisted');
+  assert.strictEqual(disk.settings.aiFallback, true, 'the override was persisted');
+
+  aiOverride = null;
+  assert.strictEqual(aiProvider(), 'local', 'dropping the override does not restore');
+  assert.strictEqual(aiFallbackOn(), true);
 });
 
 test('the self-test checks every stage the scanner depends on', () => {
@@ -3133,4 +3199,153 @@ test('going back from a list detail returns to the Lists area, not to Notes', ()
   assert.strictEqual(view.tab, 'notes');
   assert.strictEqual(view.sub, null);
   assert.strictEqual(notesArea(), 'lists', 'it dumped you on the wrong half');
+});
+
+console.log('\nCode-review fixes (v9.63)');
+
+test('P5-07: dismissing one duplicate group does not destroy the next one', () => {
+  // dedupeKeep was keyed by the group's POSITION. dismissGroup() removes a
+  // group, duplicateGroups() is recomputed, everything shifts down one -- and
+  // dedupeKeep still held the id chosen for whatever used to be at that index.
+  // With that id in no surviving group, `e.id !== keep` was true for EVERY
+  // member and applyDedupe deleted BOTH events instead of one.
+  boot(GOOD);
+  const d1 = dayAhead(3), d2 = dayAhead(4);
+  S.events = [
+    { id:'a1', title:'Open House', date:d1, kind:'event', deleted:false },
+    { id:'a2', title:'Open House Night', date:d1, kind:'event', deleted:false },
+    { id:'b1', title:'Picture Day', date:d2, kind:'event', deleted:false },
+    { id:'b2', title:'Picture Day Reminder', date:d2, kind:'event', deleted:false },
+  ];
+  assert.strictEqual(duplicateGroups().length, 2, 'expected two groups to start');
+  openDedupe();
+  dismissGroup(0);                                  // "Not duplicates" on the first
+  assert.strictEqual(duplicateGroups().length, 1, 'one group should remain');
+  applyDedupe();
+  const live = S.events.filter(e => !e.deleted).map(e => e.id).sort();
+  // The dismissed pair survives whole, and the remaining group loses exactly
+  // the copy that was not chosen -- never both.
+  assert.ok(live.includes('a1') && live.includes('a2'), 'the dismissed pair was destroyed');
+  assert.strictEqual(live.filter(id => id[0] === 'b').length, 1,
+    'the surviving group lost both events instead of one: ' + live.join(','));
+});
+
+test('P5-07: a keep-id belonging to no member of the group is refused', () => {
+  // Belt and braces on the same failure: even with a stable key, an id that is
+  // not in THIS group must never mean "keep this one".
+  boot(GOOD);
+  const d = dayAhead(5);
+  S.events = [
+    { id:'x', title:'Concert', date:d, kind:'event', deleted:false },
+    { id:'y', title:'Concert Night', date:d, kind:'event', deleted:false },
+  ];
+  openDedupe();
+  setDedupeKeep(dedupeGroupKey(duplicateGroups()[0]), 'not-in-this-group');
+  applyDedupe();
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 2,
+    'a bogus keep-id deleted the whole group');
+});
+
+test('P4-01: sign-out only claims success when the token is really gone', () => {
+  boot(GOOD);
+  const realRemove = localStorage.removeItem;
+  const realAlert = alert, realToast = toast;
+  let alerted = null, toasted = null;
+  alert = (m) => { alerted = m; };
+  toast = (m) => { toasted = m; };
+
+  // Storage refuses the write -- private mode, storage access denied.
+  localStorage.setItem('flyersnap.gordon.session', '{"idToken":"x"}');
+  localStorage.removeItem = () => { throw new Error('QuotaExceededError'); };
+  assert.strictEqual(clearGordonSession(), false, 'it claimed success while throwing');
+  gordonSignOutUI();
+  assert.ok(alerted && /Could not sign out/.test(alerted),
+    'the user was told they signed out when they did not');
+  assert.strictEqual(toasted, null, 'it toasted success anyway');
+
+  // ...and the normal path still works.
+  localStorage.removeItem = realRemove;
+  alerted = null; toasted = null;
+  assert.strictEqual(clearGordonSession(), true);
+  gordonSignOutUI();
+  assert.strictEqual(alerted, null, 'a successful sign-out must not alert');
+  assert.ok(toasted && /Signed out/.test(toasted), 'a successful sign-out says so');
+
+  alert = realAlert; toast = realToast;
+});
+
+test('P5-06: Select all on the export picker actually selects them all', () => {
+  // The ids used to be serialised into the onclick attribute with
+  // JSON.stringify -- double quotes, inside a double-quoted attribute -- so the
+  // browser truncated the handler and the control had never worked at all.
+  boot(GOOD);
+  const d = dayAhead(2);
+  S.events = [
+    { id:'e1', title:'A', date:d, kind:'event', deleted:false },
+    { id:'e2', title:'B', date:d, kind:'event', deleted:false },
+    { id:'e3', title:'C', date:dayAhead(3), kind:'event', deleted:false },
+  ];
+  exportPick = new Set();
+  toggleAllExportPick();
+  assert.strictEqual(exportPick.size, 3, 'select all did not select every candidate');
+  toggleAllExportPick();
+  assert.strictEqual(exportPick.size, 0, 'a second tap should clear them');
+});
+
+test('P5-06: the handler takes no argument, so nothing is serialised into markup', () => {
+  const m = { innerHTML:'' };
+  boot(GOOD);
+  S.events = [{ id:'e1', title:'A', date:dayAhead(2), kind:'event', deleted:false }];
+  exportPick = new Set();
+  renderPickExport(m);
+  assert.ok(/toggleAllExportPick\(\)/.test(m.innerHTML), 'the control is gone');
+  assert.ok(!/toggleAllExportPick\(\[/.test(m.innerHTML),
+    'ids are being serialised into the attribute again — that is what broke it');
+});
+
+test('P5-01: a repeated word no longer merges two unrelated events', () => {
+  // Overlap counted A as a MULTISET while dividing by the shorter title's word
+  // count, so one repeated word could reach 1.0.
+  const d = dayAhead(4);
+  const a = { date:d, title:'Grade 3 and Grade 4 and Grade 5 Swim' };
+  const b = { date:d, title:'Grade 6 Trip' };
+  assert.strictEqual(looksDuplicate(a, b), false,
+    'two unrelated events on the same day still merge as duplicates');
+
+  // ...and the thing the function exists for still works.
+  assert.strictEqual(looksDuplicate(
+    { date:d, title:'Picture Day' },
+    { date:d, title:'Fall Picture Day for Grades 1-5' }), true,
+    'a real containment match was broken by the fix');
+  assert.strictEqual(looksDuplicate(
+    { date:d, title:'Open House' },
+    { date:d, title:'Open House' }), true, 'identical titles must still match');
+});
+
+test('dismissing an unreadable email records it, so it is not re-read forever', () => {
+  // Verified during the P5 follow-up: dismissOneEmail() removed the row from
+  // the screen and recorded NOTHING, so fetchEmailQueue offered the same msgId
+  // on the next check and the app fetched and re-extracted it at model cost --
+  // every 20 minutes, indefinitely.
+  boot(GOOD);
+  S.settings.seenMsgs = [];
+  lastEmailProblems = [{ subject:'Newsletter', reason:'No dates found', msgId:'m1', retriable:false }];
+  pendingEvents = [{ title:'x', date:dayAhead(1), selected:true }];
+  dismissOneEmail('m1');
+  assert.ok((S.settings.seenMsgs || []).includes('m1'),
+    'the dismissed message was not recorded — it will be re-read and re-billed');
+  S = load();
+  assert.ok((S.settings.seenMsgs || []).includes('m1'), 'and it did not survive a reload');
+  pendingEvents = [];
+});
+
+test('an empty email check clears the waiting badge', () => {
+  // openEmailReviewNow() reset the count on an empty result; checkEmail() did
+  // not, so a queue that emptied any other way left "N waiting" on the Events
+  // tab with nothing behind it.
+  boot(GOOD);
+  const src = String(checkEmail);
+  const empty = src.split('if(!fresh.length)')[1].split('}')[0];
+  assert.ok(/pendingEmailCount = 0/.test(empty),
+    'the empty-result path does not clear the badge');
 });

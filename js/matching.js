@@ -21,8 +21,13 @@ export function normTitle(t){
 // Overlap measured against the shorter title, so "Picture Day" still matches
 // "Fall Picture Day for Grades 1-5".
 export function titleSimilarity(a, b){
-  const A = normTitle(a).split(' ').filter(Boolean);
-  const B = normTitle(b).split(' ').filter(Boolean);
+  // Compare SETS, not multisets. Counting repeats on the A side while dividing
+  // by the shorter title's word count let one repeated word drive the score to
+  // 1.0: "Grade 3 and Grade 4 and Grade 5 Swim" vs "Grade 6 Trip" on the same
+  // day scored as duplicates. Verified against looksDuplicate before and after
+  // (code review P5-01).
+  const A = [...new Set(normTitle(a).split(' ').filter(Boolean))];
+  const B = [...new Set(normTitle(b).split(' ').filter(Boolean))];
   // A title made entirely of stop-words normalises to nothing ("The Note",
   // "A", a single letter). Returning 0 here meant two BYTE-IDENTICAL titles
   // scored as completely unlike each other -- so looksDuplicate missed them,

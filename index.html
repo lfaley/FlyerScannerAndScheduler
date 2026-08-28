@@ -596,8 +596,13 @@ function normTitle(t){
 // Overlap measured against the shorter title, so "Picture Day" still matches
 // "Fall Picture Day for Grades 1-5".
 function titleSimilarity(a, b){
-  const A = normTitle(a).split(' ').filter(Boolean);
-  const B = normTitle(b).split(' ').filter(Boolean);
+  // Compare SETS, not multisets. Counting repeats on the A side while dividing
+  // by the shorter title's word count let one repeated word drive the score to
+  // 1.0: "Grade 3 and Grade 4 and Grade 5 Swim" vs "Grade 6 Trip" on the same
+  // day scored as duplicates. Verified against looksDuplicate before and after
+  // (code review P5-01).
+  const A = [...new Set(normTitle(a).split(' ').filter(Boolean))];
+  const B = [...new Set(normTitle(b).split(' ').filter(Boolean))];
   // A title made entirely of stop-words normalises to nothing ("The Note",
   // "A", a single letter). Returning 0 here meant two BYTE-IDENTICAL titles
   // scored as completely unlike each other -- so looksDuplicate missed them,
@@ -928,7 +933,20 @@ function loadGordonSession(){
   }catch(e){ return null; }
 }
 function saveGordonSession(s){ try{ localStorage.setItem(GORDON_SESSION_KEY, JSON.stringify(s)); }catch(e){} }
-function clearGordonSession(){ try{ localStorage.removeItem(GORDON_SESSION_KEY); }catch(e){} }
+/**
+ * Remove the stored Gordon session. Returns TRUE only if the key is really gone.
+ *
+ * The old version swallowed the error and the caller announced success anyway.
+ * A sign-out that fails silently leaves the ID token on the device while the
+ * user is told it is gone -- the one place in the app that claimed a security
+ * outcome without checking it (code review P4-01).
+ */
+function clearGordonSession(){
+  try{
+    localStorage.removeItem(GORDON_SESSION_KEY);
+    return localStorage.getItem(GORDON_SESSION_KEY) === null;
+  }catch(e){ return false; }
+}
 function gordonSignedInEmail(){ const s = loadGordonSession(); return s ? s.email : null; }
 
 // A fresh Firebase ID token for the proxy, or null if not signed in. Refreshes
@@ -4338,10 +4356,30 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.62';
+const APP_VERSION = 'v9.64';
 const APP_TAGLINE = 'errors that explain themselves';
 
-function aiProvider(){ return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }
+/**
+ * A provider forced for the current operation, or null. In memory ONLY -- never
+ * saved, so nothing it does can outlive the call that set it.
+ *
+ * Before v9.63, compareProviders() forced a provider by writing S.settings and
+ * restoring it in a finally. recordAiCall() saves on every AI call, so those
+ * temporary values were persisted for the whole comparison; if the app died in
+ * that window the finally never ran and the user kept an aiFallback of false
+ * with nothing on screen saying so (code review P2-01, reproduced).
+ */
+let aiOverride = null;
+function aiProvider(){
+  if(aiOverride && aiOverride.provider) return aiOverride.provider;
+  return S.settings.aiProvider === 'local' ? 'local' : 'anthropic';
+}
+// The single read point for "may this call fall back?", so an override has one
+// place to apply and the four scattered reads become one.
+function aiFallbackOn(){
+  if(aiOverride && aiOverride.fallback !== undefined) return aiOverride.fallback;
+  return !!S.settings.aiFallback;
+}
 
 // Why AI can't run a scan right now, worded for the ACTIVE provider — or null when
 // it's ready. The scan entry points used to check `!S.settings.apiKey` unconditionally,
@@ -4395,12 +4433,12 @@ async function callAI(contentBlocks, maxTokens, system, op){
       // so, rather than the generic "did not answer," so a busy Gordon reads as
       // transient and the user retries instead of assuming it's down.
       const rateLimited = localFail.errorType === 'rate_limit';
-      if(needAuth && !S.settings.aiFallback){
+      if(needAuth && !aiFallbackOn()){
         recordAiCall(localFail);
         logProblem('Gordon', 'Sign in to use the local model (Settings → Gordon and AI)', aiModelName());
         throw new Error('Sign in to use Gordon.\n\nOpen Settings → Gordon and AI and sign in — or turn on "Fall back to Anthropic".');
       }
-      if(S.settings.aiFallback){
+      if(aiFallbackOn()){
         recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
         // WORDING MATTERS. This used to read "Local model unavailable — using
         // Anthropic", which on a phone toast reads as "...unavailable ...
@@ -5166,7 +5204,13 @@ function clearCompare(){ compareResult = null; render(); }
 function startCompare(){ compareResult = null; sub('compare'); }
 function closeRecipeForm(){ recipeForm = null; recipeBatch = null; sub('recipeBox'); }
 function newRecipeForm(){ recipeForm = { title:'', category:'Dinner', ingredients:'', instructions:'' }; sub('recipeForm'); }
-function toggleAllExportPick(ids){
+function toggleAllExportPick(){
+  // The ids used to be serialised into the onclick attribute with
+  // JSON.stringify -- which emits double quotes, inside a double-quoted
+  // attribute, so the browser truncated the handler and the control never
+  // worked at all (code review P5-06). Read them from the same place the
+  // screen does instead.
+  const ids = exportCandidates().map(e => e.id);
   exportPick = (exportPick.size === ids.length) ? new Set() : new Set(ids);
   renderPickExport(document.getElementById('main'));
 }
@@ -6973,6 +7017,10 @@ async function checkEmail(silent){
     const { fresh } = await fetchEmailQueue();
     S.settings.lastEmailCheck = new Date().toISOString();
     if(!fresh.length){
+      // Nothing waiting means the badge must say nothing waiting.
+      // openEmailReviewNow() already did this; this path did not, so a queue
+      // that emptied any other way left a stale count on the Events tab.
+      S.settings.pendingEmailCount = 0;
       save();
       if(silent){ render(); } else { toast('No new events in your email'); back(); }
       return;
@@ -7210,6 +7258,15 @@ function dismissEmailTrouble(){
 function dismissOneEmail(msgId){
   lastEmailProblems = lastEmailProblems.filter(p => !(p && p.msgId === msgId));
   if(emailReviews[msgId]) delete emailReviews[msgId];
+  // RECORD IT AS SEEN. Without this the watcher offers the same message on the
+  // next check, and the app fetches and re-extracts it -- at model cost -- every
+  // time, forever. dismissPendingEmail() has always done this; this path did
+  // not (code review, P5 candidate verified 28 Aug). "Re-import past emails"
+  // in Settings is still the way back.
+  if(msgId){
+    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs || []).concat([msgId]))].slice(-400);
+    save();
+  }
   if(!lastEmailProblems.length && !pendingEvents.length){ nav('events'); return; }
   render();
 }
@@ -7557,17 +7614,20 @@ function startPickedExport(){
   view = { tab:'events', sub:null, data:null };
   render();
 }
+function exportCandidates(){
+  return S.events.filter(e=>!e.deleted && e.date>=todayISO())
+    .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
+}
 function renderPickExport(m){
   setHeader('Choose Events', true);
-  const evts = S.events.filter(e=>!e.deleted && e.date>=todayISO())
-    .sort((a,b)=> a.date===b.date ? String(a.time||'99').localeCompare(String(b.time||'99')) : a.date.localeCompare(b.date));
+  const evts = exportCandidates();
   if(!evts.length){
     m.innerHTML = `<div class="empty"><div class="eb">No upcoming events to add.</div></div>`;
     return;
   }
   let html = `<div class="help">Tick the events to add to your calendar, then start. Already-added events show 📆 — adding again won't duplicate them.</div>
     <div style="text-align:right;margin-bottom:6px">
-      <button class="linkbtn" style="padding:2px 8px" onclick="toggleAllExportPick(${JSON.stringify(evts.map(e=>e.id))})">${exportPick.size===evts.length?'Clear all':'Select all'}</button></div>`;
+      <button class="linkbtn" style="padding:2px 8px" onclick="toggleAllExportPick()">${exportPick.size===evts.length?'Clear all':'Select all'}</button></div>`;
   html += evts.map(e=>{
     const on = exportPick.has(e.id);
     const ppl = eventPeople(e);
@@ -7670,20 +7730,35 @@ function bestOfGroup(group){
 
 let dedupeKeep = {};      // groupIndex -> event id to keep
 
+/**
+ * A group's identity, independent of where it currently sits in the list.
+ *
+ * dedupeKeep used to be keyed by the group's INDEX. dismissGroup() removes a
+ * group and duplicateGroups() is recomputed, so every later group shifts down
+ * one -- while dedupeKeep still held the id chosen for whatever used to be at
+ * that index. When that id belonged to no surviving group, `e.id !== keep` was
+ * true for every member and applyDedupe deleted BOTH events instead of one.
+ * Found by the Aug 2026 code review (P5-07).
+ */
+function dedupeGroupKey(g){ return g.map(e => e.id).sort().join('~'); }
+
 function openDedupe(){
   dedupeKeep = {};
-  duplicateGroups().forEach((g, i) => { dedupeKeep[i] = bestOfGroup(g).id; });
+  duplicateGroups().forEach(g => { dedupeKeep[dedupeGroupKey(g)] = bestOfGroup(g).id; });
   sub('dedupe');
 }
-function setDedupeKeep(i, id){ dedupeKeep[i] = id; render(); }
+function setDedupeKeep(key, id){ dedupeKeep[key] = id; render(); }
 
 function applyDedupe(){
   const groups = duplicateGroups();
   let removed = 0;
   if(!S.settings.notDuplicates) S.settings.notDuplicates = [];
-  groups.forEach((g, i) => {
-    const keep = dedupeKeep[i];
-    if(!keep){
+  groups.forEach(g => {
+    const keep = dedupeKeep[dedupeGroupKey(g)];
+    // Belt and braces: even with a stable key, an id that is not in THIS group
+    // must never be treated as "keep this one" -- that is the shape that
+    // deleted both events.
+    if(!keep || !g.some(e => e.id === keep)){
       // "Keep both" means you have reviewed this pair and they are different.
       // Record it so the banner stops re-flagging the same events forever.
       for(let x = 0; x < g.length; x++)
@@ -7717,9 +7792,9 @@ function renderDedupe(m){
   html += groups.map((g, i) => `<div class="card">
     <div style="font-size:13px;font-weight:800;margin-bottom:8px">${friendly(g[0].date)}</div>
     ${g.map(e => {
-      const on = dedupeKeep[i] === e.id;
+      const on = dedupeKeep[dedupeGroupKey(g)] === e.id;
       const people = eventPeople(e);
-      return `<div class="row" style="padding:8px 0;border-top:1px solid var(--divider)" onclick="setDedupeKeep(${i}, '${e.id}')">
+      return `<div class="row" style="padding:8px 0;border-top:1px solid var(--divider)" onclick="setDedupeKeep('${dedupeGroupKey(g)}', '${e.id}')">
         <div class="check ${on?'on':''}" style="width:22px;height:22px;font-size:12px">${on?'✓':''}</div>
         <div class="grow">
           <div style="font-size:14px;font-weight:${on?'700':'400'}">${esc(e.title)} ${e.exported?'📆':''}</div>
@@ -7730,12 +7805,12 @@ function renderDedupe(m){
       </div>`;
     }).join('')}
     <div style="text-align:right;padding-top:6px">
-      <button class="linkbtn" style="padding:2px 6px" onclick="setDedupeKeep(${i}, null)">${dedupeKeep[i] ? 'Keep both' : '✓ Keeping both'}</button>
+      <button class="linkbtn" style="padding:2px 6px" onclick="setDedupeKeep('${dedupeGroupKey(g)}', null)">${dedupeKeep[dedupeGroupKey(g)] ? 'Keep both' : '✓ Keeping both'}</button>
       <button class="linkbtn" style="padding:2px 6px" onclick="dismissGroup(${i})">Not duplicates</button>
     </div>
   </div>`).join('');
 
-  const removing = groups.reduce((n, g, i) => n + (dedupeKeep[i] ? g.length - 1 : 0), 0);
+  const removing = groups.reduce((n, g) => n + (dedupeKeep[dedupeGroupKey(g)] ? g.length - 1 : 0), 0);
   html += `<div class="card" style="position:sticky;bottom:76px">
     <button class="btn ${removing?'':'alt'}" onclick="applyDedupe()">
       ${removing ? `Remove ${removing} duplicate${removing===1?'':'s'}` : '✓ Done (remove nothing)'}
@@ -9693,8 +9768,16 @@ async function gordonSignInUI(){
 }
 
 function gordonSignOutUI(){
-  clearGordonSession();
-  toast('Signed out of Gordon');
+  const gone = clearGordonSession();
+  if(gone){
+    toast('Signed out of Gordon');
+  }else{
+    // Say what is actually true. Storage refused the write, so the token is
+    // still here and the user needs to know that rather than be reassured.
+    logProblem('Gordon', 'Sign-out could not clear the saved session',
+      'storage refused the write; the token is still on this device');
+    alert('Could not sign out.\n\nThis phone\u2019s browser refused to clear the saved session, so you are still signed in. Try again, or clear this site\u2019s data in Settings.');
+  }
   sub('setAI');
 }
 
@@ -10037,8 +10120,6 @@ let compareResult = null;
 
 async function compareProviders(file){
   if(!file) return;
-  const original = S.settings.aiProvider;
-  const originalFallback = S.settings.aiFallback;
   compareResult = { name: file.name || 'image', anthropic:null, local:null,
                     anthropicErr:null, localErr:null };
   try{
@@ -10047,27 +10128,29 @@ async function compareProviders(file){
       {type:'image', source:{type:'base64', media_type:mediaType, data:base64}},
       ...(contextBlock()?[contextBlock()]:[]), {type:'text', text:eventPrompt()}]);
 
-    S.settings.aiFallback = false;   // never let one provider answer for the other
+    // In memory only. Nothing here is saved, so an app that dies mid-comparison
+    // leaves the user's real settings exactly as they were.
+    aiOverride = { provider:null, fallback:false };   // never let one provider answer for the other
 
     sub('busy', {msg:'Reading with Anthropic…', hint:''});
     try{
-      S.settings.aiProvider = 'anthropic';
+      aiOverride.provider = 'anthropic';
       compareResult.anthropic = parseExtractedEvents(
         await callAI(blocks(), 8000, GROUNDING_EVENTS, 'compare.anthropic')) || [];
     }catch(err){ compareResult.anthropicErr = err.message; }
 
     sub('busy', {msg:'Reading with the local model…', hint:'this one may be slower'});
     try{
-      S.settings.aiProvider = 'local';
+      aiOverride.provider = 'local';
       compareResult.local = parseExtractedEvents(
         await callAI(blocks(), 8000, GROUNDING_EVENTS, 'compare.local')) || [];
     }catch(err){ compareResult.localErr = err.message; }
   }catch(err){
     compareResult.anthropicErr = compareResult.anthropicErr || err.message;
   }finally{
-    S.settings.aiProvider = original;
-    S.settings.aiFallback = originalFallback;
-    save();
+    // Dropping the override IS the restore. There is nothing to put back,
+    // because nothing was taken.
+    aiOverride = null;
   }
   sub('compare');
 }
