@@ -1874,9 +1874,14 @@ module.exports = async function runModuleTests(test){
   });
 
   test('choosing a tab is a deliberate departure and clears the origin', () => {
-    const fn = script.split('function nav(tab){')[1].split('\n')[0];
+    // Read the whole BODY, not the first line. Until v9.61 nav() was a
+    // one-liner and this split on '\n' -- so the guard passed for the shape of
+    // the function rather than its content, and went red the moment nav() grew
+    // a second line while still doing exactly the right thing.
+    const fn = script.split('function nav(tab){')[1].split('\n}')[0];
     assert.ok(/askOrigin = null/.test(fn),
       'a stale origin would teleport the user somewhere they did not choose');
+    assert.ok(/view = \{tab/.test(fn), 'nav() no longer sets the view');
   });
 
   test('Edit Event builds its own header and still offers Ask', () => {

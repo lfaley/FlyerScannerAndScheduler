@@ -84,7 +84,7 @@ export const INTENTS = [
     title: 'Go to a screen',
     examples: ['Take me to the shopping list', 'Open settings'],
     params: { screen: { type:'enum', required:true,
-                        values:['events','chores','lists','meals','settings'] } },
+                        values:['events','chores','lists','notes','meals','settings'] } },
     fallback: 'The tab bar at the bottom.',
   },
   {

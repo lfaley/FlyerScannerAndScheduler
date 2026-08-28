@@ -2710,7 +2710,7 @@ function oneList(){
   S.listItems.push({ id:'i1', listId:'l1', text:'Mlik', checked:false, deleted:false });
   S.listItems.push({ id:'i2', listId:'l1', text:'Bread', checked:true, deleted:false });
   listEditId = null; listRenameId = null;
-  view = { tab:'lists', sub:'listDetail', data:{ id:'l1' } };
+  view = { tab:'notes', sub:'listDetail', data:{ id:'l1' } };
 }
 function withBox(id, value, fn){
   const real = document.getElementById;
@@ -3012,4 +3012,125 @@ test('pruning drops deleted notes and counts them', () => {
   manualPrune();
   assert.strictEqual(S.notes.length, before - 1, 'a deleted note survived the prune');
   assert.strictEqual(S.notes[0].id, 'n2', 'the wrong note was pruned');
+});
+
+console.log('\nNotes tab: two areas, Notes and Lists (v9.61)');
+
+function twoAreas(){
+  boot(null);
+  S.lists.push({ id:'l1', name:'Groceries', deleted:false });
+  S.listItems.push({ id:'i1', listId:'l1', text:'Milk', checked:false, deleted:false });
+  S.notes = [{ id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:false,
+    personIds:[], created:'2026-08-20T10:00:00.000Z', updated:'2026-08-20T10:00:00.000Z', deleted:false }];
+  S.settings.notesArea = 'notes';
+  view = { tab:'notes', sub:null, data:null };
+}
+
+test('the tab bar is back to five, and Lists is not one of them', () => {
+  // Apple HIG: "In general, use between three and five tabs on iPhone."
+  // Material: "Use up to five top-level destinations."
+  assert.strictEqual(TABS.length, 5, 'expected five tabs');
+  const ids = TABS.map(t => t.id);
+  assert.ok(ids.includes('notes'), 'Notes is not a tab');
+  assert.ok(!ids.includes('lists'), 'Lists is still its own tab');
+  assert.strictEqual(ids[2], 'notes', 'Notes should hold the slot Lists had');
+});
+
+test('nav("lists") still works — it opens the Lists AREA, not a blank screen', () => {
+  // The name outlived the tab: people use it, the router emits it, and the
+  // a11y audit calls it. A view.tab the tabs map cannot answer renders nothing.
+  twoAreas();
+  nav('lists');
+  assert.strictEqual(view.tab, 'notes', 'it left view.tab on a screen that no longer exists');
+  assert.strictEqual(notesArea(), 'lists', 'it did not select the Lists area');
+  const m = { innerHTML:'' };
+  renderNotes(m);
+  assert.ok(/Groceries/.test(m.innerHTML), 'the lists did not render');
+});
+
+test('the chosen area is remembered across a reload', () => {
+  twoAreas();
+  setNotesArea('lists');
+  S = load();
+  assert.strictEqual(notesArea(), 'lists', 'it forgot which area was in use');
+  setNotesArea('notes');
+  S = load();
+  assert.strictEqual(notesArea(), 'notes');
+});
+
+test('the switcher is on screen in BOTH areas, so neither is a dead end', () => {
+  twoAreas();
+  let m = { innerHTML:'' };
+  renderNotes(m);
+  assert.ok(/setNotesArea\('lists'\)/.test(m.innerHTML), 'no way through to Lists');
+  assert.ok(/setNotesArea\('notes'\)/.test(m.innerHTML), 'no way back to Notes');
+  assert.ok(/Uniform sizes/.test(m.innerHTML), 'the notes board did not render');
+
+  setNotesArea('lists');
+  m = { innerHTML:'' };
+  renderNotes(m);
+  assert.ok(/setNotesArea\('notes'\)/.test(m.innerHTML), 'the Lists area cannot get back');
+  assert.ok(/setNotesArea\('lists'\)/.test(m.innerHTML), 'the switcher lost its own area');
+  assert.ok(!/Uniform sizes/.test(m.innerHTML), 'both areas rendered at once');
+});
+
+test('the switcher is a real button, not a span pretending to be one', () => {
+  // The v9.12 review found bare <span onclick> controls on Edit Event and
+  // treated them as a defect. A control that is a control should be a button.
+  twoAreas();
+  const m = { innerHTML:'' };
+  renderNotes(m);
+  assert.ok(/<button class="chip[^"]*" aria-pressed="(true|false)"\s*\n?\s*onclick="setNotesArea/.test(m.innerHTML)
+         || /<button class="chip[^"]*" aria-pressed=/.test(m.innerHTML),
+    'the area switcher is not a button with a pressed state');
+  assert.ok(!/<span[^>]*onclick="setNotesArea/.test(m.innerHTML), 'the switcher is a span');
+});
+
+test('every list function is still reachable, and behaves identically', () => {
+  // Rule 1: this is a relocation, not a removal.
+  twoAreas();
+  setNotesArea('lists');
+  const m = { innerHTML:'' };
+  renderNotes(m);
+  ['addList()', "sub('listDetail'", 'renameList(', 'delList('].forEach(fn =>
+    assert.ok(m.innerHTML.includes(fn), 'the Lists area lost: ' + fn));
+
+  // ...and the detail screen still opens from inside the Notes tab.
+  view = { tab:'notes', sub:'listDetail', data:{ id:'l1' } };
+  const d = { innerHTML:'' };
+  renderListDetail(d);
+  assert.ok(/Milk/.test(d.innerHTML), 'the list detail screen broke');
+  assert.ok(/addItem\('l1'\)/.test(d.innerHTML), 'items can no longer be added');
+  assert.ok(/editItem\('i1'\)/.test(d.innerHTML), 'items can no longer be edited');
+});
+
+test('the header names the AREA while the tab names the section', () => {
+  twoAreas();
+  let seen = null;
+  const realSet = setHeader;
+  setHeader = (t) => { seen = t; };
+  renderNotes({ innerHTML:'' });
+  assert.strictEqual(seen, 'Notes');
+  setNotesArea('lists');
+  renderNotes({ innerHTML:'' });
+  assert.strictEqual(seen, 'Lists', 'the header does not say which area you are in');
+  setHeader = realSet;
+});
+
+test('the assistant can be sent to either area by name', () => {
+  const screen = INTENTS.find(i => i.id === 'open_screen');
+  assert.ok(screen, 'open_screen is gone');
+  const values = screen.params.screen.values;
+  assert.ok(values.includes('notes'), '"take me to my notes" would not validate');
+  assert.ok(values.includes('lists'), 'the old name stopped validating');
+});
+
+test('going back from a list detail returns to the Lists area, not to Notes', () => {
+  twoAreas();
+  setNotesArea('lists');
+  view = { tab:'notes', sub:'listDetail', data:{ id:'l1' } };
+  back();
+  assert.strictEqual(view.tab, 'notes');
+  assert.strictEqual(view.sub, null);
+  assert.strictEqual(notesArea(), 'lists', 'it dumped you on the wrong half');
 });

@@ -105,6 +105,8 @@ const SEED = {
 const SCREENS = [
   { key:'events',   setup:`nav('events')` },
   { key:'chores',   setup:`nav('chores')` },
+  // Lists is now an AREA of the Notes tab (v9.61). nav('lists') still
+  // reaches it, and must keep doing so.
   { key:'lists',    setup:`nav('lists')` },
   { key:'notes',    setup:`nav('notes')` },
   // The board with content is a different DOM from the empty state: search box,
@@ -160,7 +162,7 @@ const SCREENS = [
   // v9.28: the same form in CREATE mode. A different heading and a different
   // Back behaviour, so it is a different DOM and gets its own audit row.
   { key:'eventEdit-new', setup:`openNewEvent()` },
-  { key:'listDetail', setup:`view = { tab:'lists', sub:'listDetail', data:{ id:'l1' } }` },
+  { key:'listDetail', setup:`view = { tab:'notes', sub:'listDetail', data:{ id:'l1' } }` },
   { key:'noteDetail', setup:`S.notes = [{ id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:false, personIds:[], created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } }` },
   { key:'rewards',    setup:`sub('rewards')` },
   { key:'ledger',     setup:`sub('ledger')` },
