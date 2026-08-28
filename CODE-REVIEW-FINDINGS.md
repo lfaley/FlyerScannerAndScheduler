@@ -627,7 +627,97 @@ storage error to trigger, which was not simulated. That is a real limit on P4-01
 and P4-02: the code path is certain, the trigger frequency is not.
 
 
-## P5 — `index.html` top to bottom  ·  status: NOT STARTED
+## P5 — `index.html` top to bottom  ·  status: COMPLETE  ·  28 Aug 2026
+
+**Question:** what is wrong inside the file nobody re-reads?
+
+**10,892 lines, read in eight contiguous slices.** Method disclosed in full: the
+reading was fanned out over eight agents, one fixed slice each, each instructed
+to read line by line, to follow every candidate to its call site, and to say
+plainly if it skimmed. **All eight reported reading their slice in full.** Every
+finding below was then **verified by me against the file** before it was written
+down — five by executing the real code in the test sandbox, eleven by reading the
+exact lines. Findings that survived neither are marked as such.
+
+That verification step is not ceremony. Of the candidates returned, several were
+correct in mechanism but wrong in reach, and one whole class (the `Object.assign`
+bridge) was correctly *rejected* by the reader who noticed the file ships as a
+classic `<script>`, not a module.
+
+**28 candidates. 16 verified so far, listed below. The rest are recorded with
+their status and are the first work of any P5 follow-up.**
+
+### Verified by executing the real code
+
+| # | Where | Defect | Proof |
+|---|---|---|---|
+| P5-01 | `:613` `titleSimilarity` | Overlap counts A as a **multiset** while the denominator is the shorter title's word count, so one repeated word can push similarity to 1.0 | `looksDuplicate({title:'Grade 3 and Grade 4 and Grade 5 Swim'}, {title:'Grade 6 Trip'})` on the same date returns **`true`** — two unrelated events merge as duplicates |
+| P5-02 | `:2281` `quickRoute` | `\bstar` has no trailing boundary, so it matches "starting", "startup" | `quickRoute('What time is the concert starting?')` returns **`ask_chores`, confidence 0.95, `autoRun:true`** — a calendar question answered from the chores section with no model call |
+| P5-03 | `:2965` `matchListItems` | A word that resolves to an item already matched falls through to `missing` | `matchListItems(['milk','milk'])` returns **`{matched:[milk], missing:['milk']}`** — the same item reported as both ticked off and absent |
+| P5-04 | `:4871` `buildVEVENT` | `crossesMidnight` uses `<=`, so an end **equal** to the start counts as crossing | An event `09:00–09:00` exports as **`DTSTART:20260914T090000 / DTEND:20260915T090000`** — a 24-hour block in Calendar |
+| P5-05 | `:2104` `validateRoute` | `date`/`time` are shape-checked, never range-checked | `validateRoute` accepts **`date:'2026-13-45', time:'99:99'`** as `ok:true` — the entry is stored and can never appear in any scope window or clash check |
+
+### Verified by reading the exact lines
+
+| # | Where | Defect | Consequence |
+|---|---|---|---|
+| P5-06 | `:7570` | `onclick="toggleAllExportPick(${JSON.stringify(ids)})"` — `JSON.stringify` emits double quotes **inside a double-quoted attribute** | The attribute is truncated to `toggleAllExportPick([`. **"Select all" / "Clear all" on the export picker is permanently dead.** |
+| P5-07 | `:7684` | `dedupeKeep` is keyed by a group's **index**, but `dismissGroup()` removes a group and the list is recomputed | After "Not duplicates" on the first group, `dedupeKeep[0]` names an id in no group → `applyDedupe` deletes **both** members of the surviving group |
+| P5-08 | `:9665` | `gordonAuthCard()`'s signed-out branch opens `<div class="card">` and never closes it; the signed-in branch closes both | Signed out with provider `local`, **every section below** — base URL, model, fallback, API key, capabilities — renders *inside* the amber sign-in card |
+| P5-09 | `:3859` | `oldDeleted` is declared and **never called** (one occurrence in the file) | The documented 90-day tombstone window holds for events only. Lists, chores, rewards and people are destroyed on the next prune regardless of age |
+| P5-10 | `:6620` | `queueErrorReport` has exactly one call site, on a row just created with `count:1`, so the `count > 1` branch at `:6575` is unreachable | A failure that happens 40 times is reported to the admin console **once, with no occurrence count** |
+| P5-11 | `:3923` | `restoreSnapshot()` does `Object.assign(blank(), parsed)` with **no `migrate()` call**, unlike `load()` | Restoring an older snapshot reinstates a stale `schemaVersion` and its old settings — e.g. the Thinking model tag — until a full reload |
+| P5-12 | `:10136`, `:10168` | `var(--${cond ? 'red' : 'accent'}-accent)` builds **`var(--accent-accent)`**, which is defined in neither CSS file (`grep` = 0) | An unresolvable `var()` invalidates the whole declaration: the "nothing invented" card renders with **no left border**, and a zero miss-count is not painted green |
+| P5-13 | `:10077` | `compareColumn` does `esc(title)`, but both call sites pass `ico('cloud') + '…'` | The provider-comparison headings show **literal SVG markup as visible text** |
+| P5-14 | `:5033` | `alreadyDone` counts exported upcoming events, but the only caller passes `force=true` (`:7600`), so those events are already in `q` — **double counted** | 5 events, 3 exported → the banner reads "4 of **8**" |
+| P5-15 | `:5527` | `open = showPast \|\| !!eventSearch`, but the button still toggles `showPast` | With a search active, tapping "Past events (N)" **does nothing** |
+| P5-16 | `:9925` | `GORDON_BASE_URL` is a non-empty literal and `.replace(/\/+$/,'')` cannot empty it, so `if(!base)` is unreachable | The self-test can never report "Base URL: empty". A device with nothing configured **passes a check it should fail**, silently testing the hard-coded endpoint |
+
+### Reported, mechanism read, NOT yet independently verified
+
+Recorded so nothing is lost, and so the line between what I checked and what I
+did not is visible: `:475` (`daysUntil` mixes UTC-parsed and local dates when the
+injectable `today` is passed — no shipped caller does), `:1649` (citation regex
+`\[(\d{1,2})\]` silently drops refs ≥ 100), `:3670` (`contextFromPs` falls back
+to the *first loaded model's* window when the requested one is absent, against
+its own "returns null rather than a guess" contract), `:4522` (probed context is
+cached for the session and never invalidated when the model setting changes),
+`:4404` (the "Read by Anthropic" toast and the `fellBackTo` log entry are emitted
+**before** the Anthropic call is attempted), `:6151`/`:6156` (a disambiguated
+`check_list_item` loses its `itemIds`; a user with no lists gets an empty
+"which one?" prompt), `:5950` (`clarify` options are stored as strings and read
+as `{id,name}`, behind a gate that can never open), `:6975` (`pendingEmailCount`
+is never reset to 0 on an empty check, so the badge outlives its queue), `:7201`
+(dismissing an unreadable email never records the msgId, so it is re-fetched and
+re-extracted **forever**, at cost, on every check), `:8232` (`saveReview` stamps
+batch-level `pendingSource` over per-email provenance), `:7070` (a progress note
+is pushed into `problems`, producing a false "couldn't be read" row and a false
+Problem Log entry when the fallback then succeeds), `:7368` (retry does not
+de-duplicate by msgId → double AI cost and a duplicate entry), `:9473` (the
+recipe batch counter never shows "1 of N" when a photo fails), `:9508` (a recipe
+whose send fails is **discarded**, not retained for retry), `:10065` (a failure in
+shared setup is recorded against Anthropic only, so the screen claims the local
+model ran and found nothing when it was never called), `:10464` (person colour is
+picked by live count, so deleting the middle person makes the next one collide).
+
+### What P5 says about the codebase
+
+The source methodology predicted this phase would be slow, boring, and find the
+most *interesting* bugs. That held. None of these 28 is caught by the 656-test
+suite, none produces an error in the console, and none would ever appear in a
+Problem Log entry. **They are all things that are quietly, plainly wrong.**
+
+Three deserve fixing regardless of what else the review finds:
+
+1. **P5-06** — a control that has never worked.
+2. **P5-07** — a path that **destroys both events** in a duplicate pair.
+3. **P5-01** — unrelated events silently merged as duplicates.
+
+**Verified vs diagnosed:** 16 verified against the repo at `00d6521` (5 by
+execution, 11 by reading). 12 recorded from a reader's report with the mechanism
+read but not independently confirmed — those are explicitly not yet findings, and
+verifying them is the first task of any follow-up. **No code was changed.**
+
 
 ## P6 — One-way doors  ·  status: NOT STARTED (2 members already confirmed, see plan §5)
 
