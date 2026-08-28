@@ -146,6 +146,10 @@ const SCREENS = [
   { key:'setCapabilities', setup:`sub('setCapabilities')` },
   { key:'setReminders',    setup:`sub('setReminders')` },
   { key:'setAppearance',   setup:`sub('setAppearance')` },
+  { key:'setDismissed', setup:`S.settings.dismissedConflicts = ['overlap|2026-12-09|e1,e2'];
+      S.settings.notDuplicates = ['e1~e2']; view = { tab:'settings', sub:'setDismissed', data:null }` },
+  { key:'setDismissed-empty', setup:`S.settings.dismissedConflicts = []; S.settings.notDuplicates = [];
+      view = { tab:'settings', sub:'setDismissed', data:null }` },
   { key:'setBackup',       setup:`sub('setBackup')` },
   { key:'setTrouble',      setup:`S.settings.aiProvider='local'; sub('setTrouble')` },
 

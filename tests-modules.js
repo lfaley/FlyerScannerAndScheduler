@@ -1589,7 +1589,7 @@ module.exports = async function runModuleTests(test){
   // as reachable as one written into renderSetTrouble directly.
   const settingsFamily = ['renderSettings', 'renderSetPeople', 'renderSetAI',
     'renderSetCapabilities', 'renderSetReminders', 'renderSetAppearance',
-    'renderSetBackup', 'renderSetTrouble',
+    'renderSetBackup', 'renderSetTrouble', 'renderSetDismissed',
     'diagnosticsSection', 'appearanceSection', 'aiCapabilitySection']
     .map(n => (script.split('function ' + n + '(')[1] || '').split('\nfunction ')[0])
     .join('\n');
@@ -1927,6 +1927,8 @@ module.exports = async function runModuleTests(test){
       // the one test that exists to stop controls vanishing in a reorganisation.
       'removeKey()',                                          // FS-UI-02
       'setErrorReports(',                                     // FS-UI-03
+      // v9.66. The way back from a dismissal -- the whole point of the screen.
+      'clearDismissedConflicts()', 'clearNotDuplicates()',
     ];
     const missing = mustSurvive.filter(c => !settingsFamily.includes(c));
     assert.deepStrictEqual(missing, [], 'lost in the reorganisation: ' + missing.join(', '));

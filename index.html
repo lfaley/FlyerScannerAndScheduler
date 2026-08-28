@@ -4356,7 +4356,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.65';
+const APP_VERSION = 'v9.66';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -5231,6 +5231,7 @@ function render(){
     setPeople:renderSetPeople, setAI:renderSetAI, setCapabilities:renderSetCapabilities,
     setReminders:renderSetReminders, setAppearance:renderSetAppearance,
     setBackup:renderSetBackup, setTrouble:renderSetTrouble,
+    setDismissed:renderSetDismissed,
     ask:renderAsk};
   const tabs = {events:renderEvents, chores:renderChores,
     notes:renderNotes, meals:renderMeals, settings:renderSettings};
@@ -5611,8 +5612,8 @@ function conflictBanner(){
           ${ico('alert')}${esc(describeConflict(c))}</div>
         <div class="meta" style="font-size:12px">${friendly(c.date)}${n > 1 ? ` · ${conflictViewIndex + 1} of ${n}` : ''}</div>
       </div>
-      <button class="linkbtn" aria-label="Dismiss this warning"
-        onclick="event.stopPropagation();dismissConflict('${esc(conflictKey(c))}')">${ico('x')}</button>
+      <button class="linkbtn" style="padding:4px 6px"
+        onclick="event.stopPropagation();dismissConflict('${esc(conflictKey(c))}')">Dismiss</button>
     </div>
     <div class="actionrow" style="margin:10px 0 0">${conflictActions(c)}</div>
     ${n > 1 ? `<div class="row" style="justify-content:space-between;align-items:center;margin-top:10px">
@@ -5659,7 +5660,7 @@ function conflictActions(c){
     ? `Looks like these are for different people${tagged.length === c.events.length ? ' (' + tagged.join(' vs ') + ')' : ''} — keeping ${c.events.length > 2 ? 'them all' : 'both'} is usually right.`
     : 'Overlaps aren’t always a problem — keep them if that’s intended, or move one below.';
   return `<div style="width:100%;display:flex;flex-direction:column;gap:6px">`
-    + `<button class="btn sm" style="width:100%" onclick="event.stopPropagation();dismissConflict('${esc(key)}')">${ico('check-circle')}${keepLabel} — this is fine</button>`
+    + `<button class="btn sm" style="width:100%" onclick="event.stopPropagation();dismissConflict('${esc(key)}')">${ico('check-circle')}${keepLabel} — dismiss this warning</button>`
     + `<div class="meta" style="font-size:12px;margin:2px 0 4px">${esc(note)}</div>`
     + `<div class="meta" style="font-size:11px;color:var(--muted)">Or pick one — move it, or keep only it:</div>`
     + c.events.slice(0, 5).map(ev => {
@@ -5744,10 +5745,42 @@ function markHandled(id){
 }
 
 // HAX G8: support efficient dismissal -- one tap, and it stays dismissed.
+/**
+ * Silence one clash warning -- reversibly.
+ *
+ * Until v9.66 this pushed a key and that was that: no undo, no screen listing
+ * what had been silenced, and nothing anywhere that could clear it. One tap on
+ * an unlabelled x hid that pair of events for good (code review P6-01).
+ */
 function dismissConflict(key){
   const list = S.settings.dismissedConflicts || (S.settings.dismissedConflicts = []);
-  if(!list.includes(key)) list.push(key);
+  if(list.includes(key)) return;                 // already silenced; nothing to undo
+  list.push(key);
   save(); render();
+  toast('Warning dismissed', { label:'Undo', fn:() => {
+    restoreDismissedConflict(key);
+    toast('Warning back');
+  }});
+}
+function restoreDismissedConflict(key){
+  S.settings.dismissedConflicts = (S.settings.dismissedConflicts || []).filter(k => k !== key);
+  save(); render();
+}
+function clearNotDuplicates(){
+  const before = (S.settings.notDuplicates || []).slice();
+  if(!before.length) return;
+  S.settings.notDuplicates = [];
+  save(); render();
+  toast('Restored ' + before.length + ' pair' + (before.length === 1 ? '' : 's'),
+    { label:'Undo', fn:() => { S.settings.notDuplicates = before; save(); render(); } });
+}
+function clearDismissedConflicts(){
+  const before = (S.settings.dismissedConflicts || []).slice();
+  if(!before.length) return;
+  S.settings.dismissedConflicts = [];
+  save(); render();
+  toast('Brought back ' + before.length + ' warning' + (before.length === 1 ? '' : 's'),
+    { label:'Undo', fn:() => { S.settings.dismissedConflicts = before; save(); render(); } });
 }
 
 // ---------- Ask (see js/ask.js, js/router.js, js/assistant-actions.js) ----------
@@ -7687,13 +7720,21 @@ function dismissGroup(i){
   const g = duplicateGroups()[i];
   if(!g) return;
   if(!S.settings.notDuplicates) S.settings.notDuplicates = [];
+  const added = [];
   for(let x = 0; x < g.length; x++)
     for(let y = x + 1; y < g.length; y++){
       const k = pairKey(g[x], g[y]);
-      if(S.settings.notDuplicates.indexOf(k) < 0) S.settings.notDuplicates.push(k);
+      if(S.settings.notDuplicates.indexOf(k) < 0){ S.settings.notDuplicates.push(k); added.push(k); }
     }
   save();
-  toast('Marked as different events');
+  // Reversible, like every other suppression as of v9.66 (code review P6-02).
+  // `added` is only the keys THIS tap contributed, so an undo cannot remove a
+  // decision made earlier about a different pair.
+  toast('Marked as different events', { label:'Undo', fn:() => {
+    S.settings.notDuplicates = (S.settings.notDuplicates || []).filter(k => !added.includes(k));
+    save(); render();
+    toast('Back in the duplicates list');
+  }});
   if(!duplicateGroups().length){ view = { tab:'events', sub:null, data:null }; }
   render();
 }
@@ -9700,6 +9741,8 @@ function renderSettings(m){
     settingsRow('cloud', 'Backup', S.settings.lastBackup
       ? 'Last export ' + friendly(S.settings.lastBackup)
       : 'Never exported', 'setBackup', S.settings.lastBackup ? null : 'amber-accent') +
+    settingsRow('history', 'Dismissed warnings', dismissedCount()
+      ? dismissedCount() + ' silenced' : 'Nothing silenced', 'setDismissed') +
     settingsRow('flask', 'When something goes wrong', trouble, 'setTrouble',
       (openProblems || badCalls) ? 'amber-accent' : null) +
     `<div style="text-align:center;color:var(--faint);font-size:11px;margin-top:24px">FlyerSnap ${APP_VERSION} · ${APP_TAGLINE}</div>`;
@@ -9901,6 +9944,79 @@ function renderSetReminders(m){
 function renderSetAppearance(m){
   setHeader('Appearance', true);
   m.innerHTML = appearanceSection();
+}
+
+function dismissedCount(){
+  return ((S.settings.dismissedConflicts || []).length)
+       + ((S.settings.notDuplicates || []).length);
+}
+
+/**
+ * Everything the app has been told to stop mentioning, and the way back.
+ *
+ * Before v9.66 there was no such screen: two settings keys grew forever, were
+ * read on every render, and nothing in the app could show or clear them. A
+ * mis-tap was permanent and invisible (code review P6-01, P6-02).
+ *
+ * Each row names the events involved, resolved from their ids, so "restore" is
+ * a decision about something you can read rather than about a hash.
+ */
+function renderSetDismissed(m){
+  setHeader('Dismissed Warnings', true);
+  const conflicts = S.settings.dismissedConflicts || [];
+  const pairs = S.settings.notDuplicates || [];
+  const nameOf = (id) => {
+    const e = S.events.find(x => x.id === id);
+    return e ? (e.title || 'Untitled') : 'a deleted event';
+  };
+
+  if(!conflicts.length && !pairs.length){
+    m.innerHTML = `<div class="empty"><div class="et">Nothing is silenced</div>
+      <div class="eb">When you dismiss a clash warning, or mark two events as
+      "not duplicates", it shows up here so you can change your mind.</div></div>`;
+    return;
+  }
+
+  let html = `<div class="help">These are the warnings you told FlyerSnap to stop
+    showing. Bringing one back makes it appear again if it still applies.</div>`;
+
+  if(conflicts.length){
+    html += `<div class="sect">Clash warnings (${conflicts.length})</div>`;
+    html += conflicts.map(k => {
+      // key shape: type|date|id,id  -- see conflictKey()
+      const bits = String(k).split('|');
+      const ids = (bits[2] || '').split(',').filter(Boolean);
+      const who = ids.map(nameOf).join(' and ') || 'events that are gone';
+      return `<div class="card row">
+        <div class="grow">
+          <div class="title" style="font-size:15px">${esc(who)}</div>
+          <div class="meta" style="font-size:12px">${esc(bits[0] || '')}${bits[1] ? ' · ' + friendly(bits[1]) : ''}</div>
+        </div>
+        <button class="linkbtn" onclick="restoreDismissedConflict('${esc(k)}')">Bring back</button>
+      </div>`;
+    }).join('');
+    html += `<button class="btn alt" onclick="clearDismissedConflicts()">${ico('refresh')}Bring back all clash warnings</button>`;
+  }
+
+  if(pairs.length){
+    html += `<div class="sect">Marked "not duplicates" (${pairs.length})</div>`;
+    html += pairs.map(k => {
+      const ids = String(k).split('~');
+      return `<div class="card row">
+        <div class="grow"><div class="title" style="font-size:15px">${esc(ids.map(nameOf).join(' and '))}</div>
+        <div class="meta" style="font-size:12px">will not be offered as duplicates</div></div>
+        <button class="linkbtn" onclick="restoreNotDuplicate('${esc(k)}')">Bring back</button>
+      </div>`;
+    }).join('');
+    html += `<button class="btn alt" onclick="clearNotDuplicates()">${ico('refresh')}Offer all pairs again</button>`;
+  }
+
+  m.innerHTML = html;
+}
+function restoreNotDuplicate(key){
+  S.settings.notDuplicates = (S.settings.notDuplicates || []).filter(k => k !== key);
+  save(); render();
+  toast('Back in the duplicates list');
 }
 
 function renderSetBackup(m){
@@ -10963,6 +11079,11 @@ Object.assign(window, {
   toggleNotePerson,
   togglePinNote,
   setNotesArea,
+  clearDismissedConflicts,
+  clearNotDuplicates,
+  restoreDismissedConflict,
+  restoreNotDuplicate,
+  dismissedCount,
   toggleAlert,
   toggleAllExportPick,
   toggleChore,

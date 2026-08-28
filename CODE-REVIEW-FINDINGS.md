@@ -1231,6 +1231,46 @@ Each is one guard away, on the far side of one fix.
 
 ---
 
+## P6-01, P6-02 and P7-01 — CLOSED in v9.66
+
+The three findings the review was triggered by, fixed together because they are
+one problem: **the app could silence something permanently and never tell you.**
+
+**The standard applied** is the one P6 derived from a case the app already gets
+right — `seenMsgs` suppresses things and is not a defect, because
+`forgetImportedEmails()` clears it and the count is on the button. Every
+suppression now has all three:
+
+| | Before | Now |
+|---|---|---|
+| **Undo** | none | a toast with Undo on both dismiss paths |
+| **Listing** | none | Settings → **Dismissed warnings**, each row naming the events involved, resolved from their ids |
+| **Clear** | none | per-row "Bring back", plus a clear-all per category — itself undoable |
+
+**P7-01** is closed too: the bare ✕ is now a control that says **"Dismiss"**, and
+the large green button reads *"Keep both — dismiss this warning"* instead of
+*"…this is fine"*. Both still work and both are still there — the question Logan
+asked ("how am I supposed to dismiss one of these?") now has a visible answer on
+the screen that raised it.
+
+The Settings hub row shows the count, so silenced things are visible from the
+top level rather than only from inside.
+
+**Seven regression tests, four mutations, four killed:** removing the undo,
+making the not-duplicates undo clear everything instead of only what it added,
+reverting the ✕ to an unlabelled icon, and dropping the event names from the
+listing. Each turns its own guard red.
+
+One subtlety worth recording: `dismissGroup()` now tracks **only the keys that
+tap added**, so undoing it cannot erase a decision made earlier about a
+different pair. The obvious implementation — clearing `notDuplicates` — passes a
+naive test and is wrong; mutation M2 exists to keep it wrong-proof.
+
+**676 passed, 0 failed. A11y clean across 44 screens** (the new screen is
+audited in both its states).
+
+---
+
 # The review, in summary
 
 Nine phases, `00d6521` (v9.61) → **659 passing, 0 failing**.

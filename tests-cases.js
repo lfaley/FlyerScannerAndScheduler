@@ -2742,7 +2742,11 @@ test('the banner offers the new choice WITHOUT losing any of the old ones', () =
   assert.ok(/Keep both/.test(html), 'the keep-both wording is gone');
   assert.ok(/openEventEdit\(/.test(html), 'the reschedule buttons are gone');
   assert.ok(/Tap to reschedule/.test(html), 'the reschedule hint is gone');
-  assert.ok(/Dismiss this warning/.test(html), 'the dismiss x is gone');
+  // v9.66: the bare x became a control with a visible word, because an
+  // unlabelled icon that silences a warning permanently was the trigger for
+  // the whole code review (P7-01). Assert the WORD, not the aria-label.
+  assert.ok(/>Dismiss</.test(html), 'the dismiss control lost its visible label');
+  assert.ok(/dismissConflict\(/.test(html), 'the dismiss control is gone');
   assert.ok(/keepOnlyEvent\('x1'/.test(html) && /keepOnlyEvent\('x2'/.test(html),
     'every clashing event needs its own keep-only choice');
 });
@@ -3373,4 +3377,142 @@ test('a new person never takes a colour someone else is already using', () => {
   // ...and the freed colour is the one that gets reused.
   assert.strictEqual(live.find(k => k.name === 'Dee').color, KID_COLORS[1],
     'the free colour was skipped');
+});
+
+console.log('\nDismissals are reversible (v9.66 — closes P6-01, P6-02, P7-01)');
+
+function twoClashing(){
+  boot(GOOD);
+  const d = dayAhead(3);
+  S.events = [
+    { id:'c1', title:'Band', date:d, time:'19:00', endTime:'20:30', kind:'event', deleted:false },
+    { id:'c2', title:'Volleyball', date:d, time:'19:30', endTime:'21:00', kind:'event', deleted:false },
+  ];
+  S.settings.dismissedConflicts = [];
+  const c = findConflicts(S.events, todayISO()).find(x => x.type === 'overlap');
+  assert.ok(c, 'the fixture does not clash');
+  return conflictKey(c);
+}
+
+test('P6-01: dismissing a clash warning can be undone on the spot', () => {
+  const key = twoClashing();
+  let undo = null;
+  const realToast = toast;
+  toast = (m, action) => { if(action && action.fn) undo = action.fn; };
+  dismissConflict(key);
+  toast = realToast;
+  assert.ok(S.settings.dismissedConflicts.includes(key), 'it was not dismissed');
+  assert.ok(undo, 'no undo was offered — that is the one-way door');
+  undo();
+  assert.ok(!S.settings.dismissedConflicts.includes(key), 'undo did not bring it back');
+  assert.strictEqual(findConflicts(S.events, todayISO()).filter(c =>
+    !S.settings.dismissedConflicts.includes(conflictKey(c))).length, 1,
+    'the warning did not reappear');
+});
+
+test('P6-01: a dismissed warning is listed, and can be brought back later', () => {
+  const key = twoClashing();
+  const realToast = toast; toast = () => {};
+  dismissConflict(key);
+  toast = realToast;
+  assert.strictEqual(dismissedCount(), 1, 'the Settings row would show nothing');
+
+  const m = { innerHTML:'' };
+  view = { tab:'settings', sub:'setDismissed', data:null };
+  renderSetDismissed(m);
+  assert.ok(/Band/.test(m.innerHTML) && /Volleyball/.test(m.innerHTML),
+    'the screen does not name the events involved');
+  assert.ok(/restoreDismissedConflict\(/.test(m.innerHTML), 'no way back from the listing');
+
+  restoreDismissedConflict(key);
+  assert.strictEqual(dismissedCount(), 0);
+  assert.strictEqual(S.settings.dismissedConflicts.length, 0);
+});
+
+test('P6-01: clear-all brings every silenced warning back, undoably', () => {
+  const key = twoClashing();
+  const realToast = toast;
+  let undo = null;
+  toast = (m, action) => { if(action && action.fn) undo = action.fn; };
+  dismissConflict(key);
+  undo = null;
+  clearDismissedConflicts();
+  toast = realToast;
+  assert.strictEqual(S.settings.dismissedConflicts.length, 0, 'clear-all did nothing');
+  assert.ok(undo, 'clear-all offered no undo');
+  undo();
+  assert.ok(S.settings.dismissedConflicts.includes(key), 'undoing clear-all did not restore');
+});
+
+test('P6-02: "Not duplicates" undoes only the pair you just dismissed', () => {
+  boot(GOOD);
+  const d1 = dayAhead(3), d2 = dayAhead(4);
+  S.events = [
+    { id:'a1', title:'Open House', date:d1, kind:'event', deleted:false },
+    { id:'a2', title:'Open House Night', date:d1, kind:'event', deleted:false },
+    { id:'b1', title:'Picture Day', date:d2, kind:'event', deleted:false },
+    { id:'b2', title:'Picture Day Reminder', date:d2, kind:'event', deleted:false },
+  ];
+  S.settings.notDuplicates = [];
+  let undo = null;
+  const realToast = toast;
+  toast = (m, action) => { if(action && action.fn) undo = action.fn; };
+  dismissGroup(0);
+  const afterFirst = S.settings.notDuplicates.slice();
+  assert.strictEqual(afterFirst.length, 1, 'one pair should be recorded');
+  const firstUndo = undo;
+  dismissGroup(0);                                  // the group that shifted down
+  assert.strictEqual(S.settings.notDuplicates.length, 2, 'both pairs recorded');
+  toast = realToast;
+
+  // Undoing the FIRST dismissal must not remove the second decision.
+  firstUndo();
+  assert.strictEqual(S.settings.notDuplicates.length, 1,
+    'the undo removed a decision it did not make');
+  assert.ok(!S.settings.notDuplicates.includes(afterFirst[0]), 'it undid the wrong pair');
+});
+
+test('P6-02: a not-duplicates pair is listed and restorable', () => {
+  boot(GOOD);
+  const d = dayAhead(3);
+  S.events = [
+    { id:'a1', title:'Open House', date:d, kind:'event', deleted:false },
+    { id:'a2', title:'Open House Night', date:d, kind:'event', deleted:false },
+  ];
+  S.settings.notDuplicates = []; S.settings.dismissedConflicts = [];
+  const realToast = toast; toast = () => {};
+  dismissGroup(0);
+  toast = realToast;
+  const key = S.settings.notDuplicates[0];
+  const m = { innerHTML:'' };
+  renderSetDismissed(m);
+  assert.ok(/Open House/.test(m.innerHTML), 'the pair is not named on the screen');
+  assert.ok(/restoreNotDuplicate\(/.test(m.innerHTML), 'no way back');
+  restoreNotDuplicate(key);
+  assert.strictEqual(S.settings.notDuplicates.length, 0);
+  assert.strictEqual(duplicateGroups().length, 1, 'the pair is not offered again');
+});
+
+test('P7-01: the dismiss control says "dismiss", and so does the big green one', () => {
+  twoClashing();
+  const html = conflictBanner();
+  assert.ok(/>Dismiss</.test(html),
+    'the bare x is back — an unlabelled control that silences a warning permanently');
+  assert.ok(/dismiss this warning<\/button>/.test(html),
+    'the keep-both button no longer says what it actually does');
+  // Both still work, and both are still there (rule 1).
+  assert.strictEqual((html.match(/dismissConflict\(/g) || []).length, 2,
+    'one of the two dismiss paths was removed');
+});
+
+test('the Settings hub shows how much is silenced', () => {
+  boot(GOOD);
+  S.settings.dismissedConflicts = ['overlap|2026-12-09|e1,e2'];
+  S.settings.notDuplicates = ['e1~e2'];
+  assert.strictEqual(dismissedCount(), 2);
+  const m = { innerHTML:'' };
+  renderSettings(m);
+  assert.ok(/Dismissed warnings/.test(m.innerHTML), 'the hub row is missing');
+  assert.ok(/2 silenced/.test(m.innerHTML), 'the hub row does not say how many');
+  assert.ok(/setDismissed/.test(m.innerHTML), 'the row points nowhere');
 });
