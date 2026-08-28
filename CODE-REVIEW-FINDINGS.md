@@ -830,7 +830,121 @@ against the original conversation. Nothing reproduced at runtime — P6 is a
 question about reachability, not behaviour. **No code was changed.**
 
 
-## P7 — Affordance and discoverability  ·  status: NOT STARTED
+## P7 — Affordance and discoverability  ·  status: COMPLETE  ·  28 Aug 2026
+
+**Question:** can the user tell what a control does, and find it at all?
+
+The phase the trigger finding actually belonged to, and the one the source
+methodology has no equivalent of. **Tool:** `tools/p7-affordance.js`, validated
+against two facts established by hand before any of its other output was
+trusted: the clash-banner ✕ must appear in check A, and `dismissConflict` must
+appear in check B. **Both did.**
+
+**164 buttons** in the shipped script.
+
+### The headline: the app has a pattern for *delete* and no pattern for *dismiss*
+
+Delete in FlyerSnap is consistent and well signposted. It is red, it either
+confirms or offers an undo toast, and it says what will go — `startFresh()`
+confirms twice and names the categories; `keepOnlyEvent()` confirms *and*
+undoes; `softDelete()` always offers a way back; `removeKey()` confirms.
+
+**Dismiss has none of that**, and P6 established that dismiss is exactly as
+permanent as delete. Every dismissing control in the app, enumerated:
+
+| Control | Visible name | Red? | Permanent? |
+|---|---|---|---|
+| `dismissConflict` `:5570` | **✕ only** (`aria-label="Dismiss this warning"`) | no | **yes** |
+| `dismissConflict` `:5618` | "Keep both — this is fine" | no | **yes** |
+| `dismissGroup` `:7734` | "Not duplicates" | no | **yes** |
+| `dismissOneEmail` `:7358` | "Dismiss this" | no | yes (`seenMsgs`, clearable) |
+| `dismissPendingEmail` `:8179` | "Skip all from this email" | no | yes (`seenMsgs`, clearable) |
+| `dismissEmailTrouble` `:8101`, `:8127` | ✕ and "Dismiss" | no | session only |
+
+The first three write the one-way doors from P6. **None is red, none confirms,
+none offers an undo, and the word "permanently" appears on none of them.** A
+user tapping "Not duplicates" has no way to know it is a decision they can never
+revisit — and by P6 it demonstrably is.
+
+**This is the whole trigger finding, generalised.** It was never really about
+the clash banner: the app treats *destroying a thing* as serious and *silencing
+a thing* as trivial, and in this codebase they are equally irreversible.
+
+### P7-01 — One action, two names, opposite tones  ·  REAL (the trigger)
+
+`dismissConflict()` is reached from a bare **✕** and from a large green button
+reading **"Keep both — this is fine"**. Same function, same key, same permanent
+outcome. One reads as *close this*, the other as *approve this*. Neither
+contains the word "dismiss", which is why the question was asked in the first
+place.
+
+Five other handlers are reached from two differently-worded controls —
+`exportBackup` ("Export now" / "Export backup"), `openProblems`, `goToEvents`,
+`mealPlanDiagnostic` ("Why no meals?" / "Why don't I see my meals?"),
+`openUrl`. Those are the same action offered in two places with sensible
+wording, **not** defects. `dismissConflict` is the only one where the two names
+imply different things.
+
+### P7-02 — Ten controls whose only name is an `aria-label`  ·  REAL, and unguarded by design
+
+`:5570` (dismiss warning), `:8101` (dismiss trouble), `:8165` (edit this event),
+`:8509` / `:8636` / `:8748` (delete chore / reward / list), plus Back and Ask.
+
+**The existing a11y suite passes on every one of them**, because they all have
+accessible names. The suite has no concept of a *visible* label, so a control
+can be perfectly accessible to a screen reader and completely opaque to a person
+looking at the screen. That is the gap this phase exists to name, and it is
+currently guarded by nothing.
+
+Three of them delete something. A ✕ that deletes a chore and a ✕ that dismisses
+a warning look identical.
+
+**Corrected before reporting:** the first run of the tool reported **15**
+controls with no name at all. It was stripping every `${...}` expression before
+looking for words — but the notes Pin button is `${n.pinned ? 'Unpin' : 'Pin'}`
+and is perfectly well labelled. After the fix the real count is **zero**: every
+button in the app has a name of some kind. The finding is about *visible* names,
+not missing ones, and overstating it would have buried the real point.
+
+### P7-03 — `confirm()` and undo-toast are used in near-equal numbers, by no stated rule
+
+**12** `confirm()` calls, **11** undo toasts. `CLAUDE.md` records that v9.0
+deliberately replaced confirms with undo toasts, so the intended direction is
+known — but both patterns are live and the choice between them is made
+case-by-case. v9.59's `keepOnlyEvent()` deliberately does *both*, for a stated
+reason (the row you tap is not the row that disappears), which is the only
+place the decision is written down.
+
+Not a defect. It is a convention that exists in practice and nowhere in writing,
+so each new control re-litigates it. Belongs in `CLAUDE.md` in P9.
+
+### Reachability — the precedent that started this
+
+The watched-senders manager is three taps deep (**Settings → Reminders and email
+→ Manage watched senders**) and is **hidden entirely** unless
+`watcherConfigured()` is true (`index.html:5994` — both URL *and* token saved).
+Logan reported it as missing on 26 Aug. It was not missing; it was two levels
+down and conditionally invisible.
+
+That is the same class as everything above: **a capability people cannot find is
+a capability they do not have**, which the app's own `setHeader` comment already
+says about the Ask button. The principle is stated in the codebase and applied
+in one place.
+
+### P7 recommendations, carried to P9
+
+1. **Give the dismiss family the same manners as the delete family** — a visible
+   word, and either a confirm or an undo. They are equally permanent.
+2. Put the word **"dismiss"** on the control that dismisses (P7-01).
+3. A guard the a11y suite cannot currently express: a control that performs a
+   **permanent** action must have visible text, not only an `aria-label`.
+4. Write the confirm-vs-undo rule down.
+
+**Verified vs diagnosed:** all counts verified against the repo at `00d6521`
+with a tool validated on known-true cases first. The reachability claim is
+verified in code (`watcherConfigured` gating) and corroborated by Logan's own
+report. **Nothing reproduced on a device. No code was changed.**
+
 
 ## P8 — Is the suite honest?  ·  status: NOT STARTED
 
