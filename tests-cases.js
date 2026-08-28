@@ -3349,3 +3349,28 @@ test('an empty email check clears the waiting badge', () => {
   assert.ok(/pendingEmailCount = 0/.test(empty),
     'the empty-result path does not clear the badge');
 });
+
+test('a new person never takes a colour someone else is already using', () => {
+  // The colour was picked by LIVE COUNT, so deleting someone in the middle made
+  // the next person collide with an existing one -- and colour is the person tag
+  // on every chip, filter and event row. Verified by execution before the fix:
+  // Ana=#7C3AED Cy=#B45309 Dee=#B45309.
+  boot(GOOD);
+  S.kids.length = 0;
+  const addNamed = (n) => {
+    const real = document.getElementById;
+    document.getElementById = (id) => id === 'kidName' ? { value:n } : real.call(document, id);
+    addKid();
+    document.getElementById = real;
+  };
+  addNamed('Ana'); addNamed('Ben'); addNamed('Cy');
+  S.kids.find(k => k.name === 'Ben').deleted = true;
+  addNamed('Dee');
+  const live = S.kids.filter(k => !k.deleted);
+  assert.strictEqual(live.length, 3);
+  assert.strictEqual(new Set(live.map(k => k.color)).size, 3,
+    'two live people share a colour: ' + live.map(k => k.name + '=' + k.color).join(' '));
+  // ...and the freed colour is the one that gets reused.
+  assert.strictEqual(live.find(k => k.name === 'Dee').color, KID_COLORS[1],
+    'the free colour was skipped');
+});

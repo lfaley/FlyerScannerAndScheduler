@@ -4356,7 +4356,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.64';
+const APP_VERSION = 'v9.65';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -10544,7 +10544,15 @@ function addKid(){
   if(S.kids.some(k=>!k.deleted && k.name.toLowerCase()===name.toLowerCase())){
     alert(name+' is already on the list.'); return;
   }
-  const color = KID_COLORS[S.kids.filter(k=>!k.deleted).length % KID_COLORS.length];
+  // Pick the first colour NOBODY IS USING, not the one at the live-count index.
+  // Indexing by count collided as soon as a person in the middle was deleted:
+  // add Ana/Ben/Cy, delete Ben, add Dee -> the live count is 2, so Dee got
+  // KID_COLORS[2] -- Cy's colour -- while KID_COLORS[1] sat free. Verified by
+  // execution: Cy and Dee both came out #B45309, and colour is the person tag
+  // everywhere in the app (code review, P5 candidate verified 28 Aug).
+  const used = new Set(S.kids.filter(k => !k.deleted).map(k => k.color));
+  const color = KID_COLORS.find(c => !used.has(c))
+             || KID_COLORS[S.kids.length % KID_COLORS.length];
   S.kids.push({id:uid(), name, color, type:(newPersonType||'kid'), deleted:false});
   save(); render();
 }

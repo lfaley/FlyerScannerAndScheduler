@@ -731,7 +731,18 @@ its reproduction here: `0 failed`, exit 1, `AssertionError` on stderr.
 | `callAI` `:4448` | the fallback toast and log are emitted before Anthropic answers | **CONFIRMED, minor.** `recordAiCall(fellBackTo)` and *"Read by Anthropic…"* both run before `return await callClaude(...)`. If Anthropic then fails, the user has already been told it succeeded. Same family as P4-01: asserting an outcome not yet achieved. |
 | `retryEmailTrouble` `:7411` | retry does not de-duplicate by msgId | **NOT CONFIRMED — refuted.** `pendingMsgIds` is de-duped through `new Set` at `:7425`, and `markDuplicates(out, pendingEvents)` guards the entries. The reader's mechanism was wrong. |
 
-**Seven candidates still unverified**, and they stay marked as such: `:475`
+### Second verification pass — three more, 28 Aug 2026
+
+| # | Candidate | Verdict |
+|---|---|---|
+| `addKid` `:10547` | person colour picked by live count, so a delete makes the next person collide | **CONFIRMED by execution.** Add Ana/Ben/Cy → `#7C3AED / #0E7490 / #B45309`. Delete Ben, add Dee → **Ana `#7C3AED`, Cy `#B45309`, Dee `#B45309`** while `#0E7490` sits free. Colour is the person tag on every chip, filter and event row, so two people become indistinguishable. **FIXED v9.64** — the first *unused* colour is chosen. |
+| `citedEvents` `:1667` | `\[(\d{1,2})\]` caps citations at 99 | **CONFIRMED by execution.** A "next 3 months" scope with 140 events in window emits **140 refs numbered to 140**, and `citedEvents('see [140]', refs)` returns **0**. Any citation the model makes above 99 is silently dropped and the answer shows no source. Not fixed — needs a decision on whether to widen the regex or cap the refs. |
+| `daysUntil` `:475` | mixes UTC-parsed and local dates when `today` is injected | **NOT CONFIRMED — refuted.** `daysUntil('2026-08-29', new Date(2026,7,28))` returns `1`; same-day returns `0`. The mechanism does not manifest. |
+
+**Running tally of the twelve: eight verified — six confirmed, two refuted.**
+Two refutations in eight is the argument for the pass.
+
+**Four candidates still unverified**, and they stay marked as such: `:475`
 `daysUntil`, `:1667` the citation regex ceiling, `:3670` `contextFromPs`
 falling back to another model's window, `:4522` the cached context never
 invalidated, `:6151`/`:6156` the disambiguated `check_list_item`, `:5950` the
