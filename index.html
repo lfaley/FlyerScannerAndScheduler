@@ -4377,7 +4377,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.68';
+const APP_VERSION = 'v9.69';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -5691,7 +5691,7 @@ function conflictActions(c){
   return `<div style="width:100%;display:flex;flex-direction:column;gap:6px">`
     + `<button class="btn sm" style="width:100%" onclick="event.stopPropagation();dismissConflict('${esc(key)}')">${ico('check-circle')}${keepLabel} — dismiss this warning</button>`
     + `<div class="meta" style="font-size:12px;margin:2px 0 4px">${esc(note)}</div>`
-    + `<div class="meta" style="font-size:11px;color:var(--muted)">Or pick one — move it, or keep only it:</div>`
+    + `<div class="meta" style="font-size:11px;color:var(--muted)">Or pick one — move it, remove just it, or keep only it:</div>`
     + c.events.slice(0, 5).map(ev => {
         const t = fmtTimeRange(ev) || (ev.time ? fmt12(ev.time)
           : (ev.kind === 'deadline' ? 'due (no time)' : 'all day'));
@@ -5702,6 +5702,10 @@ function conflictActions(c){
         // and sits UNDER the row it belongs to so the event it keeps is the one
         // named directly above it.
         const others = c.events.length - 1;
+        // TWO directions, not one. Until v9.69 the only per-event action was
+        // "keep only this", which on a busy day of four means deleting three
+        // events to be rid of one. Both are offered now, and both name the
+        // number of events they will actually remove.
         return `<div style="display:flex;flex-direction:column;gap:2px">
           <button class="btn alt sm" style="width:100%;text-align:left;white-space:normal;padding:10px 12px"
             onclick="openEventEdit('${esc(ev.id)}')">
@@ -5709,10 +5713,16 @@ function conflictActions(c){
             <span class="meta" style="font-size:12px;display:block;margin-top:2px">${esc(meta)}</span>
             <span class="meta" style="font-size:11px;display:block;margin-top:3px;color:var(--accent)">${ico('edit')}Tap to reschedule</span>
           </button>
-          <button class="linkbtn red" style="align-self:flex-end;font-size:12px;padding:2px 4px"
-            aria-label="Keep only ${esc(ev.title || 'Untitled')} and remove the other ${others === 1 ? 'event' : others + ' events'}"
-            onclick="event.stopPropagation();keepOnlyEvent('${esc(ev.id)}','${esc(key)}')">
-            Keep only this — remove the other${others === 1 ? '' : 's'}</button>
+          <div class="row" style="justify-content:flex-end;gap:10px;flex-wrap:wrap">
+            <button class="linkbtn red" style="font-size:12px;padding:2px 4px"
+              aria-label="Remove ${esc(ev.title || 'Untitled')} and keep the other ${others === 1 ? 'event' : others + ' events'}"
+              onclick="event.stopPropagation();removeOneEvent('${esc(ev.id)}','${esc(key)}')">
+              Remove just this one</button>
+            <button class="linkbtn red" style="font-size:12px;padding:2px 4px"
+              aria-label="Keep only ${esc(ev.title || 'Untitled')} and remove the other ${others === 1 ? 'event' : others + ' events'}"
+              onclick="event.stopPropagation();keepOnlyEvent('${esc(ev.id)}','${esc(key)}')">
+              Keep only this — remove the other${others === 1 ? '' : ' ' + others}</button>
+          </div>
         </div>`;
       }).join('')
     + (c.events.length > 5 ? `<div class="meta" style="font-size:12px">and ${c.events.length - 5} more overlapping</div>` : '')
@@ -5758,6 +5768,52 @@ function keepOnlyEvent(keepId, key){
   toast('Kept “' + (keep.title || 'Untitled') + '” — removed ' + losers.length,
     { label:'Undo', fn:() => {
       before.forEach(b => { b.e.deleted = b.deleted; b.e.dirty = b.dirty; });
+      save(); render(); toast('Put back');
+    }});
+}
+
+/**
+ * Resolve a clash by removing ONE of its events and keeping the rest (v9.69).
+ *
+ * The exact inverse of keepOnlyEvent(), and the action the banner was missing.
+ * Every control on that screen acted on the whole conflict: dismiss silenced
+ * the group, "keep only this" deleted every other member. That is fine for an
+ * `overlap`, which always holds exactly two events -- keeping one IS removing
+ * the other -- and wrong for a `busy-day`, which holds four or more. Logan hit
+ * it on 28 Aug with four events on one date and no way to drop a single one
+ * without destroying the three he wanted.
+ *
+ * Soft delete plus `dirty`, with an Undo that restores the prior flags rather
+ * than assuming they were unset -- the same mechanism keepOnlyEvent() uses on
+ * its losers, so a removal made from either direction is recoverable the same
+ * way.
+ *
+ * No dismissConflict() here, for the reason recorded on keepOnlyEvent():
+ * findConflicts() re-derives from live events, so an overlap that loses a side
+ * or a busy day that drops below the threshold stops warning by itself. A key
+ * written into dismissedConflicts would outlive the events it names and would
+ * silence the group if the Undo brought this one back.
+ */
+function removeOneEvent(evId, key){
+  // Re-derive rather than trusting a rendered index -- see stepConflict().
+  const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
+  if(!c){ toast('That clash is already resolved'); render(); return; }
+
+  const ev = c.events.find(e => e.id === evId);
+  if(!ev || ev.deleted){ render(); return; }
+  const keeping = c.events.filter(e => e.id !== evId && !e.deleted).length;
+
+  if(!confirm('Remove “' + (ev.title || 'Untitled') + '”?'
+    + (keeping ? '\n\nThe other ' + keeping + (keeping === 1 ? ' event stays' : ' events stay') + '.' : '')
+    + '\n\nIt is removed from your list. Anything already added to your calendar stays there — delete those in the Calendar app.')) return;
+
+  const before = { deleted: ev.deleted, dirty: ev.dirty };
+  ev.deleted = true; ev.dirty = 1;
+  save();
+  render();
+  toast('Removed “' + (ev.title || 'Untitled') + '”',
+    { label:'Undo', fn:() => {
+      ev.deleted = before.deleted; ev.dirty = before.dirty;
       save(); render(); toast('Put back');
     }});
 }
@@ -11049,6 +11105,7 @@ Object.assign(window, {
   forgetImportedEmails,
   goToEvents,
   keepOnlyEvent,
+  removeOneEvent,
   manualPrune,
   markAllRead,
   mealActions,

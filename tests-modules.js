@@ -3274,6 +3274,28 @@ module.exports = async function runModuleTests(test){
       'it also writes a dismissal, which would survive an undo');
   });
 
+  test('removeOneEvent is the inverse of keepOnlyEvent, and is exported to window (v9.69)', () => {
+    // The banner's controls all acted on the WHOLE conflict until v9.69, so a
+    // four-event busy day had no way to drop one event -- "keep only this"
+    // would have deleted the other three. This is the inverse, and it must
+    // share the safety properties of the control it sits beside.
+    const code = (html.match(/function removeOneEvent\([\s\S]*?\n\}/) || [''])[0];
+    assert.ok(code, 'removeOneEvent is not defined');
+    assert.ok(/findConflicts\(/.test(code),
+      'it trusts a rendered id instead of re-deriving the conflict from the key');
+    assert.ok(/confirm\(/.test(code), 'it removes an event without confirming');
+    assert.ok(/dirty = 1/.test(code), 'the removed event is not marked dirty');
+    assert.ok(/label:'Undo'/.test(code), 'removeOneEvent offers no undo');
+    assert.ok(!/dismissedConflicts/.test(code),
+      'it also writes a dismissal, which would outlive the event and survive an undo');
+
+    // Inline onclick handlers resolve against global scope: a handler missing
+    // from this block is a button that throws on tap and reads as dead.
+    const win = (html.match(/Object\.assign\(window, \{[\s\S]*?\n\}\);/) || [''])[0];
+    assert.ok(win, 'the window export block is gone');
+    assert.ok(/\n  removeOneEvent,/.test(win), 'removeOneEvent is not exported to window');
+  });
+
   console.log('\nProblem Log — multi-select and clear (v9.39)');
 
   test('every new Problem Log control is reachable from an inline handler', () => {

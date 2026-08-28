@@ -3557,3 +3557,112 @@ test('the fallback toast and its log entry wait until Anthropic has answered', (
   assert.ok(logged > call, 'the fellBackTo entry is still written before the call');
   assert.ok(toasted > call, 'the toast still fires before the call');
 });
+
+console.log('\nClash banner — removing just one (v9.69)');
+
+// A BUSY-DAY conflict: four events on one future date, which is the shape
+// findConflicts() reports at its threshold of 4 and the shape Logan hit on
+// 28 Aug. `overlap` conflicts always hold exactly two events, so they can
+// never show this defect — the busy day is where "the others" means three.
+function busyDay(){
+  boot(null);
+  const d = dayAhead(3);
+  S.events.push({ id:'b1', title:'Volleyball Practice Begins', date:d, time:'15:15', kind:'event', deleted:false });
+  S.events.push({ id:'b2', title:'Volleyball Practices Begin', date:d, time:'15:15', kind:'event', deleted:false });
+  S.events.push({ id:'b3', title:'Costume Deposits Due', date:d, kind:'deadline', deleted:false });
+  S.events.push({ id:'b4', title:'ELA Notebook Bring', date:d, kind:'deadline', deleted:false });
+  const c = findConflicts(S.events, todayISO()).find(x => x.type === 'busy-day');
+  assert.ok(c, 'four events on one day do not register as a busy day');
+  assert.strictEqual(c.events.length, 4, 'the busy-day conflict is not holding all four');
+  return { key: conflictKey(c), d };
+}
+
+test('removing one event on a busy day keeps the other three', () => {
+  // The defect: every control on the banner acted on the whole conflict.
+  // "Keep only this" on a four-event busy day deletes THREE events to be rid
+  // of one, and there was no inverse. Logan: "I still can't dismiss an
+  // Individual item!"
+  const { key } = busyDay();
+  withConfirm(true, () => removeOneEvent('b2', key));
+  const live = S.events.filter(e => !e.deleted).map(e => e.id).sort();
+  assert.deepStrictEqual(live, ['b1', 'b3', 'b4'],
+    'removing one event did not leave the other three alone: ' + live.join(','));
+});
+
+test('removing one is soft-delete plus dirty, exactly like keepOnlyEvent', () => {
+  const { key } = busyDay();
+  withConfirm(true, () => removeOneEvent('b3', key));
+  const gone = S.events.find(e => e.id === 'b3');
+  assert.strictEqual(gone.deleted, true);
+  assert.strictEqual(gone.dirty, 1, 'not marked dirty — every other bulk removal is');
+  assert.strictEqual(S.events.length, 4, 'the row was destroyed instead of soft-deleted');
+});
+
+test('declining the confirm removes nothing', () => {
+  const { key } = busyDay();
+  withConfirm(false, () => removeOneEvent('b2', key));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 4,
+    'it removed the event after the user said no');
+});
+
+test('the undo restores the flags that were actually there', () => {
+  const { key } = busyDay();
+  S.events.find(e => e.id === 'b4').dirty = 7;
+  const undo = captureUndo(() => withConfirm(true, () => removeOneEvent('b4', key)));
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  const back = S.events.find(e => e.id === 'b4');
+  assert.strictEqual(back.deleted, false, 'undo did not restore the event');
+  assert.strictEqual(back.dirty, 7, 'undo clobbered a flag it did not set');
+});
+
+test('removing one side of a two-event overlap ends the warning', () => {
+  // The busy day is the case that needed this, but the control appears on every
+  // conflict, and on an overlap it must behave as the complement of keepOnly.
+  const { key } = clashPair();
+  withConfirm(true, () => removeOneEvent('x2', key));
+  assert.strictEqual(S.events.find(e => e.id === 'x1').deleted, false, 'it removed the wrong one');
+  assert.strictEqual(findConflicts(S.events, todayISO()).length, 0,
+    'the warning survived its own resolution');
+});
+
+test('nothing is written into dismissedConflicts, so an undo brings the warning back', () => {
+  // keepOnlyEvent records the reason this must not dismiss: findConflicts()
+  // re-derives from live events, so a key stored here would outlive the events
+  // it names AND would silence the group if the undo restored the event.
+  const { key } = busyDay();
+  const undo = captureUndo(() => withConfirm(true, () => removeOneEvent('b1', key)));
+  assert.deepStrictEqual(S.settings.dismissedConflicts || [], [],
+    'removing an event silenced the whole conflict as a side effect');
+  undo();
+  assert.ok(findConflicts(S.events, todayISO()).some(x => x.type === 'busy-day'),
+    'the busy day did not come back with the event');
+});
+
+test('a stale key, a deleted event, or an unknown id is refused rather than acted on', () => {
+  const { key } = busyDay();
+  withConfirm(true, () => removeOneEvent('b1', 'overlap|1999-01-01|nope'));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 4, 'a stale key still removed something');
+  withConfirm(true, () => removeOneEvent('no-such-id', key));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 4, 'an unknown id still removed something');
+  S.events.find(e => e.id === 'b2').deleted = true;
+  withConfirm(true, () => removeOneEvent('b2', key));
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 3, 'an already-deleted event was re-removed');
+});
+
+test('every row on the banner offers BOTH directions, and both handlers are on window', () => {
+  // The control is an inline onclick, so a handler missing from the window
+  // bridge is a button that throws on tap and reads as simply dead.
+  const { key } = busyDay();
+  const c = findConflicts(S.events, todayISO()).find(x => conflictKey(x) === key);
+  const html = conflictActions(c);
+  ['b1', 'b2', 'b3', 'b4'].forEach(id => {
+    assert.ok(html.includes("removeOneEvent('" + id + "'"), 'no "remove just this one" for ' + id);
+    assert.ok(html.includes("keepOnlyEvent('" + id + "'"), '"keep only this" was removed for ' + id);
+  });
+  assert.ok(/Remove just this one/.test(html), 'the new control has no visible text');
+  // Rule 26: a destructive control wears its consequence. "the others" hides
+  // that three events are going.
+  assert.ok(/remove the other 3/.test(html),
+    'the keep-only label still says "the others" on a four-event busy day');
+});
