@@ -2,7 +2,7 @@
 
 **Status: IN PROGRESS. Written 27 Aug 2026 before any review work, so the scope
 cannot quietly shrink later. P1 complete 28 Aug 2026 — see
-`CODE-REVIEW-FINDINGS.md`. P1–P5 complete; P6–P9 not started.**
+`CODE-REVIEW-FINDINGS.md`. P1–P6 complete; P7–P9 not started.**
 
 **Baseline re-measured at the start of P1**, per §4: the repo is at `00d6521`
 (v9.61), `index.html` is now **10,892** lines (was 10,493), the window bridge

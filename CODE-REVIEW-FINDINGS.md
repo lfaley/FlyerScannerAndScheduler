@@ -719,7 +719,116 @@ read but not independently confirmed — those are explicitly not yet findings, 
 verifying them is the first task of any follow-up. **No code was changed.**
 
 
-## P6 — One-way doors  ·  status: NOT STARTED (2 members already confirmed, see plan §5)
+## P6 — One-way doors  ·  status: COMPLETE  ·  28 Aug 2026
+
+**Question:** what can the user do that they cannot undo, see, or reverse?
+
+This is the class the whole review was triggered by. **Tool:** `tools/p6-oneway.js`.
+
+### The standard, taken from a case the app gets RIGHT
+
+`settings.seenMsgs` has the identical *shape* to the defects — a list that grows
+and suppresses things — and it is **not** a defect, because
+`forgetImportedEmails()` (`index.html:6888`) empties it and the button shows the
+count. So the rule this phase applies is:
+
+> **Suppression is fine. Suppression with no way back is the bug.**
+
+Three questions per key: can the user **undo** it, **see** what they suppressed,
+**clear** it? Three "no"s is a finding.
+
+### The result: the class has exactly two members
+
+All **25** `S.settings.*` keys enumerated. Scalar preferences (theme, provider,
+model, tone) are excluded on principle — a value that can always be set to
+another value is not a door. That leaves eight accumulating keys:
+
+| Key | Verdict |
+|---|---|
+| `dismissedConflicts` | **NO WAY BACK** — the trigger finding |
+| `notDuplicates` | **NO WAY BACK** |
+| `seenMsgs` | clearable — `forgetImportedEmails()`, count shown |
+| `senderTags` | clearable — tags toggle off in the sender manager |
+| `exportQueue` | clearable — `cancelExportQueue()` |
+| `errorReportsOff` | **not a door** — `setErrorReports(this.checked)` from a visible checkbox (`:9352`), two-way |
+| `nudgeSnooze` | **not a door** — holds today's date and expires tomorrow |
+| `starCarry` | **not a door** — recomputed by `pruneData()` (`:3853`) |
+
+**Nothing new was found.** The two already known are the whole class, and that
+is now established by enumeration rather than by having noticed them.
+
+### P6-01 — `dismissedConflicts`  ·  REAL (confirmed in P2, now enumerated)
+
+Written once (`index.html:5706`), read twice (`:5527`, `:5554`), **never
+cleared**. No undo on the dismiss, no screen listing what has been silenced, no
+way to bring one back. A single tap on an unlabelled ✕ silences that pair of
+events permanently.
+
+### P6-02 — `notDuplicates`  ·  REAL, same shape
+
+Pushed at `:7598` and `:7657`, read at `:7588` and `:7648`, **never cleared**.
+Tapping "Not duplicates" on a pair is permanent. Two events that genuinely are
+duplicates and were mis-dismissed can never be offered again.
+
+### P6-03 — `startFresh()` is a one-way door done RIGHT, with one omission
+
+`index.html:3957`. Worth recording as the standard the other two should meet:
+**two** confirmations, the second naming what goes ("all events, chores, stars,
+lists and recipes"), and the first saying plainly *"This cannot be undone.
+Download the rescue file first if you have not."* Irreversible by nature, and
+the user is told so twice before it happens.
+
+**The omission:** it removes every key beginning `flyersnap`, and `SNAP_PREFIX`
+is `'flyersnap-snap-'` (`:3888`). So it also destroys **the app's own daily
+snapshots** — the thing `restoreSnapshot()` exists to read. The wording sends
+the user to the rescue file, which is right, but nothing says the internal safety
+net goes too. `GORDON_SESSION_KEY` (`'flyersnap.gordon.session'`, `:920`) is
+also swept, which is correct and probably intended.
+
+### Record flags — enumerated, nothing found
+
+| Flag | set true | set false | toggled | verdict |
+|---|---|---|---|---|
+| `deleted` | 7 | 2 | 0 | reversible via `softDelete`'s undo toast |
+| `handled` | 1 | 1 | 0 | `markHandled` offers undo |
+| `done` (problems) | 4 | 1 | 0 | `reopenProblem` |
+| `checked` | 1 | 1 | 1 | toggles |
+| `pinned` | 0 | 0 | 1 | toggles |
+| `unread` | 0 | 3 | 0 | one-way by design — "seen" does not un-see |
+| `exported` | 3 | 1 | 0 | reset on re-export |
+
+### CORRECTIONS to this phase's tool — the two that mattered most in the review so far
+
+1. **The emptiness test ended in `\b`.** For `= []`, `= {}`, `= ''` the last
+   character is not a word character and the next is `;`, so the boundary could
+   never match. **21 of 25 keys were reported as never cleared** — including
+   `seenMsgs`, which is the phase's own worked example of a key that *is*
+   cleared. Had that gone in the log, the standard this phase rests on would
+   have been listed as a defect.
+
+2. **An empty assignment is not a clear when it is a lazy initialiser.** After
+   fixing (1), the tool reported `dismissedConflicts` and `notDuplicates` as
+   **CLEARABLE** — because `if(!S.settings.notDuplicates) S.settings.notDuplicates = []`
+   and `S.settings.dismissedConflicts || (S.settings.dismissedConflicts = [])`
+   both assign `[]`. Both mean *create it*, not *empty it*.
+
+   **This would have overturned the two findings the entire phase was seeded
+   with** — the ones already confirmed by hand in P2 and in the original
+   conversation. The only reason it did not is that the new output disagreed
+   with something already known to be true, and a disagreement between a tool
+   and a verified fact is a bug in the tool until proven otherwise.
+
+That is the seventh method correction in six phases. It is no longer an
+incidental observation: **on this codebase, the first version of an analysis is
+wrong often enough that "the tool said so" is not evidence.** That belongs in
+`CLAUDE.md` as a rule in its own right, and it is the single most reusable thing
+this review has produced.
+
+**Verified vs diagnosed:** all eight accumulating keys verified by reading the
+repo at `00d6521`; the two findings additionally cross-checked against P2 and
+against the original conversation. Nothing reproduced at runtime — P6 is a
+question about reachability, not behaviour. **No code was changed.**
+
 
 ## P7 — Affordance and discoverability  ·  status: NOT STARTED
 
