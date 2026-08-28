@@ -472,7 +472,160 @@ runtime; P3 is a question about source, and none of these findings needs a
 running app to establish. **No code was changed.**
 
 
-## P4 — Silent failures  ·  status: NOT STARTED
+## P4 — Silent failures  ·  status: COMPLETE  ·  28 Aug 2026
+
+**Question:** what fails, or succeeds pointlessly, without telling anyone?
+
+**Tool:** `tools/p4-silent.js`.
+
+### The sets, enumerated
+
+**111 catch blocks** across 24 files — 100 in `index.html`, 2 in `js/`, 9 in
+`gmail-watcher.gs`. Sorted by the shape of the body, not by judgement:
+
+| Shape | Count | Meaning |
+|---|---|---|
+| handled | **78** | alerts, toasts, `logProblem`, rethrows, real recovery |
+| comment only | **11** | swallowed on purpose, **with the reason written down** |
+| console only | **0** | — |
+| empty, no reason at all | **22** | the set that needed reading |
+
+**Worth saying before the findings:** those 11 comment-only catches each state
+why — *"snapshots are best-effort; never block a save"*, *"logging must never
+break the thing it is logging about"*, *"decoration must never break the
+action"*. That is a healthy pattern and it is most of the deliberate swallowing
+in the app. The 22 with nothing at all are where the problems live, and **17 of
+those 22 are genuinely ignorable** on reading (caret restore, `navigator.share`
+cancellation, capability probes, a nested belt-and-braces write inside a handler
+that already alerts). Five are not.
+
+`logProblem()` is called from **15** sites.
+
+### P4-01 — Sign-out reports success it never checked  ·  REAL, the most serious in this phase
+
+**Where:**
+- `index.html:931` — `function clearGordonSession(){ try{ localStorage.removeItem(GORDON_SESSION_KEY); }catch(e){} }`
+- `index.html:9695-9698` — `gordonSignOutUI()` calls it and then **unconditionally** toasts *"Signed out of Gordon"*.
+
+If `removeItem` throws — Safari private mode, storage access denied, quota
+states — the catch swallows it and the app **tells the user they are signed out
+while the Firebase ID token is still on the device.**
+
+The probability is low. That is not the point: the app is **asserting a security
+outcome it did not verify.** Everywhere else in FlyerSnap a destructive action
+either confirms or offers undo; this one announces a result without checking it.
+
+**Fix, not applied:** read the key back and only toast on success; otherwise say
+so. One line, and it turns an assertion into a fact.
+
+### P4-02 — A Gordon sign-in that cannot be saved fails silently  ·  REAL
+
+**Where:** `index.html:930` — `saveGordonSession()`, same empty catch. Called at
+`:948` and `:962` after a successful sign-in.
+
+If the write fails, sign-in **appears** to work for the rest of the session and
+the user is signed out again on next launch, with nothing ever having said why.
+The app already has the right pattern for exactly this: `save()`
+(`index.html:3793-3797`) alerts *"Could not save — storage on this phone is
+full"* rather than swallowing. This path does not.
+
+### P4-03 — The recovery download can be silently incomplete  ·  REAL
+
+**Where:** `index.html:3943-3949` — `downloadQuarantine()` enumerates
+`localStorage` inside a `try` with an empty catch, then builds the blob from
+whatever it collected.
+
+If the enumeration throws part-way, the user downloads a **partial** copy of
+their quarantined data and is given no reason to doubt it. This is the file you
+reach for when the app has already locked itself after a load failure, so a
+truncated one is the worst possible time for silence.
+
+Same class as P3-01 and P2-01: the failure is not in the feature, it is in the
+instrument you reach for when the feature has already failed. **Three
+independent instances of that shape in three phases** is a pattern worth naming.
+
+### P4-04 — Service-worker registration failure is invisible  ·  MINOR
+
+`index.html:10663` — `navigator.serviceWorker.register('sw.js').catch(()=>{})`.
+If it fails, the app keeps working online and **offline support simply does not
+exist**, with nothing to distinguish that from working. Given how much of this
+project's history is about the installed PWA, this deserves at least a
+`logProblem`.
+
+### P4-05 — `startFresh()` can leave keys behind and still claim a fresh start  ·  MINOR
+
+`index.html:3961-3968` — deletes every `flyersnap*` key inside a `try` with an
+empty catch, then unconditionally does `S = blank()`. A throw mid-loop leaves
+some keys and the app says it started fresh.
+
+### P4-06 — CORRECTION, mine, to a finding I already reported twice
+
+**Seed S4 in `CODE-REVIEW-PLAN.md` §5 says `fetchEmailQueue()` builds a
+diagnostic report that "both callers discard". That is wrong, and I told Logan so
+in conversation as well.**
+
+There are **three** callers, not two, and the third surfaces it:
+`testWatcher()` (`index.html:10401`) destructures `report` and, when nothing was
+offered, shows it in an `alert` with an explanation of what to do about it
+(`:10410-10415`).
+
+The accurate finding is narrower: **the report is shown on the Test button's
+path and discarded on the two everyday paths** — `checkEmail()` (`:6976`) and
+`openEmailReviewNow()` (`:6998`) still take only `{ fresh }`. Worth surfacing
+there too, but that is a smaller claim than the one I made.
+
+S4 should be amended in the plan rather than deleted, because the underlying
+point survives: on the path you actually use, the explanation is thrown away.
+
+### P4-07 — Eight module return values that only the tests ever read  ·  INFORMATIONAL
+
+`validateRoute().autoRun`, `summarize().failureRate / .slowestMs / .byErrorType`,
+`scoreExtraction().pairs`, `aggregateExtraction().inventedTotal / .misdatedTotal`,
+`observedPromptTokens().samples`. Each is computed on every call, asserted by a
+test, and never shown to anyone. Not a defect — but `summarize().failureRate` in
+particular is the kind of number the Problem Log or the AI-call screen could use.
+
+### CORRECTIONS to this phase's tool, before its output was trusted
+
+Three, all the same failure — the method not matching reality:
+
+1. **It stripped comments to spaces before measuring a catch body**, so all 11
+   comment-only catches read as `EMPTY`. It erased the exact distinction the
+   phase exists to make, and would have turned 11 examples of good practice into
+   11 findings.
+2. **It bounded a function at the next `function` keyword**, so top-level
+   constants declared after a function closed were attributed to it. It reported
+   `const THEME_LABELS` as living inside `matchListItems()`. Function bodies are
+   now found by brace matching.
+3. **It read its own prose as evidence.** The first version of check B searched
+   the whole `tools/` directory for a key name — including `tools/p4-silent.js`,
+   whose comments name the very keys under investigation. `report` came back
+   "read by tests/tools" because *the audit was reading its own writing*. The
+   review's own `p*-` tools are now excluded. This is `CLAUDE.md` rule 21 turned
+   recursive, and it is the fourth time in four phases that the method needed
+   correcting before the results meant anything.
+
+A fourth was caught by the results looking wrong rather than by inspection: an
+absolute/relative index mix-up made `alertPlan().extras`,
+`fetchEmailQueue().lastRun` and `buildDiagnosticsFile().diag` appear unread when
+all three are read plainly a few hundred lines later. **Had I not checked the
+three by hand, all three would have been fabricated findings.**
+
+### P4 recommendations, carried to P9
+
+1. **P4-01 first.** Verifying a sign-out is a one-line change and the current
+   behaviour makes a claim about security that is not checked.
+2. P4-02 should use the same alert `save()` already uses — the pattern exists.
+3. P4-03 and P4-05: an empty catch inside a recovery path is the worst place for
+   one. Both should at least `logProblem`.
+4. A guard: no empty `catch` in `index.html` without a comment saying why. **11
+   of 33 already comply**, so the convention exists; it is simply not enforced.
+
+**Verified vs diagnosed:** all seven findings were verified by reading the repo
+at `00d6521`. **None was reproduced at runtime** — the failure modes need a
+storage error to trigger, which was not simulated. That is a real limit on P4-01
+and P4-02: the code path is certain, the trigger frequency is not.
+
 
 ## P5 — `index.html` top to bottom  ·  status: NOT STARTED
 

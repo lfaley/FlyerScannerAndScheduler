@@ -2,7 +2,7 @@
 
 **Status: IN PROGRESS. Written 27 Aug 2026 before any review work, so the scope
 cannot quietly shrink later. P1 complete 28 Aug 2026 — see
-`CODE-REVIEW-FINDINGS.md`. P2–P9 not started.**
+`CODE-REVIEW-FINDINGS.md`. P1–P4 complete; P5–P9 not started.**
 
 **Baseline re-measured at the start of P1**, per §4: the repo is at `00d6521`
 (v9.61), `index.html` is now **10,892** lines (was 10,493), the window bridge
@@ -332,7 +332,7 @@ verified in the repo at v9.59.
 | S1 | `dismissedConflicts` written once, never cleared, no undo, no listing | P6 | `index.html:5675` | **open** |
 | S2 | `notDuplicates` — identical shape | P6 | `index.html:7598, :7657` | **open** |
 | S3 | ✕ and "Keep both" do the same thing; neither says "dismiss" | P7 | `index.html:5541, :5589` | **open** |
-| S4 | `fetchEmailQueue()` builds a diagnostic report both callers discard | P4 | `index.html:6387` | **open** |
+| S4 | ~~`fetchEmailQueue()` builds a diagnostic report both callers discard~~ **AMENDED in P4-06: there are THREE callers and `testWatcher()` does show it. The report is discarded only on the two everyday paths.** | P4 | `index.html:6404`, callers `:6976`, `:6998`, `:10401` | amended |
 | S5 | Watcher queue trim deleted every message reference it created | P3 | `gmail-watcher.gs:541` | fixed v9.39 — *class not yet swept* |
 | S6 | Gordon model tag drifted across four sites plus a fifth app | P3 | — | fixed v9.37–38 — *class not yet swept* |
 | S7 | Guard read prose, not code (4th occurrence) | P8 | `CLAUDE.md` rule 21 | *class not yet swept* |
