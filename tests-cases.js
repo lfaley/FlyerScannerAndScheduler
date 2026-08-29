@@ -3779,3 +3779,224 @@ test('select mode ends when the removal happens, and the empty selection is refu
   withConfirm(true, () => removeSelectedClash(key));
   assert.strictEqual(clashSel, null, 'select mode stayed on after the removal');
 });
+
+console.log('\nNotes — folders and labels (v9.71)');
+
+// One folder, one label, three notes. Built through the real handlers wherever
+// possible, so a test cannot pass against a shape the app never produces.
+function notesWithGroups(){
+  boot(null);
+  clearNoteFilters();
+  S.noteFolders = []; S.noteLabels = []; S.notes = [];
+  const school = addNoteGroup('noteFolders', 'School');
+  const forms  = addNoteGroup('noteLabels', 'forms');
+  const now = '2026-08-27T10:00:00.000Z';
+  S.notes = [
+    { id:'n1', title:'Supply list', body:'2 binders', pinned:false, personIds:[],
+      folderId:school.id, labelIds:[forms.id], color:'', archived:false, created:now, updated:now, deleted:false },
+    { id:'n2', title:'Office number', body:'555-0143', pinned:false, personIds:[],
+      folderId:school.id, labelIds:[], color:'', archived:false, created:now, updated:now, deleted:false },
+    { id:'n3', title:'Uniform sizes', body:'Braelyn M', pinned:false, personIds:[],
+      folderId:null, labelIds:[forms.id], color:'', archived:false, created:now, updated:now, deleted:false },
+  ];
+  save();
+  return { school, forms };
+}
+
+test('a note lives in ONE folder and carries ANY NUMBER of labels', () => {
+  const { school, forms } = notesWithGroups();
+  const sport = addNoteGroup('noteLabels', 'volleyball');
+  setNoteFolder('n3', school.id);
+  assert.strictEqual(S.notes.find(n => n.id === 'n3').folderId, school.id);
+  toggleNoteLabel('n3', sport.id);
+  assert.deepStrictEqual(S.notes.find(n => n.id === 'n3').labelIds.sort(),
+    [forms.id, sport.id].sort(), 'a note could not hold two labels');
+  // Moving folders REPLACES; labelling ACCUMULATES. That is the whole model.
+  const other = addNoteGroup('noteFolders', 'Sport');
+  setNoteFolder('n3', other.id);
+  assert.strictEqual(S.notes.find(n => n.id === 'n3').folderId, other.id,
+    'a second folder did not replace the first');
+  assert.strictEqual(S.notes.find(n => n.id === 'n3').labelIds.length, 2,
+    'moving folder disturbed the labels');
+});
+
+test('a duplicate name reuses the existing group instead of forking it', () => {
+  // The failure mode every long-term tag user reports: "School" and "school "
+  // sitting side by side, splitting one group in two. Nothing else in the app
+  // can see both names at once, so this is the only place it can be stopped.
+  notesWithGroups();
+  const a = addNoteGroup('noteFolders', 'School');
+  const b = addNoteGroup('noteFolders', '  school  ');
+  assert.strictEqual(a.id, b.id, 'a case/space variant created a second folder');
+  assert.strictEqual(noteFolders().length, 1, 'the folder list forked');
+  assert.strictEqual(a.name, 'School', 'the original name was overwritten');
+});
+
+test('an empty or blank name creates nothing', () => {
+  notesWithGroups();
+  const before = noteLabels().length;
+  assert.strictEqual(addNoteGroup('noteLabels', '   '), null, 'whitespace made a label');
+  assert.strictEqual(addNoteGroup('noteLabels', ''), null, 'an empty string made a label');
+  assert.strictEqual(noteLabels().length, before, 'the label list grew anyway');
+});
+
+test('REMOVING A FOLDER NEVER REMOVES ITS NOTES', () => {
+  // "Delete folder" is exactly the phrase a user expects to mean "and
+  // everything in it". CLAUDE.md rule 26 read forwards.
+  const { school } = notesWithGroups();
+  delNoteGroup('noteFolders', school.id);
+  assert.strictEqual(liveNotes().length, 3, 'removing a folder destroyed notes');
+  assert.strictEqual(S.notes.find(n => n.id === 'n1').folderId, null,
+    'the note kept a folderId pointing at a folder that is gone');
+  assert.strictEqual(noteFolders().length, 0, 'the folder survived its own removal');
+});
+
+test('removing a label drops it from every note and nothing else', () => {
+  const { forms } = notesWithGroups();
+  delNoteGroup('noteLabels', forms.id);
+  assert.strictEqual(liveNotes().length, 3, 'removing a label destroyed notes');
+  assert.ok(S.notes.every(n => !(n.labelIds || []).includes(forms.id)),
+    'a note still points at a label that is gone');
+});
+
+test('undoing a folder removal puts the notes back where they were', () => {
+  const { school } = notesWithGroups();
+  const undo = captureUndo(() => delNoteGroup('noteFolders', school.id));
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  assert.strictEqual(noteFolders().length, 1, 'the folder did not come back');
+  assert.strictEqual(S.notes.filter(n => n.folderId === school.id).length, 2,
+    'the notes did not go back into the folder');
+});
+
+test('a rename keeps every membership, and an empty rename is refused', () => {
+  // Ids, not names, are what a note stores -- so a rename must cost nothing.
+  const { school } = notesWithGroups();
+  assert.strictEqual(renameNoteGroup('noteFolders', school.id, 'Middle School'), true);
+  assert.strictEqual(noteFolderName(school.id), 'Middle School');
+  assert.strictEqual(S.notes.filter(n => n.folderId === school.id).length, 2,
+    'a rename lost the notes in the folder');
+  assert.strictEqual(renameNoteGroup('noteFolders', school.id, '   '), false,
+    'a blank rename was accepted');
+  assert.strictEqual(noteFolderName(school.id), 'Middle School', 'the name was blanked');
+});
+
+test('the folder filter shows one folder, and Unfiled shows only unfiled notes', () => {
+  const { school } = notesWithGroups();
+  setNoteFolderFilter(school.id);
+  assert.deepStrictEqual(liveNotes().filter(notePassesFilter).map(n => n.id), ['n1', 'n2']);
+  setNoteFolderFilter('');                       // '' means Unfiled, not "all"
+  assert.deepStrictEqual(liveNotes().filter(notePassesFilter).map(n => n.id), ['n3']);
+  clearNoteFilters();
+  assert.strictEqual(liveNotes().filter(notePassesFilter).length, 3, 'clearing did not restore');
+});
+
+test('two labels NARROW the list — they are ANDed, not ORed', () => {
+  // An OR would make every extra tap return MORE notes, which reads as the
+  // control not working.
+  const { forms } = notesWithGroups();
+  const sport = addNoteGroup('noteLabels', 'volleyball');
+  toggleNoteLabel('n3', sport.id);
+  toggleNoteLabelFilter(forms.id);
+  assert.deepStrictEqual(liveNotes().filter(notePassesFilter).map(n => n.id), ['n1', 'n3']);
+  toggleNoteLabelFilter(sport.id);
+  assert.deepStrictEqual(liveNotes().filter(notePassesFilter).map(n => n.id), ['n3'],
+    'adding a second label widened the list instead of narrowing it');
+});
+
+test('a filter cleared by a removal cannot leave the board showing nothing', () => {
+  // Deleting the folder you are filtering by must not strand you on an empty
+  // screen with a control that no longer exists to switch off.
+  const { school, forms } = notesWithGroups();
+  setNoteFolderFilter(school.id);
+  delNoteGroup('noteFolders', school.id);
+  assert.strictEqual(noteFolderFilter, null, 'the board is still filtered by a folder that is gone');
+  toggleNoteLabelFilter(forms.id);
+  delNoteGroup('noteLabels', forms.id);
+  assert.strictEqual(noteLabelFilter.size, 0, 'the board is still filtered by a label that is gone');
+});
+
+test('search reaches folder and label names', () => {
+  notesWithGroups();
+  noteSearch = 'school';
+  assert.deepStrictEqual(liveNotes().filter(noteMatches).map(n => n.id), ['n1', 'n2'],
+    'searching a folder name found nothing');
+  noteSearch = 'forms';
+  assert.deepStrictEqual(liveNotes().filter(noteMatches).map(n => n.id), ['n1', 'n3'],
+    'searching a label name found nothing');
+  noteSearch = '';
+});
+
+test('the board renders the filter bar, and the card says where the note lives', () => {
+  notesWithGroups();
+  const m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(/setNoteFolderFilter\('/.test(m.innerHTML), 'no folder chips on the board');
+  assert.ok(/toggleNoteLabelFilter\('/.test(m.innerHTML), 'no label chips on the board');
+  assert.ok(/Unfiled \(1\)/.test(m.innerHTML), 'Unfiled is missing its count');
+  assert.ok(/#forms/.test(m.innerHTML), 'the card does not show its label');
+  assert.ok(/School/.test(m.innerHTML), 'the card does not show its folder');
+});
+
+test('the filter bar stays away until there is something to tap', () => {
+  // A filter bar over an empty vocabulary is chrome that teaches nothing.
+  boot(null);
+  clearNoteFilters();
+  S.noteFolders = []; S.noteLabels = [];
+  S.notes = [{ id:'z1', title:'Alone', body:'', pinned:false, personIds:[],
+    folderId:null, labelIds:[], color:'', archived:false,
+    created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }];
+  const m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(!/setNoteFolderFilter\(/.test(m.innerHTML),
+    'the filter bar rendered with no folders and no labels');
+});
+
+test('an empty result from a FILTER offers a way out; an empty search does not pretend to', () => {
+  const { school } = notesWithGroups();
+  S.notes.forEach(n => { n.folderId = null; });
+  setNoteFolderFilter(school.id);
+  const m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(/clearNoteFilters\(\)/.test(m.innerHTML),
+    'a filter that matched nothing left no way to switch it off');
+  clearNoteFilters();
+});
+
+test('the note screen offers one folder choice and many label choices', () => {
+  const { school } = notesWithGroups();
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  const m = { innerHTML:'' };
+  renderNoteDetail(m);
+  assert.ok(m.innerHTML.includes("setNoteFolder('n1','" + school.id + "')"),
+    'the note cannot be moved to a folder');
+  assert.ok(/setNoteFolder\('n1', null\)/.test(m.innerHTML), 'the note cannot be un-filed');
+  assert.ok(/toggleNoteLabel\('n1','/.test(m.innerHTML), 'the note cannot be labelled');
+  // Making one from here is the whole point: sending the user to a settings
+  // screen first is how a filing feature goes unused (Civan et al.).
+  assert.ok(/newNoteGroupFor\('noteFolders','n1'\)/.test(m.innerHTML),
+    'a folder cannot be created from the note that needs it');
+  assert.ok(/newNoteGroupFor\('noteLabels','n1'\)/.test(m.innerHTML),
+    'a label cannot be created from the note that needs it');
+});
+
+test('a new note starts Unfiled with no labels, and old notes migrate the same way', () => {
+  boot(null);
+  clearNoteFilters();
+  S.notes = [];
+  const box = { value:'Picked up from practice' };
+  const real = document.getElementById;
+  document.getElementById = (id) => (id === 'newNote' ? box : real.call(document, id));
+  try { newNote(); } finally { document.getElementById = real; }
+  const n = S.notes[0];
+  assert.strictEqual(n.folderId, null, 'a new note was filed somewhere on its own');
+  assert.deepStrictEqual(n.labelIds, [], 'a new note arrived pre-labelled');
+
+  // ...and a v8 save reaches the same shape rather than the render path.
+  const old = migrate({ schemaVersion:8, notes:[{ id:'old', title:'t', body:'b' }] }, 8);
+  assert.strictEqual(old.notes[0].folderId, null);
+  assert.deepStrictEqual(old.notes[0].labelIds, []);
+  assert.ok(Array.isArray(old.noteFolders) && Array.isArray(old.noteLabels),
+    'the migration did not create the two collections');
+  assert.strictEqual(old.noteFolders.length, 0, 'the migration invented a folder');
+});

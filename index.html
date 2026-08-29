@@ -390,6 +390,7 @@
 <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="M15.7 15.7L21 21"/></symbol>
 <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
 <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h3.8l1.7 2.2H19A1.5 1.5 0 0 1 20.5 8.7v9.8A1.5 1.5 0 0 1 19 20H5a1.5 1.5 0 0 1-1.5-1.5z"/></symbol>
 <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 9.2a6 6 0 1 0-12 0c0 5-2.2 6.5-2.2 6.5h16.4S18 14.2 18 9.2"/><path d="M13.7 19.4a2 2 0 0 1-3.4 0"/></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v11.4M7.8 10.9L12 15.1l4.2-4.2"/><path d="M4.5 16.5v2.8A1.7 1.7 0 0 0 6.2 21h11.6a1.7 1.7 0 0 0 1.7-1.7v-2.8"/></symbol>
 <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.1V3.7M7.8 7.9L12 3.7l4.2 4.2"/><path d="M4.5 16.5v2.8A1.7 1.7 0 0 0 6.2 21h11.6a1.7 1.7 0 0 0 1.7-1.7v-2.8"/></symbol>
@@ -748,7 +749,7 @@ If the same event appears in two places, produce ONE item, not two.`;
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -846,6 +847,26 @@ function migrate(s, fromVersion){
     // restore from a future version). Coercing here is cheaper than making
     // every reader defensive, and it destroys nothing that was ever usable.
     if(!Array.isArray(s.notes)) s.notes = [];
+  }
+
+  if(from < 9){
+    // Notes gained folders and labels (v9.71). Apple's model: one folder says
+    // WHERE a note lives, any number of labels say WHAT IT IS ABOUT.
+    //
+    // This block invents nothing. It creates no folders and no labels, so every
+    // existing note lands as Unfiled with none -- which is precisely what it is
+    // today. All it does is guarantee the shapes every reader now assumes, so
+    // that a hand-edited file or a restore from an older export cannot reach
+    // the render path with `labelIds` as a string.
+    if(!Array.isArray(s.noteFolders)) s.noteFolders = [];
+    if(!Array.isArray(s.noteLabels)) s.noteLabels = [];
+    (s.notes || []).forEach(n => {
+      if(!n) return;
+      if(typeof n.folderId !== 'string') n.folderId = null;
+      if(!Array.isArray(n.labelIds)) n.labelIds = [];
+      if(typeof n.color !== 'string') n.color = '';
+      if(typeof n.archived !== 'boolean') n.archived = false;
+    });
   }
 
   s.schemaVersion = SCHEMA_VERSION;
@@ -1039,7 +1060,8 @@ let loadError = null;
 let storageWarned = false;
 
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
-  redemptions:[], lists:[], listItems:[], notes:[], ask:{ turns:[] }, aiLog:[],
+  redemptions:[], lists:[], listItems:[], notes:[], noteFolders:[], noteLabels:[],
+  ask:{ turns:[] }, aiLog:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
     aiProvider:'local', localBaseUrl:'', localModel:'qwen3-vl:8b-instruct-q4_K_M', aiFallback:true,
@@ -4377,7 +4399,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.70';
+const APP_VERSION = 'v9.71';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -5253,6 +5275,7 @@ function render(){
   const m = document.getElementById('main');
   const subs = {capture:renderCapture, review:renderReview, rewards:renderRewards,
     listDetail:renderListDetail, noteDetail:renderNoteDetail,
+    noteGroups:renderNoteGroups,
     recipeBox:renderRecipeBox, recipeForm:renderRecipeForm,
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
     shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue,
@@ -9212,6 +9235,152 @@ function notePreviewOf(n){
 }
 function liveNotes(){ return (S.notes || []).filter(n => !n.deleted); }
 
+// ---- folders (one per note) and labels (many per note) --------------------
+// Two collections, one shape, so every helper below is written once and reads
+// which one it is working on. `coll` is 'noteFolders' or 'noteLabels'.
+function noteFolders(){ return (S.noteFolders || []).filter(f => !f.deleted); }
+function noteLabels(){ return (S.noteLabels || []).filter(l => !l.deleted); }
+function noteFolderName(id){
+  const f = (S.noteFolders || []).find(x => x.id === id);
+  return f && !f.deleted ? f.name : '';
+}
+function noteLabelsOf(n){
+  const ids = (n && n.labelIds) || [];
+  return noteLabels().filter(l => ids.includes(l.id));
+}
+
+/**
+ * Add a folder or a label. Returns the row, or the EXISTING row when the name
+ * is already taken -- case- and space-insensitively.
+ *
+ * Silently reusing rather than creating a near-duplicate is the one mitigation
+ * that matters for the failure mode every long-term tag user reports: "school"
+ * and "School " sitting side by side, splitting a group in half. Nothing else
+ * in the app can prevent that, because nothing else sees both names at once.
+ */
+function addNoteGroup(coll, name){
+  const clean = String(name || '').trim().slice(0, 40);
+  if(!clean) return null;
+  if(!Array.isArray(S[coll])) S[coll] = [];
+  const key = clean.toLowerCase();
+  const dup = S[coll].find(x => String(x.name || '').trim().toLowerCase() === key);
+  if(dup){
+    if(dup.deleted){ dup.deleted = false; save(); }   // a re-add un-deletes
+    return dup;
+  }
+  const row = { id:uid(), name:clean, deleted:false };
+  S[coll].push(row);
+  save();
+  return row;
+}
+function renameNoteGroup(coll, id, name){
+  const clean = String(name || '').trim().slice(0, 40);
+  const row = (S[coll] || []).find(x => x.id === id);
+  if(!row || !clean) return false;    // an empty rename CANCELS; it never blanks
+  row.name = clean;
+  save();
+  return true;
+}
+
+/**
+ * Remove a folder or a label WITHOUT removing anything it contained.
+ *
+ * A folder delete puts its notes back to Unfiled; a label delete drops the id.
+ * Neither touches n.deleted -- deleting a container must never turn out to have
+ * meant "and everything in it" (CLAUDE.md rule 26, read forwards). The undo
+ * restores both the row and every note's membership.
+ */
+function delNoteGroup(coll, id){
+  const row = (S[coll] || []).find(x => x.id === id);
+  if(!row || row.deleted) return;
+  const isFolder = coll === 'noteFolders';
+  const touched = (S.notes || []).filter(n => isFolder
+    ? n.folderId === id
+    : Array.isArray(n.labelIds) && n.labelIds.includes(id));
+
+  row.deleted = true;
+  touched.forEach(n => {
+    if(isFolder) n.folderId = null;
+    else n.labelIds = n.labelIds.filter(x => x !== id);
+  });
+  if(noteFolderFilter === id) noteFolderFilter = null;
+  noteLabelFilter.delete(id);
+  save(); render();
+  const what = isFolder ? 'Folder' : 'Label';
+  toast(what + ' “' + row.name + '” removed'
+        + (touched.length ? ' — ' + touched.length + ' note' + (touched.length === 1 ? '' : 's') + ' kept' : ''),
+    { label:'Undo', fn:() => {
+      row.deleted = false;
+      touched.forEach(n => {
+        if(isFolder) n.folderId = id;
+        else if(!n.labelIds.includes(id)) n.labelIds.push(id);
+      });
+      save(); render(); toast('Put back');
+    }});
+}
+
+function setNoteFolder(noteId, folderId){
+  const n = (S.notes || []).find(x => x.id === noteId);
+  if(!n) return;
+  n.folderId = folderId || null;
+  n.updated = new Date().toISOString();
+  save();
+  renderNoteDetail(document.getElementById('main'));
+}
+function toggleNoteLabel(noteId, labelId){
+  const n = (S.notes || []).find(x => x.id === noteId);
+  if(!n) return;
+  if(!Array.isArray(n.labelIds)) n.labelIds = [];
+  const at = n.labelIds.indexOf(labelId);
+  if(at >= 0) n.labelIds.splice(at, 1); else n.labelIds.push(labelId);
+  n.updated = new Date().toISOString();
+  save();
+  // Same caret-preserving re-render as toggleNotePerson: labelling mid-sentence
+  // must not throw away where you were.
+  const b = document.getElementById('noteBody');
+  const caret = b ? b.selectionStart : null;
+  renderNoteDetail(document.getElementById('main'));
+  const again = document.getElementById('noteBody');
+  if(again && caret !== null){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
+}
+
+// ---- the board filter -----------------------------------------------------
+// View state, never on S: a Set would serialise to {} and ship in a backup, and
+// "which folder am I looking at" is not the user's data. Same rule as
+// problemSel (v9.39) and clashSel (v9.70).
+let noteFolderFilter = null;          // null = every folder; '' = Unfiled only
+let noteLabelFilter = new Set();
+
+function setNoteFolderFilter(id){
+  noteFolderFilter = (noteFolderFilter === id) ? null : id;
+  render();
+}
+function toggleNoteLabelFilter(id){
+  if(noteLabelFilter.has(id)) noteLabelFilter.delete(id); else noteLabelFilter.add(id);
+  render();
+}
+function clearNoteFilters(){ noteFolderFilter = null; noteLabelFilter = new Set(); render(); }
+function noteFiltersOn(){ return noteFolderFilter !== null || noteLabelFilter.size > 0; }
+
+/**
+ * Does this note pass the folder and label filters?
+ *
+ * Labels are ANDed. Two labels ticked means "notes about both", which is the
+ * only reading that lets a filter NARROW as you add to it -- an OR would make
+ * every extra tap return more, which reads as the control not working.
+ */
+function notePassesFilter(n){
+  if(noteFolderFilter !== null){
+    const want = noteFolderFilter || null;
+    if((n.folderId || null) !== want) return false;
+  }
+  if(noteLabelFilter.size){
+    const has = new Set(n.labelIds || []);
+    for(const id of noteLabelFilter) if(!has.has(id)) return false;
+  }
+  return true;
+}
+
 // Keep searches "the titles and body text of all your notes at once". People
 // are included because they are this app's labels.
 function noteMatches(n){
@@ -9219,7 +9388,12 @@ function noteMatches(n){
   if(!q) return true;
   const who = (n.personIds || []).map(id => (allPeople().find(p => p.id === id) || {}).name)
     .filter(Boolean).join(' ');
-  return [n.title, n.body, who].filter(Boolean).join(' ').toLowerCase().includes(q);
+  // Folder and label names are searchable too. They are on the card, and a name
+  // you can read is a name you will type into the box expecting it to work.
+  const where = noteFolderName(n.folderId);
+  const what = noteLabelsOf(n).map(l => l.name).join(' ');
+  return [n.title, n.body, who, where, what].filter(Boolean).join(' ')
+    .toLowerCase().includes(q);
 }
 
 function notesArea(){ return (S.settings && S.settings.notesArea === 'lists') ? 'lists' : 'notes'; }
@@ -9257,9 +9431,55 @@ function renderNotes(m){
   m.innerHTML = seg + inner.innerHTML;
 }
 
+/**
+ * The folder row and the label row above the board.
+ *
+ * Rendered only once there is a vocabulary to render -- a filter bar over zero
+ * folders and zero labels is chrome that teaches nothing. "Unfiled" appears
+ * only when something is actually unfiled, so it cannot become a permanent
+ * accusation on a tidy collection.
+ */
+function noteFilterBar(all){
+  const folders = noteFolders();
+  const labels = noteLabels();
+  if(!folders.length && !labels.length) return '';
+
+  const inFolder = (id) => all.filter(n => (n.folderId || null) === id).length;
+  const unfiled = inFolder(null);
+  let html = '';
+
+  if(folders.length){
+    html += `<div class="filterbar" style="margin-bottom:6px">
+      <button class="chip ${noteFolderFilter === null ? 'on' : ''}"
+        aria-pressed="${noteFolderFilter === null}"
+        onclick="clearNoteFilters()">All (${all.length})</button>`
+      + folders.map(f => `<button class="chip ${noteFolderFilter === f.id ? 'on' : ''}"
+          aria-pressed="${noteFolderFilter === f.id}"
+          onclick="setNoteFolderFilter('${esc(f.id)}')">${ico('folder')}${esc(f.name)} (${inFolder(f.id)})</button>`).join('')
+      + (unfiled ? `<button class="chip ${noteFolderFilter === '' ? 'on' : ''}"
+          aria-pressed="${noteFolderFilter === ''}"
+          onclick="setNoteFolderFilter('')">Unfiled (${unfiled})</button>` : '')
+      + `</div>`;
+  }
+
+  if(labels.length){
+    html += `<div class="filterbar" style="margin-bottom:6px">`
+      + labels.map(l => `<button class="chip ${noteLabelFilter.has(l.id) ? 'on' : ''}"
+          aria-pressed="${noteLabelFilter.has(l.id)}"
+          onclick="toggleNoteLabelFilter('${esc(l.id)}')">#${esc(l.name)}</button>`).join('')
+      + `</div>`;
+  }
+
+  html += `<div class="row" style="justify-content:flex-end;gap:10px;margin-bottom:8px">
+    ${noteFiltersOn() ? `<button class="linkbtn" onclick="clearNoteFilters()">Clear filters</button>` : ''}
+    <button class="linkbtn" onclick="sub('noteGroups')">Manage folders &amp; labels</button>
+  </div>`;
+  return html;
+}
+
 function renderNotesBoard(m){
   const all = liveNotes();
-  const shown = all.filter(noteMatches);
+  const shown = all.filter(n => noteMatches(n) && notePassesFilter(n));
   // Newest edit first inside each group; pinned and unpinned are rendered as
   // two clearly separated groups, which is how Keep presents them.
   const byRecent = (a, b) => String(b.updated || '').localeCompare(String(a.updated || ''));
@@ -9281,13 +9501,22 @@ function renderNotesBoard(m){
     </div>`;
   }
 
+  html += noteFilterBar(all);
+
   if(!all.length){
     html += emptyState('note', 'No notes yet',
       'Anything that is not a date and not a shopping list — the school office number, what the coach said, sizes for uniforms.');
     m.innerHTML = html; return;
   }
   if(!shown.length){
-    html += `<div class="empty"><div class="eb">Nothing matches “${esc(noteSearch)}”.</div></div>`;
+    // Two different dead ends, and telling them apart matters: a search that
+    // found nothing is the user's word; a filter that found nothing is a
+    // control they can see and switch off.
+    html += noteSearch
+      ? `<div class="empty"><div class="eb">Nothing matches “${esc(noteSearch)}”.</div></div>`
+      : `<div class="empty"><div class="et">Nothing here yet</div>
+         <div class="eb">No notes match the folder and labels you picked.</div>
+         <button class="btn alt" onclick="clearNoteFilters()">Show all notes</button></div>`;
     m.innerHTML = html; return;
   }
 
@@ -9299,6 +9528,10 @@ function renderNotesBoard(m){
         <div class="title">${esc(noteTitleOf(n))}</div>
         ${preview ? `<div class="meta" style="font-size:12px">${esc(preview)}</div>` : ''}
         <div class="meta" style="font-size:11px">${n.updated ? 'edited ' + friendly(String(n.updated).slice(0,10)) : ''}${who.length ? ' · ' + esc(who.map(p=>p.name).join(', ')) : ''}</div>
+        ${(noteFolderName(n.folderId) || noteLabelsOf(n).length) ? `<div class="meta" style="font-size:11px;margin-top:3px">
+          ${noteFolderName(n.folderId) ? `${ico('folder')}${esc(noteFolderName(n.folderId))}` : ''}
+          ${noteLabelsOf(n).map(l => `<span style="color:var(--accent)">#${esc(l.name)}</span>`).join(' ')}
+        </div>` : ''}
       </div>
       <button class="linkbtn" style="padding:4px" onclick="event.stopPropagation();togglePinNote('${n.id}')">${n.pinned ? 'Unpin' : 'Pin'}</button>
     </div>`;
@@ -9332,7 +9565,12 @@ function newNote(){
   const box = document.getElementById('newNote');
   const seed = box ? box.value.trim() : '';
   const now = new Date().toISOString();
+  // Every field the schema promises, set here as well as in the migration. A
+  // new note that is shaped differently from a migrated one is a defect waiting
+  // for whichever reader stops being defensive first -- `undefined` and `null`
+  // are not the same thing to a filter (found by its own test, v9.71).
   const n = { id:uid(), title:'', body:seed, pinned:false, personIds:[],
+    folderId:null, labelIds:[], color:'', archived:false,
     created:now, updated:now, deleted:false };
   if(!S.notes) S.notes = [];
   S.notes.unshift(n);
@@ -9340,6 +9578,30 @@ function newNote(){
   sub('noteDetail', {id:n.id});
 }
 function openNote(id){ sub('noteDetail', {id}); }
+
+/**
+ * Make a folder or a label from inside the note that needs it, and apply it.
+ *
+ * prompt() rather than a screen, deliberately: the point of this control is
+ * that filing costs one gesture. A duplicate name returns the existing row
+ * (see addNoteGroup), so tapping "+ New folder" and typing a name that already
+ * exists files the note there instead of forking the group in two.
+ */
+function newNoteGroupFor(coll, noteId){
+  const isFolder = coll === 'noteFolders';
+  const name = prompt(isFolder ? 'Name for the new folder' : 'Name for the new label');
+  if(name === null) return;                       // cancelled -- change nothing
+  const row = addNoteGroup(coll, name);
+  if(!row){ toast('That needs a name'); return; }
+  const n = (S.notes || []).find(x => x.id === noteId);
+  if(n){
+    if(isFolder) n.folderId = row.id;
+    else if(!(n.labelIds || []).includes(row.id)) (n.labelIds = n.labelIds || []).push(row.id);
+    n.updated = new Date().toISOString();
+    save();
+  }
+  renderNoteDetail(document.getElementById('main'));
+}
 
 function togglePinNote(id){
   const n = (S.notes || []).find(x => x.id === id);
@@ -9409,6 +9671,56 @@ function toggleNotePerson(id, personId){
   if(again && caret !== null){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
 }
 
+/**
+ * Rename and remove folders and labels, with the note count each one holds.
+ *
+ * The count is the point. Deleting a container is only a safe decision if you
+ * can see what is in it -- and the screen says out loud that the notes survive,
+ * because "delete folder" is exactly the phrase a user expects to mean "and
+ * everything in it".
+ */
+function renderNoteGroups(m){
+  setHeader('Folders & Labels', true);
+  const all = liveNotes();
+  const rowsFor = (coll, rows, countOf, kind) => rows.length
+    ? rows.map(r => `<div class="card row" style="padding:12px">
+        <div class="grow">
+          <div style="font-weight:600">${kind === 'folder' ? ico('folder') : '#'}${esc(r.name)}</div>
+          <div class="meta" style="font-size:12px">${countOf(r.id)} note${countOf(r.id) === 1 ? '' : 's'}</div>
+        </div>
+        <button class="linkbtn" onclick="renameNoteGroupUI('${coll}','${esc(r.id)}')">Rename</button>
+        <button class="linkbtn red" onclick="delNoteGroup('${coll}','${esc(r.id)}')">Remove</button>
+      </div>`).join('')
+    : `<div class="help">None yet.</div>`;
+
+  m.innerHTML = `<div class="help">Removing a folder or a label never removes the
+      notes in it — they go back to Unfiled, and the removal can be undone.</div>
+    <div class="sect">Folders</div>
+    ${rowsFor('noteFolders', noteFolders(),
+       id => all.filter(n => n.folderId === id).length, 'folder')}
+    <button class="btn alt" onclick="newNoteGroup('noteFolders')">${ico('plus')}New folder</button>
+    <div class="sect">Labels</div>
+    ${rowsFor('noteLabels', noteLabels(),
+       id => all.filter(n => (n.labelIds || []).includes(id)).length, 'label')}
+    <button class="btn alt" onclick="newNoteGroup('noteLabels')">${ico('plus')}New label</button>`;
+}
+function newNoteGroup(coll){
+  const name = prompt(coll === 'noteFolders' ? 'Name for the new folder' : 'Name for the new label');
+  if(name === null) return;
+  if(!addNoteGroup(coll, name)){ toast('That needs a name'); return; }
+  render();
+}
+function renameNoteGroupUI(coll, id){
+  const row = (S[coll] || []).find(x => x.id === id);
+  if(!row) return;
+  const name = prompt('Rename “' + row.name + '” to', row.name);
+  if(name === null) return;                       // cancelled
+  // An empty rename CANCELS. It never blanks the name -- the same rule the list
+  // rename follows, and for the same reason: a blank is never what was meant.
+  if(!renameNoteGroup(coll, id, name)){ toast('A name cannot be empty'); return; }
+  render();
+}
+
 function renderNoteDetail(m){
   const n = (S.notes || []).find(x => x.id === (view.data || {}).id);
   if(!n || n.deleted){
@@ -9430,6 +9742,26 @@ function renderNoteDetail(m){
         oninput="noteEdited('${n.id}')" onblur="flushNote()"
         style="width:100%;resize:vertical">${esc(n.body || '')}</textarea>
       <div class="help" style="font-size:12px">Saved as you type. No title? The first line becomes one.</div>
+    </div>
+    <div class="card">
+      <div class="label" style="margin-bottom:6px">Folder</div>
+      <div class="filterbar">
+        <button class="chip ${!n.folderId ? 'on' : ''}" aria-pressed="${!n.folderId}"
+          onclick="setNoteFolder('${n.id}', null)">Unfiled</button>
+        ${noteFolders().map(f => `<button class="chip ${n.folderId === f.id ? 'on' : ''}"
+          aria-pressed="${n.folderId === f.id}"
+          onclick="setNoteFolder('${n.id}','${esc(f.id)}')">${ico('folder')}${esc(f.name)}</button>`).join('')}
+        <button class="chip" onclick="newNoteGroupFor('noteFolders','${n.id}')">+ New folder</button>
+      </div>
+      <div class="label" style="margin:10px 0 6px">Labels</div>
+      <div class="filterbar">
+        ${noteLabels().map(l => `<button class="chip ${(n.labelIds||[]).includes(l.id) ? 'on' : ''}"
+          aria-pressed="${(n.labelIds||[]).includes(l.id)}"
+          onclick="toggleNoteLabel('${n.id}','${esc(l.id)}')">#${esc(l.name)}</button>`).join('')}
+        <button class="chip" onclick="newNoteGroupFor('noteLabels','${n.id}')">+ New label</button>
+      </div>
+      <div class="help" style="font-size:12px;margin-top:8px">A note sits in one folder.
+        Labels can be as many as you like — use them for anything that cuts across folders.</div>
     </div>
     ${people.length ? `<div class="card">
       <div class="label" style="margin-bottom:6px">Who is this about?</div>
@@ -11208,13 +11540,23 @@ Object.assign(window, {
   exportNextInQueue,
   forgetImportedEmails,
   goToEvents,
+  addNoteGroup,
+  clearNoteFilters,
+  delNoteGroup,
   keepOnlyEvent,
   keepOnlyInClash,
   keepOnlySelectedClash,
   removeFromClash,
   removeOneEvent,
+  newNoteGroup,
+  newNoteGroupFor,
   removeSelectedClash,
+  renameNoteGroupUI,
   selectAllClash,
+  setNoteFolder,
+  setNoteFolderFilter,
+  toggleNoteLabel,
+  toggleNoteLabelFilter,
   toggleClashPick,
   toggleClashSelect,
   manualPrune,

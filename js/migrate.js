@@ -18,7 +18,7 @@
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -116,6 +116,26 @@ export function migrate(s, fromVersion){
     // restore from a future version). Coercing here is cheaper than making
     // every reader defensive, and it destroys nothing that was ever usable.
     if(!Array.isArray(s.notes)) s.notes = [];
+  }
+
+  if(from < 9){
+    // Notes gained folders and labels (v9.71). Apple's model: one folder says
+    // WHERE a note lives, any number of labels say WHAT IT IS ABOUT.
+    //
+    // This block invents nothing. It creates no folders and no labels, so every
+    // existing note lands as Unfiled with none -- which is precisely what it is
+    // today. All it does is guarantee the shapes every reader now assumes, so
+    // that a hand-edited file or a restore from an older export cannot reach
+    // the render path with `labelIds` as a string.
+    if(!Array.isArray(s.noteFolders)) s.noteFolders = [];
+    if(!Array.isArray(s.noteLabels)) s.noteLabels = [];
+    (s.notes || []).forEach(n => {
+      if(!n) return;
+      if(typeof n.folderId !== 'string') n.folderId = null;
+      if(!Array.isArray(n.labelIds)) n.labelIds = [];
+      if(typeof n.color !== 'string') n.color = '';
+      if(typeof n.archived !== 'boolean') n.archived = false;
+    });
   }
 
   s.schemaVersion = SCHEMA_VERSION;
