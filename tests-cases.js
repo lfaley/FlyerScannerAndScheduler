@@ -4000,3 +4000,194 @@ test('a new note starts Unfiled with no labels, and old notes migrate the same w
     'the migration did not create the two collections');
   assert.strictEqual(old.noteFolders.length, 0, 'the migration invented a folder');
 });
+
+console.log('\nNotes — checklists, sort, colour, archive (v9.72)');
+
+function noteWith(body, extra){
+  boot(null);
+  clearNoteFilters();
+  S.noteFolders = []; S.noteLabels = [];
+  const now = '2026-08-27T10:00:00.000Z';
+  S.notes = [Object.assign({ id:'n1', title:'Sleepover', body, pinned:false, personIds:[],
+    folderId:null, labelIds:[], color:'', archived:false,
+    created:now, updated:now, deleted:false }, extra || {})];
+  view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } };
+  save();
+  return S.notes[0];
+}
+
+test('checkbox lines in the body are found, in both states, with indentation', () => {
+  const n = noteWith('Bring:\n- [ ] sleeping bag\n  - [x] pillow\nnot a checkbox\n- [X] snacks');
+  const items = noteChecklist(n);
+  assert.deepStrictEqual(items.map(i => i.text), ['sleeping bag', 'pillow', 'snacks']);
+  assert.deepStrictEqual(items.map(i => i.done), [false, true, true],
+    'an uppercase [X] or an indented item was misread');
+  assert.deepStrictEqual(items.map(i => i.index), [1, 2, 4], 'line indexes are wrong');
+  assert.deepStrictEqual(noteCheckProgress(n), { done:2, total:3 });
+  assert.strictEqual(noteCheckProgress(noteWith('just words')), null,
+    'a note with no checkboxes reported progress');
+});
+
+test('toggling a checkbox rewrites ONE line and leaves every byte around it alone', () => {
+  // A checklist toggle that reformats your note is a checklist toggle nobody
+  // trusts. Indentation, the text itself, and every other line must survive.
+  noteWith('Header\n\n  - [ ] pillow\n- [x] snacks\n\ntrailing words');
+  toggleNoteCheck('n1', 2);
+  assert.strictEqual(S.notes[0].body,
+    'Header\n\n  - [x] pillow\n- [x] snacks\n\ntrailing words',
+    'the toggle disturbed something other than the one marker');
+  toggleNoteCheck('n1', 3);
+  assert.strictEqual(S.notes[0].body,
+    'Header\n\n  - [x] pillow\n- [ ] snacks\n\ntrailing words',
+    'unticking did not work, or it reformatted the note');
+});
+
+test('toggling a line that is not a checkbox, or does not exist, changes nothing', () => {
+  const before = 'Header\n- [ ] pillow';
+  noteWith(before);
+  toggleNoteCheck('n1', 0);            // a plain line
+  toggleNoteCheck('n1', 99);           // past the end
+  toggleNoteCheck('n1', -1);
+  assert.strictEqual(S.notes[0].body, before, 'a non-checkbox line was rewritten');
+});
+
+test('adding a checkbox appends one line and never eats the body', () => {
+  // addNoteCheckItem flushes the pending autosave first, and that reads the
+  // live textarea -- so the fixture has to present one holding what the note
+  // actually says, or the flush writes an empty string over the body. Same
+  // reason withBox() exists for the list-item tests.
+  const withBody = (fn) => {
+    const real = document.getElementById;
+    document.getElementById = (id) => (id === 'noteBody'
+      ? { value:S.notes[0].body, focus(){}, setSelectionRange(){}, get selectionStart(){ return 0; } }
+      : (id === 'noteTitle' ? { value:S.notes[0].title } : real.call(document, id)));
+    try { return fn(); } finally { document.getElementById = real; }
+  };
+  noteWith('Bring:');
+  withBody(() => addNoteCheckItem('n1'));
+  assert.strictEqual(S.notes[0].body, 'Bring:\n- [ ] ');
+  withBody(() => addNoteCheckItem('n1'));
+  assert.strictEqual(S.notes[0].body, 'Bring:\n- [ ] \n- [ ] ',
+    'a second item did not get its own line');
+  // ...and on an empty note it does not open with a stray newline.
+  noteWith('');
+  withBody(() => addNoteCheckItem('n1'));
+  assert.strictEqual(S.notes[0].body, '- [ ] ');
+});
+
+test('the note screen renders each checkbox and announces its state', () => {
+  noteWith('- [ ] sleeping bag\n- [x] pillow');
+  const m = { innerHTML:'' };
+  renderNoteDetail(m);
+  assert.ok(/toggleNoteCheck\('n1',0\)/.test(m.innerHTML), 'the first item is not tappable');
+  assert.ok(/toggleNoteCheck\('n1',1\)/.test(m.innerHTML), 'the second item is not tappable');
+  assert.ok(/role="checkbox" aria-checked="false"/.test(m.innerHTML), 'an unticked item is not announced');
+  assert.ok(/role="checkbox" aria-checked="true"/.test(m.innerHTML), 'a ticked item is not announced');
+  assert.ok(/1 of 2/.test(m.innerHTML), 'the checklist has no progress count');
+});
+
+test('the board shows checklist progress', () => {
+  noteWith('- [x] a\n- [ ] b\n- [ ] c');
+  const m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(/1 of 3/.test(m.innerHTML), 'the card does not show how much is done');
+});
+
+test('sort is a saved setting, survives a reload, and rejects junk', () => {
+  noteWith('x');
+  setNoteSort('title');
+  assert.strictEqual(S.settings.noteSort, 'title');
+  S = load();
+  assert.strictEqual(noteSort(), 'title', 'the sort choice did not survive a reload');
+  setNoteSort('nonsense');
+  assert.strictEqual(noteSort(), 'edited', 'a junk sort key was accepted');
+});
+
+test('each sort orders the board, and pinned always floats above it', () => {
+  boot(null); clearNoteFilters(); S.noteFolders = []; S.noteLabels = [];
+  const mk = (id, title, created, updated, pinned) => ({ id, title, body:'', pinned:!!pinned,
+    personIds:[], folderId:null, labelIds:[], color:'', archived:false,
+    created, updated, deleted:false });
+  S.notes = [
+    mk('a', 'Zebra', '2026-01-01T00:00:00.000Z', '2026-08-03T00:00:00.000Z'),
+    mk('b', 'Apple', '2026-05-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+    mk('c', 'Mango', '2026-03-01T00:00:00.000Z', '2026-08-02T00:00:00.000Z', true),
+  ];
+  const order = () => { const m = { innerHTML:'' }; renderNotesBoard(m);
+    return ['Zebra','Apple','Mango'].map(t => [t, m.innerHTML.indexOf(t)])
+      .sort((x, y) => x[1] - y[1]).map(x => x[0]); };
+
+  setNoteSort('edited');
+  assert.deepStrictEqual(order(), ['Mango', 'Zebra', 'Apple'], 'edited order is wrong');
+  setNoteSort('created');
+  assert.deepStrictEqual(order(), ['Mango', 'Apple', 'Zebra'], 'created order is wrong');
+  setNoteSort('title');
+  assert.deepStrictEqual(order(), ['Mango', 'Apple', 'Zebra'], 'title order is wrong');
+  // Mango is first in all three because it is pinned, not because of the sort.
+  S.notes.find(n => n.id === 'c').pinned = false;
+  setNoteSort('title');
+  assert.deepStrictEqual(order(), ['Apple', 'Mango', 'Zebra'],
+    'unpinning did not put the note back into the sorted order');
+});
+
+test('archiving takes a note off the board WITHOUT deleting it', () => {
+  noteWith('keep me');
+  toggleArchiveNote('n1');
+  assert.strictEqual(S.notes[0].deleted, false, 'archive deleted the note');
+  assert.strictEqual(S.notes[0].archived, true);
+  assert.strictEqual(boardNotes().length, 0, 'the archived note is still on the board');
+  assert.strictEqual(archivedNotes().length, 1, 'the archived note is nowhere');
+  toggleArchiveNote('n1');
+  assert.strictEqual(boardNotes().length, 1, 'unarchiving did not bring it back');
+});
+
+test('archiving offers an undo', () => {
+  noteWith('keep me');
+  const undo = captureUndo(() => toggleArchiveNote('n1'));
+  assert.ok(undo, 'no undo was offered');
+  undo();
+  assert.strictEqual(S.notes[0].archived, false, 'undo did not unarchive');
+});
+
+test('an archived note still turns up when you search for it by name', () => {
+  // A note you archived is a note you KEPT. Looking for it by name must find it.
+  noteWith('the coach said 4pm', { title:'Practice time', archived:true });
+  noteSearch = 'practice';
+  const m = { innerHTML:'' };
+  renderNotesBoard(m);
+  noteSearch = '';
+  assert.ok(/Practice time/.test(m.innerHTML),
+    'searching by name could not reach an archived note');
+});
+
+test('the board offers a way into the archive only when something is in it', () => {
+  noteWith('on the board');
+  let m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(!/noteArchive/.test(m.innerHTML), 'an empty archive advertised itself');
+  toggleArchiveNote('n1');
+  m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(/sub\('noteArchive'\)/.test(m.innerHTML), 'no way to reach the archive');
+  assert.ok(/Archived \(1\)/.test(m.innerHTML), 'the archive link has no count');
+});
+
+test('a colour must come from the app palette, and shows on the card', () => {
+  noteWith('x');
+  setNoteColor('n1', KID_COLORS[0]);
+  assert.strictEqual(S.notes[0].color, KID_COLORS[0]);
+  setNoteColor('n1', 'javascript:alert(1)');
+  assert.strictEqual(S.notes[0].color, '', 'an arbitrary string was accepted as a colour');
+  setNoteColor('n1', KID_COLORS[2]);
+  const m = { innerHTML:'' };
+  renderNotesBoard(m);
+  assert.ok(m.innerHTML.includes('border-left:5px solid ' + KID_COLORS[2]),
+    'the colour does not reach the card');
+});
+
+test('every phase-2 control is on the window bridge', () => {
+  // Inline onclick handlers resolve against global scope; a missing one is a
+  // button that throws on tap and reads as dead.
+  ['toggleNoteCheck', 'addNoteCheckItem', 'setNoteSort', 'toggleArchiveNote', 'setNoteColor']
+    .forEach(fn => assert.strictEqual(typeof globalThis[fn], 'function', fn + ' is not reachable'));
+});

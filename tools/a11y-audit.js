@@ -169,6 +169,7 @@ const SCREENS = [
   { key:'listDetail', setup:`view = { tab:'notes', sub:'listDetail', data:{ id:'l1' } }` },
   { key:'noteDetail', setup:`S.notes = [{ id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:false, personIds:[], created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } }` },
   { key:'noteGroups', setup:`S.noteFolders = [{ id:'f1', name:'School', deleted:false }]; S.noteLabels = [{ id:'l1', name:'forms', deleted:false }]; S.notes = [{ id:'n1', title:'Supply list', body:'2 binders', pinned:false, personIds:[], folderId:'f1', labelIds:['l1'], color:'', archived:false, created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteGroups', data:null }` },
+  { key:'noteArchive', setup:`S.notes = [{ id:'n1', title:'Old form', body:'- [x] signed\\n- [ ] returned', pinned:false, personIds:[], folderId:null, labelIds:[], color:'#7C3AED', archived:true, created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteArchive', data:null }` },
   { key:'rewards',    setup:`sub('rewards')` },
   { key:'ledger',     setup:`sub('ledger')` },
   { key:'problems',   setup:`sub('problems')` },
