@@ -2350,7 +2350,19 @@ module.exports = async function runModuleTests(test){
     // finished action reappear and offer to redo it.
     const ask = script.split('function renderAsk(')[1].split('\nfunction ')[0];
     assert.ok(/t\.confirm && pendingAction && i === a\.turns\.length - 1/.test(ask), ask.slice(0, 200));
-    assert.ok(/t\.choices && pendingAction && i === a\.turns\.length - 1/.test(ask));
+    // v9.73: the choices gate no longer requires pendingAction, because a
+    // CLARIFY sets choices and never sets pendingAction -- so the old gate could
+    // not open for one and its buttons had never rendered at all. The
+    // newest-turn constraint is the part that had to survive, and the two kinds
+    // now answer differently: an id for a disambiguation, text for a clarify.
+    assert.ok(/t\.choices && t\.choices\.length && i === a\.turns\.length - 1/.test(ask),
+      'choices can render on an older turn again');
+    assert.ok(/pendingAction\s*\n?\s*\?/.test(ask) || /\? t\.choices\.map/.test(ask),
+      'the two kinds of choice are no longer told apart');
+    assert.ok(/confirmPendingAction\('\$\{esc\(c\.id\)\}'\)/.test(ask),
+      'a disambiguation no longer answers with an entity id');
+    assert.ok(/answerClarify\('\$\{esc\(c\.name\)\}'\)/.test(ask),
+      'a clarify no longer answers with the text of the option');
   });
 
   test('the Ask screen no longer claims it cannot change anything', () => {

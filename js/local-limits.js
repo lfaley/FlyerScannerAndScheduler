@@ -54,8 +54,16 @@ export function contextFromPs(json, model){
     ? models.find(m => m && (m.model === want || m.name === want ||
         String(m.model || m.name || '').split(':')[0] === want.split(':')[0]))
     : null;
-  const hit = named || models[0];
-  const n = hit && (hit.context_length != null ? hit.context_length : hit.contextLength);
+  // NO FALLBACK TO models[0]. Until v9.73 an unloaded model returned whatever
+  // the first loaded one happened to be -- measured at 8192 (llama3:70b) while
+  // the caller was asking about a 32k model. That is precisely the "confident
+  // wrong advice" the docblock above promises not to give, and it is worse than
+  // silence because the advice it feeds is about whether a prompt will FIT.
+  // When no name was asked for at all, the single loaded model is still the
+  // only sensible answer (code review P5, reproduced by execution 29 Aug).
+  const hit = want ? named : models[0];
+  if(!hit) return null;
+  const n = hit.context_length != null ? hit.context_length : hit.contextLength;
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
 

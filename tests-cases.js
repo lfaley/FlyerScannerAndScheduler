@@ -4191,3 +4191,163 @@ test('every phase-2 control is on the window bridge', () => {
   ['toggleNoteCheck', 'addNoteCheckItem', 'setNoteSort', 'toggleArchiveNote', 'setNoteColor']
     .forEach(fn => assert.strictEqual(typeof globalThis[fn], 'function', fn + ' is not reachable'));
 });
+
+console.log('\nThe four P5 candidates, reproduced then fixed (v9.73)');
+
+test('P5-A: an unloaded model gets null, not the first loaded one’s window', () => {
+  // Measured on the unfixed build: asking about a model that was not loaded
+  // returned llama3:70b's 8192 while the caller wanted a 32k model. Its own
+  // docblock promises "null rather than a guess", because the number feeds a
+  // decision about whether a prompt will FIT.
+  const ps = { models:[
+    { model:'llama3:70b', context_length:8192 },
+    { model:'qwen3-vl:8b-instruct-q4_K_M', context_length:32768 },
+  ]};
+  assert.strictEqual(contextFromPs(ps, 'not-loaded-at-all'), null,
+    'it guessed another model’s window again');
+  // ...and every way of asking for the right one still works.
+  assert.strictEqual(contextFromPs(ps, 'qwen3-vl:8b-instruct-q4_K_M'), 32768);
+  assert.strictEqual(contextFromPs(ps, 'qwen3-vl:8b'), 32768, 'the family-prefix match broke');
+  // No model named at all: the loaded one is still the only sensible answer.
+  assert.strictEqual(contextFromPs({ models:[{ model:'x', context_length:4096 }] }, ''), 4096);
+  assert.strictEqual(contextFromPs({ models:[] }, 'x'), null);
+  assert.strictEqual(contextFromPs({ models:[{ model:'x' }] }, 'x'), null,
+    'a missing context_length stopped returning null');
+});
+
+test('P5-B: the probed window is forgotten when the model or endpoint changes', () => {
+  boot(null);
+  invalidateLocalContext();
+  S.settings.localModel = 'model-a';
+  S.settings.localBaseUrl = 'https://one/v1';
+  const keyA = localCtxKey();
+  S.settings.localModel = 'model-b';
+  assert.notStrictEqual(localCtxKey(), keyA, 'the cache key ignores the model');
+  S.settings.localModel = 'model-a';
+  S.settings.localBaseUrl = 'https://two/v1';
+  assert.notStrictEqual(localCtxKey(), keyA, 'the cache key ignores the endpoint');
+  S.settings.localBaseUrl = 'https://one/v1';
+  assert.strictEqual(localCtxKey(), keyA, 'the same settings produce a different key');
+});
+
+test('P5-B: a failed probe does not silence the check for the whole session', () => {
+  // localCtxAsked was set BEFORE the fetch, so one blocked /api/ps meant the
+  // app never asked again. Driven through the flags rather than through fetch:
+  // the harness runs async tests interleaved with sync ones, and a stubbed
+  // fetch racing another test's stub would make this pass or fail for reasons
+  // that have nothing to do with the finding (CLAUDE.md rule 25).
+  boot(null);
+  invalidateLocalContext();
+  assert.strictEqual(localCtxAsked, false);
+  assert.strictEqual(localCtx, null);
+
+  // What the success path leaves behind: an answer, pinned to its key.
+  S.settings.localModel = 'model-a';
+  localCtx = 16384; localCtxAsked = true; localCtxFor = localCtxKey();
+  assert.strictEqual(localCtxFor, localCtxKey(), 'the answer is not pinned to its settings');
+
+  // Change the model: the key no longer matches, so the guard at the top of
+  // probeLocalContext cannot return the stale answer.
+  S.settings.localModel = 'model-b';
+  assert.notStrictEqual(localCtxFor, localCtxKey(),
+    'the cached window still answers for a model it was never measured on');
+  invalidateLocalContext();
+});
+
+test('P5-B: probeLocalContext reads its inputs BEFORE it awaits', () => {
+  // The settings can change while the request is in flight. Reading the model
+  // name again afterwards would attribute the answer to a name nobody asked
+  // about -- the same class of mistake as trusting a rendered index instead of
+  // re-deriving from a key. Guard reads the shipped code, with comments and
+  // strings stripped so prose cannot satisfy it (CLAUDE.md rule 21).
+  const body = String(probeLocalContext);
+  const code = body.replace(/\/\/[^\n]*/g, ' ')
+                   .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+                   .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const firstAwait = code.indexOf('await');
+  assert.ok(firstAwait > 0, 'probeLocalContext no longer awaits anything');
+  assert.ok(code.indexOf('askedModel') < firstAwait,
+    'the model name is captured after the first await');
+  assert.ok(code.indexOf('localCtxFor = key') < firstAwait,
+    'the cache key is pinned after the first await');
+  // ...and every failure path clears the flag, so the session can ask again.
+  const after = code.slice(firstAwait);
+  assert.strictEqual((after.match(/localCtxAsked = false/g) || []).length, 3,
+    'not every failure path lets the app try again: ' + (after.match(/localCtxAsked = false/g) || []).length);
+
+  // ...and the early return must consult the KEY, not just "have we asked".
+  // Without this the mutation `if(localCtxAsked) return localCtx;` survived:
+  // the flags test above drives the flags directly and never reaches this line.
+  assert.ok(/if\(localCtxAsked && localCtxFor === key\)/.test(code),
+    'the cache answers again without checking which settings it was measured on');
+});
+
+test('P5-C: "which one did you mean?" is never asked with nothing to offer', async () => {
+  // Measured: a user with no lists asked to tick something off got the question,
+  // ZERO buttons and a "Neither" link -- because [] is truthy.
+  boot(null);
+  S.lists = []; S.listItems = []; save();
+  const r = await performRoute({ intent:'check_list_item', params:{ items:['milk'] }, confidence:0.9 });
+  assert.ok(!r.choices || !r.choices.length, 'it still offers an empty choice list');
+  assert.ok(/do not have any lists/i.test(r.answer),
+    'it does not say the true thing instead: ' + r.answer);
+});
+
+test('P5-C2: choosing the list from the prompt actually ticks the items off', async () => {
+  // askWhich stored { route, target, collection } and nothing else, while
+  // confirmPendingAction read pa.itemIds -- so answering the question did
+  // nothing at all, silently.
+  boot(null);
+  S.lists = [{ id:'L1', name:'Shopping', deleted:false },
+             { id:'L2', name:'Camp', deleted:false }];
+  S.listItems = [
+    { id:'i1', listId:'L1', text:'milk', checked:false, deleted:false },
+    { id:'i2', listId:'L1', text:'bread', checked:false, deleted:false },
+    { id:'i3', listId:'L2', text:'milk', checked:false, deleted:false },
+  ];
+  save();
+  const r = await performRoute({ intent:'check_list_item', params:{ items:['milk'] }, confidence:0.9 });
+  assert.strictEqual((r.choices || []).length, 2, 'it did not ask which list');
+  confirmPendingAction('L1');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').checked, true,
+    'answering "which list?" ticked nothing off');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i3').checked, false,
+    'it ticked the item off the list that was NOT chosen');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i2').checked, false,
+    'it ticked something nobody asked for');
+});
+
+test('P5-D: clarify options are normalised to {id,name}', () => {
+  // The prompt asks the model for ["choice A","choice B"] -- strings -- and the
+  // renderer read c.id / c.name, emitting [{},{}]: two blank buttons.
+  const p = parseAssistantTurn(JSON.stringify({
+    clarify:'Which child is this for?', options:['Braelyn', 'Owen'] }));
+  assert.ok(p.ok && p.turn.kind === 'clarify');
+  const c = clarifyChoices(p.turn.options);
+  assert.deepStrictEqual(c, [{ id:'Braelyn', name:'Braelyn' }, { id:'Owen', name:'Owen' }],
+    'the options still reach the renderer as bare strings');
+  // Tolerant of an object, and of junk.
+  assert.deepStrictEqual(clarifyChoices([{ id:'a', name:'A' }]), [{ id:'a', name:'A' }]);
+  assert.strictEqual(clarifyChoices([]), null, 'an empty option list is not a question');
+  assert.strictEqual(clarifyChoices(['  ', '']), null, 'blank options became buttons');
+  assert.strictEqual(clarifyChoices(undefined), null);
+
+  // ...and the app must actually USE it. Calling the helper in a test proves
+  // nothing about the call site: the mutation that reverted this one line to
+  // `parsed.turn.options || null` -- shipping bare strings to a renderer that
+  // reads {id,name} -- survived until this assertion existed.
+  const src = String(runAsk);
+  assert.ok(/choices:\s*parsed\.turn\.kind === 'clarify' \? clarifyChoices\(/.test(src),
+    'clarify options reach the screen without being normalised again');
+});
+
+test('P5-D2: a clarify’s buttons render, and answer with text rather than an id', () => {
+  // The old gate was `t.choices && pendingAction`, and a clarify never sets
+  // pendingAction -- so these buttons had never rendered at all. Fixing only
+  // the shape (D) would have shipped two blank ones.
+  const ask = String(renderAsk);
+  assert.ok(/answerClarify\(/.test(ask), 'a clarify option is not answerable');
+  assert.ok(!/t\.choices && pendingAction/.test(ask),
+    'the gate a clarify can never pass is back');
+  assert.strictEqual(typeof answerClarify, 'function', 'answerClarify is not reachable');
+});
