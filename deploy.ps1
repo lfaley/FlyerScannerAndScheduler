@@ -14,7 +14,9 @@
 #   * APP_VERSION moved but sw.js CACHE did not    <- keep the old app forever
 #   * a changed file is OLDER than the last commit  <- another session wrote
 #     it against a different base; committing it reverts what that commit added
-#   * gmail-watcher.gs changed and nobody re-pasted it at script.google.com
+#   * gmail-watcher.gs changed and nobody deployed it to script.google.com
+#     (step 5 now does this with clasp when watcher-deploy.json exists, and
+#      falls back to the manual prompt when it does not)
 #   * the push succeeded but the live site never picked it up
 #
 # v9.25 rewrite. The previous version hunted for a zip in Downloads and
@@ -146,7 +148,16 @@ if ($headTime) {
   $stale = @()
   foreach ($f in $all) {
     if (-not (Test-Path $f)) { continue }        # a deletion has no mtime
-    $m = (Get-Item $f).LastWriteTimeUtc
+    # -Force, because Get-Item WITHOUT it silently skips hidden and system
+    # files while Test-Path above happily finds them. Visual Studio's
+    # .vs\...\.wsuo is hidden, so this threw ItemNotFound and then called a
+    # method on the null it left behind (Logan, 29 Aug). SilentlyContinue plus
+    # the null check means an unreadable file is skipped, not fatal: this gate
+    # exists to catch a stale BUILD, and a file it cannot stat is not evidence
+    # of one.
+    $item = Get-Item -Force -LiteralPath $f -ErrorAction SilentlyContinue
+    if (-not $item) { continue }
+    $m = $item.LastWriteTimeUtc
     if ($m -lt $headStamp) { $stale += ("{0}  (written {1}, HEAD is {2})" -f $f, $m.ToString("HH:mm:ss"), $headStamp.ToString("HH:mm:ss")) }
   }
   if ($stale.Count) {
@@ -210,23 +221,140 @@ if ($exit -ne 0) { Stop-Here "Tests printed '$summary' but node exited $exit." }
 Ok $summary
 
 # ---------------------------------------------------------------------------
-Step 5 "The part no script can do for you"
+Step 5 "The Gmail watcher"
 # ---------------------------------------------------------------------------
-# Only prompt when gmail-watcher.gs has a REAL (non-whitespace) change vs HEAD.
-# It kept tripping on line-ending (CRLF) noise alone: git lists the file as
-# "changed" then, but there is nothing to re-paste at script.google.com.
-# --ignore-all-space makes a CRLF-only (or indentation-only) diff count as none,
-# so the prompt only appears when the watcher's code actually changed.
+# gmail-watcher.gs does NOT ship with this push -- it lives in an Apps Script
+# project at script.google.com. Until now this step could only NOTICE that and
+# stop; it now deploys the file itself when clasp is set up, and falls back to
+# the old prompt when it is not.
+#
+# Only act when the file has a REAL (non-whitespace) change vs HEAD. It kept
+# tripping on line-ending (CRLF) noise alone: git lists the file as "changed"
+# then, but there is nothing to deploy. --ignore-all-space makes a CRLF-only
+# (or indentation-only) diff count as none.
 $watcherReal = @(git diff --ignore-all-space --name-only HEAD -- gmail-watcher.gs) | Where-Object { $_ }
-if ($watcherReal) {
+
+function Invoke-WatcherManual {
   Warn "gmail-watcher.gs changed - it does NOT deploy with this push."
   Warn "At script.google.com: open the project, select all, paste the new file,"
   Warn "save, then Deploy > Manage deployments > pencil > New version > Deploy."
   Write-Host ""
   $go = Read-Host "    Type y once that is done (anything else stops here)"
   if ($go -ne "y") { Stop-Here "Stopped so the watcher can be updated first." }
+}
+
+# Returns $true only if the watcher was really pushed AND redeployed.
+function Invoke-WatcherAuto {
+  $cfgPath = Join-Path $Repo "watcher-deploy.json"
+  if (-not (Test-Path $cfgPath)) {
+    Say "No watcher-deploy.json - using the manual step."
+    Say "To automate: npm i -g @google/clasp; clasp login; then create"
+    Say "watcher-deploy.json with scriptId, deploymentId and webAppUrl."
+    Say "  scriptId     = script.google.com > Project Settings > IDs"
+    Say "  deploymentId = script.google.com > Deploy > Manage deployments >"
+    Say "                 click the ACTIVE web app > the Deployment ID shown there"
+    Say "                 (NOT 'clasp deployments' - that needs a .clasp.json first)"
+    return $false
+  }
+
+  $clasp = Get-Command clasp -ErrorAction SilentlyContinue
+  if (-not $clasp) {
+    Warn "watcher-deploy.json exists but clasp is not on PATH (npm i -g @google/clasp)."
+    return $false
+  }
+
+  try { $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json }
+  catch { Warn "watcher-deploy.json is not valid JSON."; return $false }
+
+  if (-not $cfg.scriptId -or -not $cfg.deploymentId) {
+    Warn "watcher-deploy.json needs both scriptId and deploymentId."
+    Say  "Without deploymentId, clasp deploy would mint a NEW /exec URL and the"
+    Say  "app would keep calling the old one - a silent break. Refusing."
+    return $false
+  }
+
+  # A scratch folder, rebuilt every run. clasp pushes a DIRECTORY, and it maps
+  # local filenames onto script filenames -- so the file has to arrive as
+  # Code.gs, or the project ends up with gmail-watcher.gs beside Code.gs and
+  # every function defined twice.
+  $stage = Join-Path $Repo ".clasp-stage"
+  if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+  New-Item -ItemType Directory -Path $stage | Out-Null
+  # rootDir "." keeps clasp inside the scratch folder and away from the repo.
+  '{"scriptId":"' + $cfg.scriptId + '","rootDir":"."}' | Set-Content (Join-Path $stage ".clasp.json") -Encoding ascii
+
+  Push-Location $stage
+  try {
+    # PULL FIRST. push sends appsscript.json as well, and a manifest written
+    # from scratch would overwrite the project's real timezone, runtime and
+    # OAuth scopes. Pulling means the manifest we push back is the live one.
+    Say "clasp pull (fetching the live manifest)..."
+    clasp pull 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Warn "clasp pull failed (not logged in? Apps Script API off?)."
+      Say  "Enable it at script.google.com/home/usersettings, then: clasp login"
+      return $false
+    }
+    if (-not (Test-Path (Join-Path $stage "appsscript.json"))) {
+      Warn "clasp pull returned no appsscript.json - refusing to push a manifest we did not read."
+      return $false
+    }
+
+    Copy-Item (Join-Path $Repo "gmail-watcher.gs") (Join-Path $stage "Code.gs") -Force
+
+    Say "clasp push..."
+    clasp push -f 2>&1 | ForEach-Object { Say $_ }
+    if ($LASTEXITCODE -ne 0) { Warn "clasp push failed."; return $false }
+
+    # -i updates the EXISTING deployment, so the /exec URL the app calls does
+    # not change. Without it clasp mints a new one and the app breaks silently.
+    $desc = "FlyerSnap $version"
+    Say "clasp deploy -i $($cfg.deploymentId)..."
+    clasp deploy -i $cfg.deploymentId -d $desc 2>&1 | ForEach-Object { Say $_ }
+    if ($LASTEXITCODE -ne 0) { Warn "clasp deploy failed - the code is pushed but NOT live."; return $false }
+  }
+  finally {
+    Pop-Location
+    # ALWAYS, not only on success. A failed deploy used to leave .clasp-stage in
+    # the repo, and step 6's `git add -A` would then commit a scratch folder
+    # holding a .clasp.json with the script id. Found by running the failure
+    # paths rather than reading them.
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  # A green deploy is not proof the web app answers. Ask it.
+  #
+  # curl.exe, not Invoke-RestMethod, for the reason this script already gives
+  # further down: on PowerShell 5.1 the built-in web cmdlets lean on Internet
+  # Explorer's engine and raise a security prompt on a fresh machine. -L because
+  # an /exec URL redirects to googleusercontent before it answers.
+  if ($cfg.webAppUrl) {
+    $c = "curl.exe"
+    if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { $c = "curl" }
+    $reply = (& $c -sL --max-time 25 $cfg.webAppUrl) -join "`n"
+    if ($LASTEXITCODE -ne 0 -or -not $reply) {
+      Warn "Watcher deployed but the URL did not answer. Check it by hand before relying on it."
+    } elseif ($reply -match '"error"\s*:\s*"unauthorized"') {
+      # No token on this request, so "unauthorized" is the CORRECT answer and
+      # proves the new code is live and running doGet.
+      Ok "Watcher deployed and answering (unauthorized without a token, as expected)."
+    } elseif ($reply -match '"ok"\s*:\s*true') {
+      Ok "Watcher deployed and answering."
+    } else {
+      Warn "Watcher deployed but the reply was unexpected:"
+      Say  $reply.Substring(0, [Math]::Min(200, $reply.Length))
+    }
+  }
+  return $true
+}
+
+if ($watcherReal) {
+  $done = $false
+  if (-not $NoVerify) { $done = Invoke-WatcherAuto }
+  if ($done) { Ok "gmail-watcher.gs pushed and redeployed automatically" }
+  else { Invoke-WatcherManual }
 } else {
-  Ok "gmail-watcher.gs unchanged (or line-endings only) - nothing to re-paste"
+  Ok "gmail-watcher.gs unchanged (or line-endings only) - nothing to deploy"
 }
 
 # ---------------------------------------------------------------------------

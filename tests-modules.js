@@ -4390,4 +4390,72 @@ module.exports = async function runModuleTests(test){
       'a rejected secret is kept in memory and reused on the next attempt');
   });
 
+
+  console.log('\nThe watcher deploy step (deploy.ps1)');
+
+  test('the watcher deploy updates the EXISTING deployment, never mints a new URL', () => {
+    // `clasp deploy` with no -i creates a new deployment with a NEW /exec URL,
+    // and the app would keep calling the old one -- a silent break that looks
+    // exactly like the watcher having stopped. The id is required config.
+    const ps = fs.readFileSync(__dirname + '/deploy.ps1', 'utf8');
+    assert.ok(/clasp deploy -i \$cfg\.deploymentId/.test(ps),
+      'clasp deploy is called without -i, so it would mint a new /exec URL');
+    assert.ok(/if \(-not \$cfg\.scriptId -or -not \$cfg\.deploymentId\)/.test(ps),
+      'a config without deploymentId is no longer refused');
+  });
+
+  test('the manual paste step survives as the fallback', () => {
+    // CLAUDE.md rule 1. If clasp is absent, not logged in, or the push fails,
+    // the deploy must still stop and make the change visible rather than
+    // continuing on the assumption that the watcher is current.
+    const ps = fs.readFileSync(__dirname + '/deploy.ps1', 'utf8');
+    assert.ok(/function Invoke-WatcherManual/.test(ps), 'the manual fallback is gone');
+    assert.ok(/Stop-Here "Stopped so the watcher can be updated first\."/.test(ps),
+      'a declined manual step no longer stops the push');
+    assert.ok(/if \(\$done\) \{[^}]*\} *\r?\n *else \{ Invoke-WatcherManual \}/.test(ps),
+      'the manual step is not reached when the automated one fails');
+  });
+
+  test('the manifest that is pushed is the one that was pulled', () => {
+    // clasp push sends appsscript.json too. Writing one from scratch would
+    // overwrite the project's real timezone, runtime and OAuth scopes.
+    const ps = fs.readFileSync(__dirname + '/deploy.ps1', 'utf8');
+    const raw = ps.split('function Invoke-WatcherAuto')[1].split('\nif ($watcherReal)')[0];
+    // Comments out FIRST. The comment above the staging block reads "clasp
+    // pushes a DIRECTORY", which matched before the call did and made this
+    // guard fail on its own prose (CLAUDE.md rule 21 — the same mistake three
+    // of the review's own tools made).
+    const fn = raw.replace(/^\s*#[^\n]*$/gm, ' ');
+    assert.ok(fn.indexOf('clasp pull') < fn.indexOf('clasp push'),
+      'it pushes before pulling, so it would overwrite the live manifest');
+    assert.ok(/refusing to push a manifest we did not read/.test(raw),
+      'a pull that returned no manifest no longer stops the push');
+  });
+
+  test('the watcher file is staged as Code.gs, not pushed under its own name', () => {
+    // clasp maps a local filename onto a script filename, so pushing
+    // gmail-watcher.gs would leave it BESIDE the project's Code.gs with every
+    // function defined twice.
+    const ps = fs.readFileSync(__dirname + '/deploy.ps1', 'utf8');
+    assert.ok(/Copy-Item .*gmail-watcher\.gs.*Code\.gs/.test(ps),
+      'the watcher is not staged as Code.gs');
+  });
+
+  test('the scratch folder is removed on EVERY path, not only on success', () => {
+    // It lives inside the repo, and step 6 runs `git add -A`: a failed deploy
+    // used to leave .clasp-stage behind to be committed, .clasp.json and all.
+    const ps = fs.readFileSync(__dirname + '/deploy.ps1', 'utf8');
+    const fin = ps.split('finally {')[1].split('}')[0];
+    assert.ok(/Remove-Item \$stage/.test(fin),
+      'the stage folder is not cleaned up in the finally block');
+  });
+
+  test('the machine-specific watcher config can never be committed', () => {
+    // This repo is PUBLIC -- it serves GitHub Pages. watcher-deploy.json holds
+    // the live /exec URL, which is one half of the watcher's access.
+    const ig = fs.readFileSync(__dirname + '/.gitignore', 'utf8');
+    ['watcher-deploy.json', '.clasp-stage/', '.clasprc.json']
+      .forEach(f => assert.ok(ig.includes(f), f + ' is not ignored'));
+  });
+
 };

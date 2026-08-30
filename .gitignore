@@ -1,10 +1,27 @@
+# Visual Studio's local workspace state. Machine-specific, rewritten constantly,
+# and several of its files are HIDDEN -- which is what broke deploy.ps1's
+# freshness gate on 29 Aug. Nothing in here belongs in a repo.
 .vs/
 
-# Scratch an agent could not delete itself. device_bash cannot rm on this
-# machine, so working files get moved here instead of removed -- and without
-# this line a 400KB dump of a previous index.html would be committed with the
-# next release. Safe to delete the folder at any time.
+# Scratch: device_bash on the desktop bridge cannot delete files, so anything an
+# agent session needed to remove got moved here instead. Safe to empty by hand.
 _to_delete/
 
-# Node, if it ever gets installed here for tooling.
+# Node modules. Reinstallable from package.json; never committed.
 node_modules/
+
+# Scratch folder deploy.ps1 builds to push the Gmail watcher with clasp. It
+# holds a .clasp.json with the script id and is rebuilt every run.
+.clasp-stage/
+
+# Identifies YOUR Apps Script project and its live /exec URL. This repo is
+# public (it serves GitHub Pages), and the deployment URL is one half of the
+# watcher's access -- SECRET is the other. It belongs on your machine only.
+watcher-deploy.json
+
+# clasp's project file. Only holds the script id, but it is machine-specific and
+# would make `clasp push` from the repo root behave unpredictably.
+.clasp.json
+
+# clasp's own credential file, if it is ever run from the repo root.
+.clasprc.json
