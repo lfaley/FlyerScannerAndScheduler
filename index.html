@@ -4452,7 +4452,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.74';
+const APP_VERSION = 'v9.75';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -6856,17 +6856,54 @@ async function fetchSenders(){
   if(data.error) throw new Error(data.error);
   return data.senders || [];
 }
+/**
+ * Rewrite the watched sender list.
+ *
+ * The only call in the app that CHANGES what the watcher may read from Gmail,
+ * so as of v9.75 the script can require a second secret for it. That secret is
+ * asked for here and forgotten immediately: it is never written to S.settings,
+ * so it never reaches localStorage and never ships in a backup -- which is the
+ * whole reason it exists, since `watcherToken` does both.
+ */
 async function saveSenders(list){
   const base = watcherBaseUrl();
   if(!base) throw new Error('No watcher URL saved.');
-  const url = base + '?token=' + encodeURIComponent((S.settings.watcherToken||'').trim()) +
+  let url = base + '?token=' + encodeURIComponent((S.settings.watcherToken||'').trim()) +
     '&action=setsenders&senders=' + encodeURIComponent(list.join(','));
+  if(watcherWriteToken) url += '&wtoken=' + encodeURIComponent(watcherWriteToken);
   const data = await jsonpRequest(url);
+  if(data.error === 'write_unauthorized'){
+    // Ask once, retry once. A wrong answer the second time is a real failure --
+    // looping here would be a password prompt that never stops.
+    const typed = prompt('Your watcher asks for its WRITE_SECRET before it will '
+      + 'change which senders it reads.\n\nThis is NOT the token you saved in '
+      + 'Settings — it is the second value from Script Properties. FlyerSnap does '
+      + 'not store it.');
+    if(typed === null) throw new Error('Sender list not changed.');
+    watcherWriteToken = String(typed).trim();
+    const retryUrl = base + '?token=' + encodeURIComponent((S.settings.watcherToken||'').trim()) +
+      '&action=setsenders&senders=' + encodeURIComponent(list.join(',')) +
+      '&wtoken=' + encodeURIComponent(watcherWriteToken);
+    const again = await jsonpRequest(retryUrl);
+    if(again.error === 'write_unauthorized'){
+      watcherWriteToken = '';                    // wrong: do not keep it around
+      throw new Error('That WRITE_SECRET was not accepted.');
+    }
+    if(again.error) throw new Error(again.error);
+    return again.senders || [];
+  }
   if(data.error) throw new Error(data.error);
   return data.senders || [];
 }
 
 let watchedSenders = null;
+// The watcher's WRITE_SECRET, held in memory for this session only.
+//
+// Deliberately NOT on S.settings: everything there is written to localStorage
+// and shipped in every backup export, which is exactly what is wrong with
+// `watcherToken` and the reason this second secret exists at all. Typed once
+// per session when the sender list is saved, and gone when the tab closes.
+let watcherWriteToken = '';
 let lastEmailProblems = [];
 // Gordon's executive-assistant briefs for the emails that had no dates to import,
 // keyed by msgId: { from, gist, category:'action'|'fyi'|'trash', deadline, missedDate, suggestedAction }.

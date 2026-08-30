@@ -4330,4 +4330,64 @@ module.exports = async function runModuleTests(test){
       'it trusts removeItem instead of reading the keys back');
   });
 
+
+  console.log('\nThe watcher’s write secret (v9.75)');
+
+  test('setsenders is the ONLY action the watcher gates behind WRITE_SECRET', () => {
+    // SECRET travels as ?token= on a GET and is saved in S.settings, so it is in
+    // browser history and in every backup export. Reading a queue with it is
+    // fine; CHANGING which senders the script reads from Gmail is not.
+    const gs = fs.readFileSync(__dirname + '/gmail-watcher.gs', 'utf8');
+    const block = gs.split("if (action === 'setsenders')")[1].split("if (action === 'message')")[0];
+    assert.ok(/WRITE_SECRET/.test(block), 'setsenders is not gated at all');
+    assert.ok(/e\.parameter\.wtoken !== writeSecret/.test(block),
+      'it does not compare the supplied write token');
+    assert.ok(/write_unauthorized/.test(block), 'a refused write is not distinguishable');
+    // The read actions must NOT have gained a gate — that would lock the app out.
+    // Only the REQUEST HANDLERS — testSetup below mentions WRITE_SECRET in its
+    // warning, and that is not a gate.
+    const reads = gs.split("if (action === 'message')")[1]
+      .split('// ---------- Helpers you can run by hand')[0];
+    assert.ok(!/WRITE_SECRET/.test(reads), 'a read action now demands the write secret');
+  });
+
+  test('an unset WRITE_SECRET changes nothing, and testSetup says so', () => {
+    // CLAUDE.md rule 1: pasting this script must not remove sender management
+    // from an install that never had a WRITE_SECRET. Opt-in, with a warning.
+    const gs = fs.readFileSync(__dirname + '/gmail-watcher.gs', 'utf8');
+    assert.ok(/if \(writeSecret && e\.parameter\.wtoken !== writeSecret\)/.test(gs),
+      'an unset WRITE_SECRET now blocks writes — that breaks existing installs');
+    const setup = gs.split('function testSetup(')[1].split('\n}\n')[0];
+    assert.ok(/WRITE_SECRET/.test(setup), 'testSetup never mentions it');
+    assert.ok(/Script Properties/.test(setup), 'the warning does not say how to fix it');
+    assert.ok(!/issues\.push\('WRITE_SECRET/.test(setup),
+      'a missing WRITE_SECRET is reported as an error, not a warning');
+  });
+
+  test('the write secret is never persisted — not to settings, not to a backup', () => {
+    // The entire point. `watcherToken` is in localStorage and in every export;
+    // this second secret exists precisely so that the privileged action does not
+    // depend on a value that leaks that way.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    assert.ok(/\nlet watcherWriteToken = '';/.test(html),
+      'watcherWriteToken is not a module-level let — check it has not moved onto S');
+    assert.ok(!/S\.settings\.watcherWriteToken/.test(html), 'it was parked on saved settings');
+    assert.ok(!/watcherWriteToken\s*=\s*[^;]*S\.settings/.test(html), 'it is read back from settings');
+    const blank = html.split('function blank(){')[1].split('\n}')[0];
+    assert.ok(!/watcherWriteToken/.test(blank), 'it leaked into the saved shape');
+  });
+
+  test('a refused write asks once and gives up — it is not a password loop', () => {
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const fn = html.split('async function saveSenders(')[1].split('\n}\n')[0];
+    const code = fn.replace(/\/\/[^\n]*/g, ' ')
+                   .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+                   .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    assert.strictEqual((code.match(/prompt\(/g) || []).length, 1,
+      'it asks for the secret more than once — that is a loop, not a retry');
+    assert.ok(/typed === null/.test(code), 'cancelling the prompt is not handled');
+    assert.ok(/watcherWriteToken = ''/.test(code),
+      'a rejected secret is kept in memory and reused on the next attempt');
+  });
+
 };

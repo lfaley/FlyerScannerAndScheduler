@@ -9,6 +9,12 @@
  *
  * SETUP: see the step-by-step in the chat. In short --
  *   1. Script Properties: CLAUDE_KEY, SECRET, SENDERS
+ *      ...and optionally WRITE_SECRET, a SECOND value required on top of SECRET
+ *      for the one action that changes what this script reads (setsenders).
+ *      SECRET travels in the URL and is saved on the phone, so it ends up in
+ *      browser history and in every FlyerSnap backup. WRITE_SECRET is typed in
+ *      at the moment the sender list is saved and is never stored anywhere.
+ *      Leave it unset and setsenders behaves exactly as it always has.
  *   2. Deploy > New deployment > Web app > Execute as Me > Anyone
  *   3. Triggers > checkMail > Time-driven > Every 15 minutes
  */
@@ -584,6 +590,17 @@ function doGet(e) {
 
   // Manage the watched sender list from inside FlyerSnap.
   if (action === 'setsenders') {
+    // The ONE action that changes what this script is allowed to read from the
+    // mailbox. SECRET alone is not enough for it when a WRITE_SECRET exists:
+    // SECRET is on the phone and in every backup, and someone holding a backup
+    // must not be able to point the watcher at a new sender.
+    //
+    // Unset = behave exactly as before. testSetup() reports it as a warning
+    // rather than this refusing writes on an install that never had one.
+    var writeSecret = getProp('WRITE_SECRET');
+    if (writeSecret && e.parameter.wtoken !== writeSecret) {
+      return out({ error: 'write_unauthorized' });
+    }
     var incoming = (e.parameter.senders || '').split(',')
       .map(function (s) { return s.trim(); })
       .filter(function (s) { return s.length > 0 && s.length < 120; });
@@ -630,6 +647,16 @@ function testSetup() {
   if (!getProp('SECRET')) issues.push('SECRET is missing');
   if (!senders().length) issues.push('SENDERS is missing');
   if (issues.length) { Logger.log('PROBLEMS:\n- ' + issues.join('\n- ')); return; }
+
+  // Not an error -- the script works without it -- but the user should know.
+  if (!getProp('WRITE_SECRET')) {
+    Logger.log('WARNING: WRITE_SECRET is not set.\n' +
+      'SECRET travels in the URL and is saved in FlyerSnap (and in its backups), so\n' +
+      'anyone holding one can change which senders this script reads mail from.\n' +
+      'To fix: Project Settings > Script Properties > Add, name WRITE_SECRET, value\n' +
+      'a different long random string. FlyerSnap will then ask for it when you save\n' +
+      'the sender list, and will not store it.');
+  }
 
   var query = '(' + senders().map(function (s) { return 'from:' + s; }).join(' OR ') +
     ') newer_than:' + LOOKBACK;
