@@ -4458,4 +4458,88 @@ module.exports = async function runModuleTests(test){
       .forEach(f => assert.ok(ig.includes(f), f + ' is not ignored'));
   });
 
+
+  console.log('\nTwo guards the review left blocked (v9.76)');
+
+  // Settings keys that only ever GROW. Derived from the shipped code, not a
+  // hard-coded list, so a new one cannot slip past this pair of tests.
+  function accumulatingSettingsKeys(html){
+    const pushed = new Set();
+    for(const m of html.matchAll(/S\.settings\.([A-Za-z]+)\.push\(/g)) pushed.add(m[1]);
+    for(const m of html.matchAll(/const list = S\.settings\.([A-Za-z]+) \|\| \(S\.settings\.\1 = \[\]\);[\s\S]{0,200}?list\.push\(/g))
+      pushed.add(m[1]);
+    // ...and the ones grown by rebuilding: seenMsgs is `= (…||[]).concat(…)`.
+    for(const m of html.matchAll(/S\.settings\.([A-Za-z]+)\s*=\s*[^;\n]*\.concat\(/g)) pushed.add(m[1]);
+    // NOTE: an undo path assigns a whole array back (`= before`), so "is ever
+    // assigned a non-empty array" does NOT mean "is drained" — an earlier draft
+    // of this filter used that and matched nothing at all, which would have
+    // passed forever while testing nothing (CLAUDE.md rule 30).
+    return [...pushed].sort();
+  }
+
+  test('every accumulating settings key has a path that empties it', () => {
+    // P6: suppression is fine; suppression with no way back is the bug. These
+    // keys grow forever and silence things, and until v9.66 two of them had
+    // nothing anywhere that could clear them — a mis-tap was permanent and
+    // invisible. seenMsgs was never a defect precisely because
+    // forgetImportedEmails() empties it and the button shows the count.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const keys = accumulatingSettingsKeys(html);
+    assert.ok(keys.length >= 3, 'the detector found almost nothing — it has stopped working: ' + keys);
+    // A LAZY-INIT IS NOT A CLEAR. `if(!S.settings.k) S.settings.k = []` runs
+    // before the first push and creates the accumulator; counting it as the way
+    // back is how this guard would pass while the key stayed unclearable. The
+    // review's own P4 tool made exactly this mistake once already.
+    const unclearable = keys.filter(k => {
+      const re = new RegExp('(.{0,60})S\\.settings\\.' + k + '\\s*=\\s*\\[\\]', 'g');
+      for(const m of html.matchAll(re)){
+        const before = m[1];
+        if(new RegExp('if\\(!\\s*S\\.settings\\.' + k + '\\)\\s*$').test(before)) continue;
+        if(/Array\.isArray|\|\|\s*$/.test(before)) continue;   // migration / default
+        return false;                                            // a real clear
+      }
+      return true;
+    });
+    assert.deepStrictEqual(unclearable, [],
+      'settings keys that grow forever with no way to empty them: ' + unclearable.join(', '));
+  });
+
+  test('a clearing path is REACHABLE from a control, not just defined', () => {
+    // A clear() nothing calls is the same as no clear at all. Each of these has
+    // a screen behind it (Settings > Dismissed Warnings, and the re-import
+    // button) — the review's P7 finding was that the way back existed in the
+    // code and nowhere on screen.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    ['clearDismissedConflicts', 'clearNotDuplicates', 'forgetImportedEmails'].forEach(fn => {
+      assert.ok(html.includes('function ' + fn + '('), fn + ' is not defined');
+      assert.ok(new RegExp('onclick="' + fn + '\\(\\)"').test(html),
+        fn + ' is defined but no control calls it');
+    });
+    assert.ok(/setDismissed:renderSetDismissed/.test(html),
+      'the screen listing what has been silenced is no longer routed');
+  });
+
+  test('no icon-only control performs a permanent suppression', () => {
+    // P7-01, as a rule. The trigger for the whole Aug 2026 review was an
+    // unlabelled x that silenced a clash warning forever. An aria-label is not
+    // enough here: the person tapping it can see the icon and not the label.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const suppressors = ['dismissConflict', 'dismissGroup']
+      .filter(fn => html.includes('function ' + fn + '('));
+    assert.ok(suppressors.length, 'no suppression handlers found — the guard is testing nothing');
+    const bad = [];
+    for(const m of html.matchAll(/<button\b[^>]*onclick="([^"]*)"[^>]*>((?:(?!<\/button>)[\s\S])*)<\/button>/g)){
+      const handler = m[1], inner = m[2];
+      if(!suppressors.some(fn => handler.includes(fn + '('))) continue;
+      // Visible text = anything left once the icon calls and tags are removed.
+      const text = inner.replace(/\$\{ico\('[a-z-]+'\)\}/g, '')
+                        .replace(/<[^>]*>/g, '')
+                        .replace(/\$\{[^}]*\}/g, 'X')
+                        .trim();
+      if(!text) bad.push(handler.slice(0, 60));
+    }
+    assert.deepStrictEqual(bad, [],
+      'icon-only controls that silence something permanently: ' + bad.join(' | '));
+  });
+
 };
