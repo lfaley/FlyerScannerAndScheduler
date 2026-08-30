@@ -970,7 +970,10 @@ function loadGordonSession(){
     return GORDON_AUTH.isSession(s) ? s : null;
   }catch(e){ return null; }
 }
-function saveGordonSession(s){ try{ localStorage.setItem(GORDON_SESSION_KEY, JSON.stringify(s)); }catch(e){} }
+// Storage refusing this is not silent in effect: the NEXT gordonAuthToken()
+// finds no session and the user is asked to sign in again. Reporting it here
+// would fire mid-sign-in, before the app knows whether it matters.
+function saveGordonSession(s){ try{ localStorage.setItem(GORDON_SESSION_KEY, JSON.stringify(s)); }catch(e){ /* see above: the next token read surfaces it */ } }
 /**
  * Remove the stored Gordon session. Returns TRUE only if the key is really gone.
  *
@@ -3870,7 +3873,7 @@ function load(){
     loadError = e.message || String(e);
     try{
       if(raw) localStorage.setItem('flyersnap-quarantine', raw);
-    }catch(_){}
+    }catch(_){ /* already handling a load failure. If storage will not take the quarantine copy either, the original bytes are still where they were -- __locked below is what actually protects them */ }
     const locked = blank();
     locked.__locked = true;
     return locked;
@@ -3979,7 +3982,7 @@ function snapshotKeys(){
       const k = localStorage.key(i);
       if(k && k.indexOf(SNAP_PREFIX) === 0) out.push(k);
     }
-  }catch(e){}
+  }catch(e){ /* enumeration can throw where storage is partitioned. An empty list means "no snapshots found", which is the safe reading -- it can only cause the app to keep MORE than it needed */ }
   return out.sort();
 }
 function snapshot(){
@@ -4020,7 +4023,7 @@ function storageBytes(){
       const k = localStorage.key(i);
       n += k.length + (localStorage.getItem(k)||'').length;
     }
-  }catch(e){}
+  }catch(e){ /* a size READING. An under-count shows a smaller bar on the storage screen; it changes nothing the app does */ }
   return n;
 }
 function downloadQuarantine(){
@@ -4030,7 +4033,7 @@ function downloadQuarantine(){
       const k = localStorage.key(i);
       if(k && k.indexOf('flyersnap') === 0) dump[k] = localStorage.getItem(k);
     }
-  }catch(e){}
+  }catch(e){ /* the rescue download is a LAST RESORT, reached when things are already broken. A partial dump is worth more than a thrown one */ }
   const blob = new Blob([JSON.stringify(dump, null, 1)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -4041,18 +4044,45 @@ function downloadQuarantine(){
 function startFresh(){
   if(!confirm('Erase everything and start over?\n\nThis cannot be undone. Download the rescue file first if you have not.')) return;
   if(!confirm('Really erase all events, chores, stars, lists and recipes?')) return;
+  // THE ONE EMPTY CATCH THAT WAS WRONG (v9.74).
+  //
+  // This used to swallow the failure and render a blank app regardless. In
+  // private mode, or with storage access denied, every removeItem throws: the
+  // snapshots survive, the GORDON SESSION TOKEN survives, and the user -- who
+  // has just confirmed twice that they want everything erased -- is shown an
+  // empty app as proof that it worked. That is P4-01 exactly: asserting an
+  // outcome nobody checked, about the one thing where being wrong matters.
+  //
+  // Verify, then say what is actually true.
+  let left = [];
   try{
     const keys = [];
     for(let i=0;i<localStorage.length;i++){
       const k = localStorage.key(i);
       if(k && k.indexOf('flyersnap') === 0) keys.push(k);
     }
-    keys.forEach(k=>localStorage.removeItem(k));
-  }catch(e){}
+    keys.forEach(k => { try{ localStorage.removeItem(k); }catch(e){ left.push(k); } });
+    // Read back rather than trusting the writes: removeItem can resolve without
+    // removing where storage is partitioned.
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.indexOf('flyersnap') === 0 && left.indexOf(k) < 0) left.push(k);
+    }
+  }catch(e){
+    left = ['(storage could not be read)'];
+  }
   S = blank();
   loadError = null;
   view = {tab:'events', sub:null, data:null};
   save(); render();
+  if(left.length){
+    logProblem('Storage', 'Erase everything did not remove all data',
+      left.length + ' key(s) survived: ' + left.slice(0, 8).join(', '));
+    alert('Not everything could be erased.\n\nThis browser refused to remove '
+      + left.length + ' item' + (left.length === 1 ? '' : 's')
+      + ', which may include a saved sign-in. Clear this site\u2019s data in your '
+      + 'browser settings to finish.');
+  }
 }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,9); }
 function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -4422,7 +4452,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.73';
+const APP_VERSION = 'v9.74';
 const APP_TAGLINE = 'errors that explain themselves';
 
 /**
@@ -7117,7 +7147,7 @@ function errorOutboxRead(){
   }catch(e){ return []; }
 }
 function errorOutboxWrite(list){
-  try{ localStorage.setItem(ERROR_OUTBOX_LS, JSON.stringify(list.slice(-ERROR_OUTBOX_MAX))); }catch(e){}
+  try{ localStorage.setItem(ERROR_OUTBOX_LS, JSON.stringify(list.slice(-ERROR_OUTBOX_MAX))); }catch(e){ /* THE ERROR REPORTER MUST NOT THROW. A failure here would be reported through the thing that just failed (CLAUDE.md rule 28) */ }
 }
 function queueErrorReport(problem){
   try{
@@ -7163,7 +7193,7 @@ async function flushErrorReports(){
 // Leftovers from a page that died mid-write get delivered on the next launch.
 // Scheduled ONLY when something is actually waiting, so a normal boot adds no
 // timer and no work.
-try{ if(errorOutboxRead().length) setTimeout(() => { flushErrorReports(); }, 8000); }catch(e){}
+try{ if(errorOutboxRead().length) setTimeout(() => { flushErrorReports(); }, 8000); }catch(e){ /* runs at BOOT. Nothing here may stop the app starting -- the v8.1-v8.5 blank screen began as a boot-time throw */ }
 
 
 function renderProblems(m){
@@ -7344,7 +7374,7 @@ async function persistSenders(){
   }catch(err){
     // The domain didn't save server-side — roll back so the UI stays honest.
     alert('Could not save to the watcher:\n\n'+err.message);
-    try{ watchedSenders = await fetchSenders(); render(); }catch(e){}
+    try{ watchedSenders = await fetchSenders(); render(); }catch(e){ /* already inside the failure path: the alert above told the user. A second failure here leaves the stale list, which is the honest thing to show */ }
   }
 }
 
@@ -8022,7 +8052,7 @@ function onEventSearch(v){
   const again = document.getElementById('evSearch');
   if(again){
     again.focus();
-    if(caret !== null){ try{ again.setSelectionRange(caret, caret); }catch(e){} }
+    if(caret !== null){ try{ again.setSelectionRange(caret, caret); }catch(e){ /* no selection API on this input type; losing the caret beats throwing */ } }
   }
 }
 function clearEventSearch(){ eventSearch = ''; pastLimit = 30; render(); }
@@ -8445,7 +8475,7 @@ async function handleLinkCapture(url){
       return;
     }
     const items = markDuplicates(found, append ? pendingEvents : null);
-    let host = url; try{ host = new URL(url).hostname.replace(/^www\./,''); }catch(e){}
+    let host = url; try{ host = new URL(url).hostname.replace(/^www\./,''); }catch(e){ /* not a URL: `host` keeps the raw string, which is what we wanted to show */ }
     if(append){ pendingEvents = pendingEvents.concat(items); }
     else { pendingEvents = items; pendingSource = 'Link · ' + host; }
     sub('review');
@@ -9287,7 +9317,7 @@ function focusEditBox(id){
   const box = document.getElementById(id);
   if(!box) return;
   box.focus();
-  try{ box.setSelectionRange(box.value.length, box.value.length); }catch(e){}
+  try{ box.setSelectionRange(box.value.length, box.value.length); }catch(e){ /* no selection API on this input type; the text is in, only the caret moved */ }
 }
 
 function toggleItem(id){
@@ -9386,7 +9416,7 @@ function addNoteCheckItem(noteId){
   save();
   renderNoteDetail(document.getElementById('main'));
   const b = document.getElementById('noteBody');
-  if(b){ b.focus(); try{ b.setSelectionRange(b.value.length, b.value.length); }catch(e){} }
+  if(b){ b.focus(); try{ b.setSelectionRange(b.value.length, b.value.length); }catch(e){ /* no selection API on this input type; the line is added either way */ } }
 }
 
 // ---- sort -----------------------------------------------------------------
@@ -9548,7 +9578,7 @@ function toggleNoteLabel(noteId, labelId){
   const caret = b ? b.selectionStart : null;
   renderNoteDetail(document.getElementById('main'));
   const again = document.getElementById('noteBody');
-  if(again && caret !== null){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
+  if(again && caret !== null){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){ /* no selection API on this input type; losing the caret beats throwing */ } }
 }
 
 // ---- the board filter -----------------------------------------------------
@@ -9785,7 +9815,7 @@ function onNoteSearch(v){
   const again = document.getElementById('noteSearch');
   if(again){
     again.focus();
-    if(caret !== null){ try{ again.setSelectionRange(caret, caret); }catch(e){} }
+    if(caret !== null){ try{ again.setSelectionRange(caret, caret); }catch(e){ /* no selection API on this input type; losing the caret beats throwing */ } }
   }
 }
 function clearNoteSearch(){ noteSearch = ''; render(); }
@@ -9897,7 +9927,7 @@ function toggleNotePerson(id, personId){
   const caret = b ? b.selectionStart : null;
   renderNoteDetail(document.getElementById('main'));
   const again = document.getElementById('noteBody');
-  if(again && caret !== null){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
+  if(again && caret !== null){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){ /* no selection API on this input type; losing the caret beats throwing */ } }
 }
 
 /**
@@ -10321,7 +10351,7 @@ function mealPlanDiagnostic(){
     lines.push('If FlyerSnap is your home-screen icon, add the recipe app to your home screen too and plan/join from that icon — not from a Safari tab.');
   } else {
     let env = null;
-    try{ env = JSON.parse(raw); }catch(e){}
+    try{ env = JSON.parse(raw); }catch(e){ /* `if(!env)` below IS the failure path: it prints the unparseable text */ }
     if(!env){
       lines.push('A meal plan exists but could not be read (not valid JSON).');
       lines.push('First 200 characters:');
@@ -11017,7 +11047,7 @@ async function runLocalSelfTest(){
     const out = await callLocalModel(
       [{type:'text', text:sample}, {type:'text', text:eventPrompt()}], 2000, GROUNDING_EVENTS);
     let parsed = null;
-    try{ parsed = JSON.parse(out); }catch(e){}
+    try{ parsed = JSON.parse(out); }catch(e){ /* a non-JSON reply is a FAILED self-test, reported by `gotOne` below, not an error here */ }
     const arr = Array.isArray(parsed) ? parsed : (parsed && parsed.events);
     const gotOne = Array.isArray(arr) && arr.length >= 1 && arr[0] && arr[0].date;
     add('Extracts events as JSON', !!gotOne,

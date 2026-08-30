@@ -4276,4 +4276,58 @@ module.exports = async function runModuleTests(test){
     assert.ok(/UNKNOWN_THING/.test(msg('UNKNOWN_THING')), 'an unknown code must still surface itself');
   });
 
+
+  console.log('\nEvery empty catch states why it is empty (v9.74)');
+
+  test('no catch block in the shipped app or its modules is silently empty', () => {
+    // The rule the Aug 2026 review wanted and could not add: the guard fails
+    // until the catches are annotated, so the annotation had to come first.
+    //
+    // THE POINT IS NOT TIDINESS. The Gmail watcher swallowing every email began
+    // as a line nobody had to justify. An empty catch is a decision -- "this
+    // failure does not matter" -- and a decision with no reason written beside
+    // it is one nobody can check later. One of the seventeen turned out to be
+    // wrong (wipeEverything).
+    const files = ['index.html'].concat(
+      fs.readdirSync(__dirname + '/js').filter(f => f.endsWith('.js')).map(f => 'js/' + f));
+    const bare = [];
+    files.forEach(f => {
+      const src = fs.readFileSync(__dirname + '/' + f, 'utf8');
+      const lines = src.split('\n');
+      // Only catches whose body holds no `}` of its own -- i.e. the short ones
+      // that could be empty. A multi-statement catch is out of scope here.
+      for(const m of src.matchAll(/catch\s*\(?[A-Za-z_$]*\)?\s*\{([^{}]*)\}/g)){
+        const body = m[1];
+        if(/\/\*|\/\//.test(body)) continue;          // has a reason
+        if(/[A-Za-z0-9_$]/.test(body)) continue;      // does something
+        const line = lines.length - src.slice(m.index).split('\n').length + 1;
+        bare.push(f + ':' + line);
+      }
+    });
+    assert.deepStrictEqual(bare, [],
+      'catch blocks that swallow a failure without saying why: ' + bare.join(', '));
+  });
+
+  test('startFresh verifies the erase instead of assuming it', () => {
+    // It swallowed the failure and rendered a blank app regardless. In private
+    // mode every removeItem throws: the snapshots survive, THE GORDON SESSION
+    // TOKEN SURVIVES, and a user who confirmed twice that they wanted
+    // everything erased is shown an empty app as proof that it worked. P4-01
+    // exactly -- asserting an outcome nobody checked.
+    const body = fs.readFileSync(__dirname + '/index.html', 'utf8')
+      .split('function startFresh(')[1].split('\n}\n')[0];
+    const code = body.replace(/\/\/[^\n]*/g, ' ')
+                     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+                     .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    assert.ok(/left\.push\(/.test(code), 'it no longer records what survived');
+    assert.ok(/if\(left\.length\)/.test(code), 'it does not check whether anything survived');
+    assert.ok(/alert\(/.test(code), 'a failed erase still says nothing to the user');
+    assert.ok(/logProblem\(/.test(code), 'a failed erase leaves no trace to come back to');
+    // ...and it must READ BACK rather than trust the writes: removeItem can
+    // resolve without removing where storage is partitioned.
+    const afterRemove = code.slice(code.indexOf('removeItem'));
+    assert.ok(/localStorage\.key\(/.test(afterRemove),
+      'it trusts removeItem instead of reading the keys back');
+  });
+
 };
