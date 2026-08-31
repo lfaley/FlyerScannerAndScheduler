@@ -103,6 +103,24 @@ module.exports = async function runModuleTests(test){
     ? '<script type="module">' : '<script>';
   const script = html.split(openTag)[1].split('</script>')[0];
 
+  /**
+   * Source with its COMMENTS removed, for guards that search for code.
+   *
+   * CLAUDE.md: "WHEN A GUARD TEST READS PROSE IT IS NOT READING CODE." It has
+   * bitten this suite twice as a false NEGATIVE (a token in a nearby comment
+   * kept a guard green after the real code was deleted). The v9.89 performRoute
+   * guard found the other direction: the sentence "this branch must never call
+   * save()." in a comment failed a guard about calls to save(), with the code
+   * entirely correct -- and a red build on correct code is how a guard gets
+   * weakened by the next person along. Strip, then search.
+   *
+   * Only whole-line // comments are removed, so a `https://` inside a string
+   * survives untouched.
+   */
+  const codeOf = (src) => String(src)
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
   const handlerNames = new Set();
   // The handlers live inside template literals in the SCRIPT, not in static
   // markup -- scanning the markup alone finds none. But comments in the script
@@ -2337,9 +2355,11 @@ module.exports = async function runModuleTests(test){
   console.log('\nActing is actually wired in, and cannot write without a yes');
 
   test('performRoute never writes; confirmPendingAction is the only path that does', () => {
-    const pr = script.split('async function performRoute(')[1]
-                     .split('function confirmPendingAction(')[0];
-    // A write here would bypass the confirm step entirely.
+    const pr = codeOf(script.split('async function performRoute(')[1]
+                            .split('function confirmPendingAction(')[0]);
+    // A write here would bypass the confirm step entirely. Comments stripped
+    // first: without that, a comment SAYING "never call save()" failed this
+    // guard while the code was correct (proved 31 Aug, mutation G0).
     //
     // v9.89: this list of seven shapes is a DENYLIST, and a denylist is the
     // wrong instrument for an invariant whose whole point is that UNKNOWN

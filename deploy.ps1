@@ -377,8 +377,27 @@ if ($DryRun) {
 git add -A
 if ($LASTEXITCODE -ne 0) { Stop-Here "git add failed." }
 
-git commit -m $Message | Out-Null
-if ($LASTEXITCODE -ne 0) { Stop-Here "git commit failed." }
+# Capture instead of discarding. `| Out-Null` threw away git's stdout, which is
+# the ONLY place it explains itself -- "nothing to commit", a pre-commit hook's
+# output, "Unable to create index.lock". A v9.89 deploy failed here and reported
+# nothing but "git commit failed", which is the exact shape rule 28 warns about:
+# the instrument you reach for when something is wrong must not be the thing
+# that is wrong. 2>&1 is safe on the commit line because $ErrorActionPreference
+# is "Continue" for this whole script (line 37) -- that is why the clasp calls
+# below can use it too.
+$commitOut = (git commit -m $Message 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) {
+  Write-Host ""
+  Bad "git commit failed. What git said:"
+  ($commitOut -split "`n") | ForEach-Object { if ($_.Trim()) { Write-Host "      $_" } }
+  if ($commitOut -match 'index\.lock') {
+    Write-Host ""
+    Bad "That is the stale lock. With no git process running, remove it and re-run:"
+    Say "  Get-Process git -ErrorAction SilentlyContinue"
+    Say "  Remove-Item '$Repo\.git\index.lock' -Force"
+  }
+  Stop-Here "git commit failed."
+}
 
 $sha = (git rev-parse --short HEAD)
 if ($sha) { $sha = $sha.Trim() }
