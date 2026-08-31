@@ -4572,8 +4572,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.80';
-const APP_TAGLINE = 'one door in, for every saved file';
+const APP_VERSION = 'v9.81';
+const APP_TAGLINE = 'failures name the right culprit';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never
@@ -4672,7 +4672,28 @@ async function callAI(contentBlocks, maxTokens, system, op){
         // been told it answered and the log claiming a recovery that never
         // happened. Announce the outcome after there IS one -- the same mistake
         // P4-01 fixed in sign-out.
-        const answer = await callClaude(contentBlocks, maxTokens, system);
+        let answer;
+        try{
+          answer = await callClaude(contentBlocks, maxTokens, system);
+        }catch(fallbackErr){
+          // The LOCAL failure is the diagnostic that matters, and it was lost
+          // exactly here: recordAiCall ran only after callClaude RESOLVED, so a
+          // fallback that THREW discarded it. NO_API_KEY throws immediately, so
+          // a user signed in to Gordon whose local call failed ended up with a
+          // log containing only `no_api_key` -- no record of what Gordon did,
+          // and a message pointing at the wrong subsystem entirely.
+          recordAiCall(localFail);
+          // Rule 13: never put a working provider's name next to the word that
+          // describes the failure -- and never name only the SECOND thing that
+          // went wrong. "NO_API_KEY" alone hides the failure that started it.
+          if(fallbackErr && fallbackErr.message === 'NO_API_KEY'){
+            throw new Error(explainError(localFail.errorType, 'local', localFail.detail)
+              + '\n\nAnthropic could not stand in either — no API key is saved.');
+          }
+          throw fallbackErr;
+        }
+        // Unchanged from v9.67 and load-bearing: the fellBackTo entry and the
+        // toast are emitted only once there IS an outcome to report.
         recordAiCall(Object.assign({}, localFail, { fellBackTo:'anthropic' }));
         toast(needAuth ? 'Read by Anthropic — sign in (Settings) to use Gordon'
                        : rateLimited ? 'Read by Anthropic — Gordon is busy (rate limited); try again shortly'
@@ -5399,7 +5420,23 @@ function withTransition(fn){
   const reduce = typeof window !== 'undefined' && window.matchMedia
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if(typeof document !== 'undefined' && document.startViewTransition && !reduce){
-    try{ document.startViewTransition(fn); return; }catch(e){ /* fall through */ }
+    try{
+      const t = document.startViewTransition(fn);
+      // A ViewTransition's `ready` and `finished` are PROMISES, and a skipped
+      // or superseded transition REJECTS them. The try/catch around this call
+      // is synchronous and cannot catch a promise, so those rejections escaped
+      // to window.onunhandledrejection and were filed as "App: Background task
+      // did not finish" with the detail "Transition was aborted because of
+      // invalid state" -- a false app fault, observed in a live v9.78 report.
+      //
+      // The DOM update itself still ran, so there is nothing to recover here,
+      // only something to stop misreporting. NOT PROVEN, and deliberately not
+      // guessed at: WHY the transition aborted. That needs a reproduction, and
+      // this change neither fixes it nor claims to.
+      if(t && t.finished && t.finished.catch) t.finished.catch(() => {});
+      if(t && t.ready && t.ready.catch) t.ready.catch(() => {});
+      return;
+    }catch(e){ /* fall through */ }
   }
   fn();
 }
@@ -10723,7 +10760,16 @@ async function runRecipeScan(list, mode){
   }catch(err){
     recipeBatch = null;
     logProblem('Scanning', err.message, scanContext || null);
-    alert('Scan failed: '+err.message);
+    // handleLinkCapture already translates this one; the scan path never got
+    // the same treatment and showed the literal string "Scan failed: NO_API_KEY".
+    // Which sentence is right depends on which provider was being asked.
+    if(err.message === 'NO_API_KEY'){
+      alert(aiProvider() === 'local'
+        ? 'Could not read that.\n\nGordon did not answer, and there is no Anthropic API key saved to stand in. Sign in to Gordon, or add a key in Settings → Gordon and AI.'
+        : 'Add your Anthropic API key in Settings first.');
+    } else {
+      alert('Scan failed: ' + err.message);
+    }
     sub('recipeBox');
   }
 }

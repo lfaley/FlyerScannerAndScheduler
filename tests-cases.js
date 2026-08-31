@@ -84,6 +84,40 @@ test('healthy data loads with defaults merged in', () => {
   assert.deepStrictEqual(S.settings.alerts.deadline, [7, 1]);
 });
 
+test('an aborted view transition is not reported as an app fault (v9.81)', () => {
+  // Reported from the recipe-repo session with a live v9.78 error report:
+  // "App: Background task did not finish" / "Transition was aborted because of
+  // invalid state". startViewTransition returns promises that reject when a
+  // transition is skipped; the synchronous try/catch could never catch them, so
+  // they escaped to window.onunhandledrejection.
+  let readyHandled = false, finishedHandled = false, ran = false;
+  const spy = (mark) => ({ catch(){ mark(); return this; } });
+  const real = document.startViewTransition;
+  document.startViewTransition = (fn) => {
+    fn();
+    return { ready: spy(() => { readyHandled = true; }),
+             finished: spy(() => { finishedHandled = true; }) };
+  };
+  try{
+    withTransition(() => { ran = true; });
+  } finally {
+    document.startViewTransition = real;
+  }
+  assert.ok(ran, 'the DOM update did not run');
+  assert.ok(finishedHandled, 'nothing handles finished -- an abort still escapes');
+  assert.ok(readyHandled, 'nothing handles ready -- an abort still escapes');
+});
+
+test('withTransition still runs the update when there is no view transition (v9.81)', () => {
+  // The fallback path, so the fix above cannot have broken the ordinary case.
+  const real = document.startViewTransition;
+  delete document.startViewTransition;
+  let ran = false;
+  try{ withTransition(() => { ran = true; }); }
+  finally { if(real) document.startViewTransition = real; }
+  assert.ok(ran, 'the DOM update was skipped entirely');
+});
+
 test('adoptParsed guarantees every collection IS a collection (v9.80)', () => {
   // The F5 crash: Object.assign copies a null straight over blank()'s array,
   // load() accepted the file, and allPeople() then did null.filter(...) on

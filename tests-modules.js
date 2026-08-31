@@ -3944,6 +3944,36 @@ module.exports = async function runModuleTests(test){
       'is now dead and nothing else would have noticed. Found ' + sites.length);
   });
 
+  test('a local failure is recorded even when the fallback throws (v9.81)', () => {
+    // Reported from the recipe-repo session, confirmed in source: recordAiCall
+    // for the local failure sat AFTER `await callClaude(...)`, so a fallback
+    // that threw (NO_API_KEY throws immediately) discarded the one entry that
+    // said what Gordon actually did.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('async function callAI(')[1].split('\nfunction ')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/catch\(fallbackErr\)/.test(fn),
+      'the fallback call is not wrapped -- a throw still discards the local failure');
+    const inCatch = fn.split('catch(fallbackErr)')[1].split('recordAiCall(Object.assign')[0];
+    assert.ok(/recordAiCall\(localFail\)/.test(inCatch),
+      'the local failure is not recorded when the fallback throws');
+    // ...and the v9.67 property must survive: the fellBackTo entry and the
+    // toast still come AFTER there is an outcome.
+    assert.ok(fn.indexOf('await callClaude') < fn.indexOf("fellBackTo:'anthropic'"),
+      'the recovery is announced before it has happened again');
+    assert.ok(fn.indexOf("fellBackTo:'anthropic'") < fn.indexOf('toast(needAuth'),
+      'the toast moved ahead of the log entry');
+  });
+
+  test('an internal error code is never shown to the user on a scan (v9.81)', () => {
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('async function runRecipeScan(')[1].split('\nfunction ')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/NO_API_KEY/.test(fn), 'the scan path no longer translates NO_API_KEY');
+    assert.ok(/aiProvider\(\) === 'local'/.test(fn),
+      'the message does not depend on which provider was actually asked');
+  });
+
   test('every path from a saved file to S goes through adoptParsed (v9.80)', () => {
     // Three functions used to do this and disagreed. The guard is that none of
     // them rebuilds S by hand again.
