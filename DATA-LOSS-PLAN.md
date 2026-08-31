@@ -170,15 +170,15 @@ Existing soft-deleted rows have no `deletedAt` and there is no way to recover wh
 
 **`KEEP_SOFT_DELETED_DAYS` changes from 90 to 30.** §1.4: Drive, Photos, Notes and Dropbox all use 30 for consumers, and Google charges trash against the quota and says so. At a 5 MiB ceiling with four copies of state, 90 has no precedent behind it and a real cost.
 
-**Separately, prune never touches a row deleted within the last 24 hours**, whatever the window says:
+**The 24-hour floor was dropped in implementation, because it is dead logic.** I recommended it, and I was wrong. The condition would have been `deletedAt < deletedCutoff && deletedAt < freshCutoff` — but with a 30-day window, anything older than the cutoff is *necessarily* older than 24 hours, so the second clause can never decide anything. It is a guard that cannot fail, which this project has a rule about.
+
+D9 is still fixed, and by the window itself: a row deleted seconds ago has `deletedAt = now`, which is not older than 30 days, so `manualPrune` cannot touch it while its undo toast is live. The floor was solving a problem that only existed while six collections had *no* window at all.
 
 ```js
-const freshCutoff = daysAgoISO(1);
-const oldDeleted = row => row.deleted && row.deletedAt
-                       && row.deletedAt < deletedCutoff && row.deletedAt < freshCutoff;
+const oldDeleted = row => !!row && row.deleted && !!row.deletedAt && row.deletedAt < deletedCutoff;
 ```
 
-This is the fix for D9 (`manualPrune` invalidating a live undo toast), and it removes the race outright rather than warning about it — NN/g: *"no action with consequences to users should be taken without informing them."* A warning tells you about a problem; this removes it. Two lines, no UI.
+**A row with no `deletedAt` is KEPT.** Unknown is never a licence to destroy.
 
 ### The Recently Deleted screen
 
@@ -290,8 +290,9 @@ Three functions currently turn parsed JSON into `S`, and they disagree:
 | 1 | `adoptParsed` extracted, `load()` uses it, tests prove identical behaviour | **v9.78** ✅ **DONE** | low |
 | 2 | D2 (save failure) + persist-granted field | **v9.79** ✅ **DONE** | low; no stored-shape change |
 | 3 | F5 (import/restore through `adoptParsed`) | **v9.80** ✅ **DONE** | medium; touches the restore path |
-| 4a | D1 storage half: `deletedAt` at all eight sites, `SCHEMA_VERSION` 10, 30-day window, 24-hour floor, `oldDeleted` used | v9.81 | **highest — changes the stored shape.** Alone, so if anything is wrong there is exactly one suspect |
-| 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | v9.82 | medium; new screen, no stored-shape change |
+| — | The recipe-repo session's note: view-transition rejections, the lost local failure, the raw error code on a scan | **v9.81** ✅ **DONE** | low |
+| 4a | D1 storage half: `deletedAt` paired at twelve sites, `SCHEMA_VERSION` 10, 30-day window, `oldDeleted` finally used | **v9.82** ✅ **DONE** | **highest — changes the stored shape** |
+| 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | v9.83 | medium; new screen, no stored-shape change |
 
 **Correction to revision 1:** phase 1 was written as "no version bump — refactor only". That is wrong. `deploy.ps1` step 2 stops any push where `index.html` changed without `APP_VERSION` moving, and then stops again if `APP_VERSION` moved without `sw.js` `CACHE` moving (`deploy.ps1`, Step 2). A refactor that touches `index.html` is still a release. Phase 1 shipped as v9.78.
 
@@ -312,6 +313,18 @@ D1 last is deliberate. It is the only one that migrates data, and CLAUDE.md is r
 - Logan verifies on the installed PWA before each is called done: delete something and confirm it is still gone-but-recoverable; import a good backup; import a deliberately broken one.
 
 ---
+
+## 6a. What phase 4a actually cost, and what it taught
+
+Three things worth recording, because two of them were my errors.
+
+1. **The change is PAIRED, not additive.** The plan said "add `deletedAt` at eight delete sites." There are also **four restore sites** that set `deleted = false` — `softDelete`'s undo, the note-group undo, `delKid`'s undo, and `removeFromClash`'s hand-rolled `before` snapshot. A row carrying `deletedAt` while `deleted` is false is a lie waiting for the next reader. So: `markDeleted` / `unmarkDeleted`, used at all twelve, with a guard asserting exactly one direct assignment of each exists in the whole file.
+
+2. **`unmarkDeleted` DELETES the key rather than nulling it.** An existing test, `'undo restores a deleted list exactly'`, compares the row byte for byte — and it is right to. Nulling made it fail; deleting made it pass **unchanged**, which means that guard kept guarding through the change instead of being rewritten to accommodate it. Always prefer the design that leaves an existing guard intact.
+
+3. **A bug I introduced and the tests caught on the first run.** The `from < 10` block iterated `(s[coll] || []).forEach(...)`, but `adoptParsed` coerces junk collections *after* `migrate`, so a save carrying `notes: 'not an array'` reached it as a string and threw. The v9.80 test caught it immediately. Fixed with `Array.isArray` — the same defence migrate's own `from < 8` block already had, which I should have copied rather than re-derived.
+
+Two existing test fixtures were updated (`'old soft-deleted rows are actually removed'`, `'pruning drops deleted notes and counts them'`): both constructed tombstones by hand with no `deletedAt`, because until v9.82 the field did not exist. Intent preserved, fixtures brought to the new shape, and the reason written into each.
 
 ## 7. Decisions — settled 31 Aug 2026
 

@@ -3944,6 +3944,40 @@ module.exports = async function runModuleTests(test){
       'is now dead and nothing else would have noticed. Found ' + sites.length);
   });
 
+  test('a soft delete happens in exactly one place (v9.82)', () => {
+    // `deleted` and `deletedAt` are a pair; a site that sets one without the
+    // other writes a row that lies about itself. Eight sites used to assign
+    // `deleted = true` by hand and four assigned `deleted = false`.
+    const src = fs.readFileSync('index.html', 'utf8')
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const sets = (src.match(/\.deleted\s*=\s*true/g) || []).length;
+    const clears = (src.match(/\.deleted\s*=\s*false/g) || []).length;
+    assert.strictEqual(sets, 1, 'a soft delete bypasses markDeleted in ' + (sets - 1) + ' place(s)');
+    assert.strictEqual(clears, 1, 'a restore bypasses unmarkDeleted in ' + (clears - 1) + ' place(s)');
+    const mk = src.split('function markDeleted(row){')[1].split('\n}')[0];
+    assert.ok(/row\.deleted = true/.test(mk) && /row\.deletedAt = new Date/.test(mk),
+      'markDeleted no longer sets both halves');
+    const um = src.split('function unmarkDeleted(row){')[1].split('\n}')[0];
+    assert.ok(/row\.deleted = false/.test(um) && /delete row\.deletedAt/.test(um),
+      'unmarkDeleted no longer clears both halves');
+  });
+
+  test('prune ages a tombstone by deletedAt, never by the row own date (v9.82)', () => {
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('function pruneData(){')[1].split('\n}')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/const oldDeleted = row =>[\s\S]{0,160}row\.deletedAt < deletedCutoff/.test(fn),
+      'the tombstone rule no longer reads deletedAt');
+    assert.ok(/row\.deletedAt/.test(fn) && !/e\.deleted && \(e\.date/.test(fn),
+      'events are aged on their own date again');
+    // And the rule is USED by every collection, not defined and ignored.
+    ['S.events','S.listItems','S.notes','S.lists','S.chores','S.rewards','S.kids']
+      .forEach(c => assert.ok(fn.includes(c + ' = ' + c + '.filter(') || fn.includes(c + ' = (' + c + ' || []).filter('),
+        c + ' is not filtered'));
+    const uses = (fn.match(/oldDeleted\(/g) || []).length;
+    assert.ok(uses >= 7, 'oldDeleted is used ' + uses + ' times; expected one per collection');
+  });
+
   test('a local failure is recorded even when the fallback throws (v9.81)', () => {
     // Reported from the recipe-repo session, confirmed in source: recordAiCall
     // for the local failure sat AFTER `await callClaude(...)`, so a fallback

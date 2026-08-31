@@ -18,7 +18,7 @@
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -136,6 +136,28 @@ export function migrate(s, fromVersion){
       if(typeof n.color !== 'string') n.color = '';
       if(typeof n.archived !== 'boolean') n.archived = false;
     });
+  }
+
+  if(from < 10){
+    // Soft deletes gained a timestamp (v9.82). An existing tombstone cannot say
+    // when it was deleted -- that was never recorded -- so it is stamped NOW.
+    //
+    // That is a CHOSEN value, not a recovered one, and it is chosen to be
+    // generous: every existing tombstone gets a full retention window from the
+    // day of the upgrade rather than being destroyed by the next prune. The
+    // alternative, leaving them unstamped, keeps them for ever, which at a
+    // 5 MiB ceiling is a leak with no bound.
+    const stamp = new Date().toISOString();
+    // Array.isArray, not `|| []`: adoptParsed coerces a junk collection AFTER
+    // migrate runs, so a save carrying notes:'not an array' reaches this block
+    // as a STRING and 'x'.forEach is not a function. Caught by the v9.80 test
+    // on the first run -- the same shape migrate's own from<8 block guards.
+    ['events','kids','chores','rewards','lists','listItems','notes','noteFolders','noteLabels']
+      .forEach(coll => {
+        const rows = s[coll];
+        if(!Array.isArray(rows)) return;
+        rows.forEach(row => { if(row && row.deleted && !row.deletedAt) row.deletedAt = stamp; });
+      });
   }
 
   s.schemaVersion = SCHEMA_VERSION;

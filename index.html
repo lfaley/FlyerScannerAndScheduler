@@ -749,7 +749,7 @@ If the same event appears in two places, produce ONE item, not two.`;
 // v1 = everything up to and including v2.1 (implicit; no version field was stored).
 // v2 = meal planner / recipe box retired; recipes+meals now live in the recipe app.
 // NOTE: declared before load() runs, since blank() reads it at startup.
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 function migrate(s, fromVersion){
   const from = Number(fromVersion) || 1;
@@ -867,6 +867,28 @@ function migrate(s, fromVersion){
       if(typeof n.color !== 'string') n.color = '';
       if(typeof n.archived !== 'boolean') n.archived = false;
     });
+  }
+
+  if(from < 10){
+    // Soft deletes gained a timestamp (v9.82). An existing tombstone cannot say
+    // when it was deleted -- that was never recorded -- so it is stamped NOW.
+    //
+    // That is a CHOSEN value, not a recovered one, and it is chosen to be
+    // generous: every existing tombstone gets a full retention window from the
+    // day of the upgrade rather than being destroyed by the next prune. The
+    // alternative, leaving them unstamped, keeps them for ever, which at a
+    // 5 MiB ceiling is a leak with no bound.
+    const stamp = new Date().toISOString();
+    // Array.isArray, not `|| []`: adoptParsed coerces a junk collection AFTER
+    // migrate runs, so a save carrying notes:'not an array' reaches this block
+    // as a STRING and 'x'.forEach is not a function. Caught by the v9.80 test
+    // on the first run -- the same shape migrate's own from<8 block guards.
+    ['events','kids','chores','rewards','lists','listItems','notes','noteFolders','noteLabels']
+      .forEach(coll => {
+        const rows = s[coll];
+        if(!Array.isArray(rows)) return;
+        rows.forEach(row => { if(row && row.deleted && !row.deletedAt) row.deletedAt = stamp; });
+      });
   }
 
   s.schemaVersion = SCHEMA_VERSION;
@@ -4012,7 +4034,11 @@ function saveFailedBanner(){
 // number (star balances) is rolled forward rather than dropped.
 
 const KEEP_COMPLETIONS_DAYS = 365;   // a year of chore history stays browsable
-const KEEP_SOFT_DELETED_DAYS = 90;   // tombstones for deleted rows
+// 30, not 90. Google Drive, Apple Photos, Apple Notes and Dropbox-for-consumers
+// all use 30 days, and Google is explicit that trashed items still consume the
+// quota -- which at a 5 MiB localStorage ceiling, stored four times over (the
+// live blob plus three snapshots), settles it. See DATA-LOSS-PLAN.md 1.4.
+const KEEP_SOFT_DELETED_DAYS = 30;   // tombstones for deleted rows
 const KEEP_PAST_EVENTS_DAYS = 730;   // two years of past events
 
 function daysAgoISO(n){
@@ -4025,7 +4051,9 @@ function pruneData(){
   if(S.__locked) return 0;
   let removed = 0;
   const completionCutoff = daysAgoISO(KEEP_COMPLETIONS_DAYS);
-  const deletedCutoff = daysAgoISO(KEEP_SOFT_DELETED_DAYS);
+  // A timestamp, not a date, because deletedAt is one. daysAgoISO stays for the
+  // rules that compare against an event's own DATE, which is date-only.
+  const deletedCutoff = new Date(Date.now() - KEEP_SOFT_DELETED_DAYS*24*3600*1000).toISOString();
   const eventCutoff = daysAgoISO(KEEP_PAST_EVENTS_DAYS);
 
   // Chore completions: roll old ones into a carried balance BEFORE dropping them,
@@ -4054,14 +4082,22 @@ function pruneData(){
   const before = S.events.length + S.listItems.length + S.lists.length +
                  (S.notes || []).length +
                  S.chores.length + S.rewards.length + S.kids.length;
-  const oldDeleted = row => row.deleted && (!row.date || row.date < deletedCutoff);
-  S.events = S.events.filter(e => !(e.deleted && (e.date || '') < deletedCutoff));
-  S.listItems = S.listItems.filter(i => !i.deleted);          // no date; drop on prune
-  S.notes = (S.notes || []).filter(n => !n.deleted);          // ditto
-  S.lists = S.lists.filter(l => !l.deleted);
-  S.chores = S.chores.filter(c => !c.deleted);
-  S.rewards = S.rewards.filter(r => !r.deleted);
-  S.kids = S.kids.filter(k => !k.deleted);
+  // ONE rule, used by every collection. This helper already existed and was
+  // never called: events were filtered on the event's own DATE, so an event
+  // dated last year was destroyed however recently it was deleted and a deleted
+  // FUTURE event was never reclaimed at all -- and the other six collections had
+  // no age test whatsoever, so a person deleted five minutes before a prune was
+  // simply gone.
+  //
+  // A row with no deletedAt is KEPT. Unknown is never a licence to destroy.
+  const oldDeleted = row => !!row && row.deleted && !!row.deletedAt && row.deletedAt < deletedCutoff;
+  S.events = S.events.filter(e => !oldDeleted(e));
+  S.listItems = S.listItems.filter(i => !oldDeleted(i));
+  S.notes = (S.notes || []).filter(n => !oldDeleted(n));
+  S.lists = S.lists.filter(l => !oldDeleted(l));
+  S.chores = S.chores.filter(c => !oldDeleted(c));
+  S.rewards = S.rewards.filter(r => !oldDeleted(r));
+  S.kids = S.kids.filter(k => !oldDeleted(k));
   removed += before - (S.events.length + S.listItems.length + S.lists.length +
                        (S.notes || []).length +
                        S.chores.length + S.rewards.length + S.kids.length);
@@ -4270,11 +4306,39 @@ function hideToast(){
 // Returns the undo function, so a caller can offer the same escape hatch
 // through another surface -- and so tests can exercise the real undo path
 // rather than a reimplementation of it.
+/**
+ * The two halves of a soft delete, and they are a PAIR on purpose: `deleted`
+ * says a row is gone, `deletedAt` says when. A row carrying one without the
+ * other is a lie sitting in the data waiting for the next reader to trust it --
+ * which is why the four undo paths call unmarkDeleted rather than assigning
+ * `deleted = false` by hand. v9.82.
+ *
+ * `deletedAt` is a full ISO timestamp rather than todayISO(). Date-only strings
+ * cannot express "in the last N hours", and a timestamp still compares
+ * correctly against a date-only cutoff because the date prefix dominates a
+ * lexicographic comparison.
+ */
+function markDeleted(row){
+  if(!row) return row;
+  row.deleted = true;
+  row.deletedAt = new Date().toISOString();
+  return row;
+}
+function unmarkDeleted(row){
+  if(!row) return row;
+  row.deleted = false;
+  // DELETED, not set to null. A row that never carried the key must come back
+  // without it, or an undo is not a restoration -- 'undo restores a deleted
+  // list exactly' compares the row byte for byte and is right to.
+  delete row.deletedAt;
+  return row;
+}
+
 function softDelete(coll, id, label){
   const row = (S[coll]||[]).find(x => x.id === id);
   if(!row) return null;
-  row.deleted = true; save(); render();
-  const undo = () => { row.deleted = false; save(); render(); toast('Restored ' + label); };
+  markDeleted(row); save(); render();
+  const undo = () => { unmarkDeleted(row); save(); render(); toast('Restored ' + label); };
   toast('Deleted ' + label, { label:'Undo', fn:undo });
   return undo;
 }
@@ -4572,8 +4636,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.81';
-const APP_TAGLINE = 'failures name the right culprit';
+const APP_VERSION = 'v9.82';
+const APP_TAGLINE = 'a delete remembers when';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never
@@ -6124,14 +6188,14 @@ function removeFromClash(ids, key, opts){
     + '\n\n' + (losers.length === 1 ? 'It is' : 'They are')
     + ' removed from your list. Anything already added to your calendar stays there — delete those in the Calendar app.')) return;
 
-  const before = losers.map(e => ({ e, deleted: e.deleted, dirty: e.dirty }));
-  losers.forEach(e => { e.deleted = true; e.dirty = 1; });
+  const before = losers.map(e => ({ e, deleted: e.deleted, deletedAt: e.deletedAt, dirty: e.dirty }));
+  losers.forEach(e => { markDeleted(e); e.dirty = 1; });
   clearClashSel();
   save();
   render();
   toast((opts && opts.toast) || ('Removed ' + losers.length + ' event' + (losers.length === 1 ? '' : 's')),
     { label:'Undo', fn:() => {
-      before.forEach(b => { b.e.deleted = b.deleted; b.e.dirty = b.dirty; });
+      before.forEach(b => { b.e.deleted = b.deleted; b.e.deletedAt = b.deletedAt; b.e.dirty = b.dirty; });
       save(); render(); toast('Put back');
     }});
 }
@@ -8397,7 +8461,7 @@ function applyDedupe(){
       return;
     }
     g.forEach(e => {
-      if(e.id !== keep){ e.deleted = true; e.dirty = 1; removed++; }
+      if(e.id !== keep){ markDeleted(e); e.dirty = 1; removed++; }
     });
   });
   save();
@@ -8474,7 +8538,7 @@ function bulkDelete(){
   if(!confirm('Delete ' + n + ' event' + (n===1?'':'s') + '?\n\nThey are removed from your list. Anything already added to your calendar stays there -- delete those in the Calendar app.')) return;
   let removed = 0;
   S.events.forEach(e => {
-    if(selectedEvents.has(e.id) && !e.deleted){ e.deleted = true; e.dirty = 1; removed++; }
+    if(selectedEvents.has(e.id) && !e.deleted){ markDeleted(e); e.dirty = 1; removed++; }
   });
   save();
   toast('Deleted ' + removed + ' event' + (removed===1?'':'s'));
@@ -8506,7 +8570,7 @@ function eventActions(id){
     {label: e.exported ? '📆 Calendar file again' : '📆 Add to calendar (with alerts)', fn:()=>downloadICS(e)},
     {label:'Edit event', icon:'edit', fn:()=>openEventEdit(e.id)},
     {label:'Remove event', icon:'trash', style:'danger', fn:()=>{
-      if(confirm(`Remove "${e.title}"?`)){ e.deleted=true; save(); render(); }
+      if(confirm(`Remove "${e.title}"?`)){ markDeleted(e); save(); render(); }
     }},
   ]);
 }
@@ -9566,7 +9630,7 @@ function toggleItem(id){
   i.checked = !i.checked; save(); render();
 }
 function clearChecked(listId){
-  S.listItems.forEach(i=>{ if(i.listId===listId && i.checked) i.deleted=true; });
+  S.listItems.forEach(i=>{ if(i.listId===listId && i.checked) markDeleted(i); });
   save(); render();
 }
 
@@ -9743,7 +9807,7 @@ function addNoteGroup(coll, name){
   const key = clean.toLowerCase();
   const dup = S[coll].find(x => String(x.name || '').trim().toLowerCase() === key);
   if(dup){
-    if(dup.deleted){ dup.deleted = false; save(); }   // a re-add un-deletes
+    if(dup.deleted){ unmarkDeleted(dup); save(); }   // a re-add un-deletes
     return dup;
   }
   const row = { id:uid(), name:clean, deleted:false };
@@ -9776,7 +9840,7 @@ function delNoteGroup(coll, id){
     ? n.folderId === id
     : Array.isArray(n.labelIds) && n.labelIds.includes(id));
 
-  row.deleted = true;
+  markDeleted(row);
   touched.forEach(n => {
     if(isFolder) n.folderId = null;
     else n.labelIds = n.labelIds.filter(x => x !== id);
@@ -9788,7 +9852,7 @@ function delNoteGroup(coll, id){
   toast(what + ' “' + row.name + '” removed'
         + (touched.length ? ' — ' + touched.length + ' note' + (touched.length === 1 ? '' : 's') + ' kept' : ''),
     { label:'Undo', fn:() => {
-      row.deleted = false;
+      unmarkDeleted(row);
       touched.forEach(n => {
         if(isFolder) n.folderId = id;
         else if(!n.labelIds.includes(id)) n.labelIds.push(id);
@@ -11777,7 +11841,7 @@ function delKid(id){
     .filter(e => (Array.isArray(e.personIds) && e.personIds.includes(id)) || e.kidId === id)
     .map(e => ({ e, personIds: Array.isArray(e.personIds) ? e.personIds.slice() : undefined, kidId: e.kidId }));
   const chBefore = S.chores.filter(c => c.kidId === id).map(c => ({ c, kidId: c.kidId }));
-  k.deleted = true;
+  markDeleted(k);
   S.events.forEach(e=>{
     if(Array.isArray(e.personIds)){ e.personIds = e.personIds.filter(pid => pid !== id); }
     if(e.kidId===id) e.kidId = (e.personIds && e.personIds[0]) || null;
@@ -11787,7 +11851,7 @@ function delKid(id){
   toast(`Removed ${k.name} — their tags were cleared`, {
     label: 'Undo',
     fn: () => {
-      k.deleted = false;
+      unmarkDeleted(k);
       evBefore.forEach(s => { if(s.personIds !== undefined) s.e.personIds = s.personIds; s.e.kidId = s.kidId; });
       chBefore.forEach(s => { s.c.kidId = s.kidId; });
       save(); render();

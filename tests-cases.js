@@ -491,13 +491,103 @@ test('recent history is never pruned', () => {
   assert.ok(S.events.some(e => e.id === 'e9'), 'recent past event kept');
 });
 
+test('markDeleted and unmarkDeleted are a pair (v9.82)', () => {
+  const row = { id:'x', name:'thing', deleted:false };
+  markDeleted(row);
+  assert.strictEqual(row.deleted, true);
+  assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(row.deletedAt || ''), 'no timestamp: ' + row.deletedAt);
+  unmarkDeleted(row);
+  assert.strictEqual(row.deleted, false);
+  assert.ok(!('deletedAt' in row), 'a restored row still carries a deletedAt');
+});
+
+test('softDelete stamps, and its undo unstamps (v9.82)', () => {
+  boot(null);
+  S.lists.push({ id:'l9', name:'Costco', deleted:false });
+  const undo = softDelete('lists', 'l9', 'the list');
+  assert.ok(S.lists[0].deletedAt, 'softDelete did not stamp');
+  undo();
+  assert.ok(!('deletedAt' in S.lists[0]), 'the undo left a stale deletedAt behind');
+});
+
+test('the from<10 migration stamps existing tombstones without destroying them (v9.82)', () => {
+  const s = migrate({ events:[{ id:'e1', title:'X', date:'2026-01-01', deleted:true }],
+                      kids:[{ id:'k1', name:'A', deleted:true }] }, 9);
+  assert.strictEqual(s.events.length, 1, 'the migration destroyed a row');
+  assert.ok(s.events[0].deletedAt, 'an existing tombstone was left undatable');
+  assert.ok(s.kids[0].deletedAt);
+  assert.strictEqual(s.schemaVersion, SCHEMA_VERSION);
+});
+
+test('the from<10 migration survives a collection that is not an array (v9.82)', () => {
+  // Shipped broken for exactly one test run: `(s[coll] || []).forEach` on a
+  // string. adoptParsed coerces junk collections AFTER migrate, so migrate has
+  // to defend itself -- the same lesson as its own from<8 block.
+  assert.doesNotThrow(() => migrate({ events: [], notes: 'not an array', chores: 42 }, 9));
+});
+
+test('the retention window is 30 days, matching every comparable product (v9.82)', () => {
+  assert.strictEqual(KEEP_SOFT_DELETED_DAYS, 30);
+});
+
 test('old soft-deleted rows are actually removed', () => {
   boot(GOOD);
-  S.events.push({ id:'d1', title:'Deleted long ago', date: dayAhead(-200), kind:'event', deleted:true });
-  S.chores.push({ id:'ch1', title:'Gone', deleted:true });
+  // v9.82: a tombstone is aged by WHEN IT WAS DELETED. These fixtures carried
+  // no deletedAt, because until v9.82 the field did not exist -- events were
+  // aged on the event's own date, which is why an event dated last year was
+  // destroyed however recently it had been deleted.
+  const old = new Date(Date.now() - 60*24*3600*1000).toISOString();
+  S.events.push({ id:'d1', title:'Deleted long ago', date: dayAhead(-200), kind:'event', deleted:true, deletedAt: old });
+  S.chores.push({ id:'ch1', title:'Gone', deleted:true, deletedAt: old });
   pruneData();
   assert.ok(!S.events.some(e => e.id === 'd1'), 'stale tombstone cleared');
   assert.ok(!S.chores.some(c => c.id === 'ch1'));
+});
+
+test('a tombstone with no deletedAt is KEPT (v9.82)', () => {
+  // Unknown is never a licence to destroy. Real installs get a stamp from the
+  // from<10 migration; a hand-edited file might not.
+  boot(GOOD);
+  S.events.push({ id:'d2', title:'No stamp', date: dayAhead(-200), kind:'event', deleted:true });
+  pruneData();
+  assert.ok(S.events.some(e => e.id === 'd2'), 'a row we cannot date was destroyed anyway');
+});
+
+test('deleting an old event does not make it disappear on the next prune (v9.82)', () => {
+  // THE BUG, stated as a test. The tombstone rule used to read the EVENT's
+  // date, so deleting a year-old event meant losing the undo at the next prune.
+  boot(GOOD);
+  S.events.push({ id:'d3', title:'Old date, deleted today', date: dayAhead(-400), kind:'event' });
+  markDeleted(S.events[S.events.length - 1]);
+  pruneData();
+  assert.ok(S.events.some(e => e.id === 'd3'),
+    'an event dated long ago was destroyed the moment it was deleted');
+});
+
+test('every collection gets the same 30-day window (v9.82)', () => {
+  // No sampling one collection and assuming the other six -- six of them had
+  // no age test at all before this.
+  boot(GOOD);
+  const old = new Date(Date.now() - 60*24*3600*1000).toISOString();
+  const fresh = new Date().toISOString();
+  S.lists.push({ id:'L1', name:'old', deleted:true, deletedAt: old },
+                { id:'L2', name:'new', deleted:true, deletedAt: fresh });
+  S.listItems.push({ id:'I1', listId:'L1', text:'old', deleted:true, deletedAt: old },
+                   { id:'I2', listId:'L1', text:'new', deleted:true, deletedAt: fresh });
+  S.chores.push({ id:'C1', title:'old', deleted:true, deletedAt: old },
+                { id:'C2', title:'new', deleted:true, deletedAt: fresh });
+  S.rewards.push({ id:'R1', title:'old', cost:1, deleted:true, deletedAt: old },
+                 { id:'R2', title:'new', cost:1, deleted:true, deletedAt: fresh });
+  S.kids.push({ id:'K1', name:'old', deleted:true, deletedAt: old },
+              { id:'K2', name:'new', deleted:true, deletedAt: fresh });
+  S.notes.push({ id:'N1', body:'old', deleted:true, deletedAt: old },
+               { id:'N2', body:'new', deleted:true, deletedAt: fresh });
+  pruneData();
+  [['lists','L'],['listItems','I'],['chores','C'],['rewards','R'],['kids','K'],['notes','N']]
+    .forEach(([coll, p]) => {
+      assert.ok(!S[coll].some(r => r.id === p + '1'), coll + ': the old tombstone survived');
+      assert.ok(S[coll].some(r => r.id === p + '2'), coll + ': a fresh delete was destroyed');
+    });
 });
 
 test('live rows are never touched by pruning', () => {
@@ -3333,7 +3423,9 @@ test('a save whose notes key is junk is coerced, not trusted', () => {
 
 test('pruning drops deleted notes and counts them', () => {
   someNotes();
+  // v9.82: prune ages a tombstone by deletedAt, so the fixture needs one.
   S.notes[0].deleted = true;
+  S.notes[0].deletedAt = new Date(Date.now() - 60*24*3600*1000).toISOString();
   const before = S.notes.length;
   manualPrune();
   assert.strictEqual(S.notes.length, before - 1, 'a deleted note survived the prune');
