@@ -84,6 +84,67 @@ test('healthy data loads with defaults merged in', () => {
   assert.deepStrictEqual(S.settings.alerts.deadline, [7, 1]);
 });
 
+test('adoptParsed guarantees every collection IS a collection (v9.80)', () => {
+  // The F5 crash: Object.assign copies a null straight over blank()'s array,
+  // load() accepted the file, and allPeople() then did null.filter(...) on
+  // every launch with the recovery screen unreachable.
+  const s = adoptParsed({ events: [], kids: null, notes: 'not an array',
+                          lists: undefined, chores: 42 });
+  ['events','kids','chores','completions','rewards','problems','redemptions',
+   'lists','listItems','notes','noteFolders','noteLabels','aiLog'].forEach(k =>
+    assert.ok(Array.isArray(s[k]), k + ' reached the app as ' + JSON.stringify(s[k])));
+});
+
+test('a backup with a null collection imports instead of blank-screening (v9.80)', () => {
+  boot(GOOD);
+  globalThis.lastAlert = null;
+  importBackup({ __text: '{"events":[],"kids":null}' });
+  assert.ok(Array.isArray(S.kids), 'kids came through as ' + JSON.stringify(S.kids));
+  // ...and the app can actually render afterwards, which is the real assertion.
+  assert.doesNotThrow(() => allPeople(), 'the events screen would still crash');
+});
+
+test('a file that is not a backup is refused BEFORE anything is destroyed (v9.80)', () => {
+  boot(GOOD);
+  const before = localStorage.getItem('flyersnap');
+  globalThis.lastAlert = null;
+  importBackup({ __text: '{"hello":"world"}' });
+  assert.ok(/not a FlyerSnap backup/.test(globalThis.lastAlert || ''), 'no refusal shown');
+  assert.strictEqual(localStorage.getItem('flyersnap'), before, 'storage was written anyway');
+  assert.strictEqual(S.events.length, 1, 'the live state was replaced by a bad file');
+});
+
+test('an import snapshots what it replaces, even on a day already snapshotted (v9.80)', () => {
+  boot(GOOD);
+  // Pretend today's snapshot has already been taken -- the case where the
+  // state being overwritten would otherwise exist nowhere.
+  localStorage.setItem('flyersnap-lastsnapshot', String(Date.now()));
+  const doomed = localStorage.getItem('flyersnap');
+  importBackup({ __text: '{"events":[],"kids":[]}' });
+  const snaps = snapshotKeys().map(k => localStorage.getItem(k));
+  assert.ok(snaps.includes(doomed),
+    'the replaced state was not kept: ' + JSON.stringify(snapshotKeys()));
+});
+
+test('an imported backup is MIGRATED, not adopted as-is (v9.80)', () => {
+  boot(GOOD);
+  importBackup({ __text: JSON.stringify({
+    events: [{ id:'e1', title:'X', date:'2026-12-01', kidId:'k1' }],
+    kids: [{ id:'k1', name:'Olivia' }], schemaVersion: 1 }) });
+  assert.deepStrictEqual(S.events[0].personIds, ['k1'], 'migrate() never ran on the import');
+  assert.strictEqual(S.schemaVersion, SCHEMA_VERSION);
+});
+
+test('a restored snapshot is migrated too (v9.80)', () => {
+  boot(GOOD);
+  localStorage.setItem('flyersnap-snap-2026-07-07', JSON.stringify({
+    events: [{ id:'e9', title:'Old', date:'2026-12-02', kidId:'k1' }],
+    kids: [{ id:'k1', name:'Olivia' }], schemaVersion: 1 }));
+  restoreSnapshot('flyersnap-snap-2026-07-07');
+  assert.deepStrictEqual(S.events[0].personIds, ['k1'], 'restoreSnapshot skipped migrate()');
+  assert.strictEqual(S.schemaVersion, SCHEMA_VERSION);
+});
+
 test('adoptParsed fills in a default added since the file was written (v9.78)', () => {
   // The whole reason load() merged nested settings and the other two paths did
   // not. A save written before `alerts.event` existed must still come back with

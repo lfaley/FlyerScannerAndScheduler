@@ -37,13 +37,23 @@ const el = () => ({ innerHTML:'', className:'', value:'', textContent:'',
 
 const box = {
   console, assert, localStorage: store,
+  // documentElement and querySelector added v9.80: applyTheme() touches both,
+  // so before this it could not be called from a test at all.
   document: { getElementById: el, createElement: el, body:{ appendChild(){}, append(){} },
+    documentElement: { setAttribute(){}, removeAttribute(){} },
+    querySelector: () => null,
     addEventListener(){}, hidden:false },
   navigator: { share: () => Promise.resolve(), canShare: () => true },
   window: { scrollTo(){}, scrollY:0, open: () => ({}) },
   URL: { createObjectURL: () => 'blob:x', revokeObjectURL(){} },
   fetch: () => Promise.resolve({ ok:true, json: () => Promise.resolve({ items:[] }) }),
   setTimeout, clearTimeout,
+  // Added v9.80. importBackup -- the single most destructive function in the
+  // app -- had NO tests, because the harness had no FileReader. A file here is
+  // any object carrying __text.
+  FileReader: class {
+    readAsText(file){ this.result = (file && file.__text) || ''; if(this.onload) this.onload(); }
+  },
   Blob: class { constructor(parts){ box.lastBlob = parts[0]; } },
   File: class { constructor(parts, name){ this.name = name; } },
   alert: (m) => { box.lastAlert = m; },

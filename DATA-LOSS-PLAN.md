@@ -266,7 +266,8 @@ Three functions currently turn parsed JSON into `S`, and they disagree:
 
 **Phase 3:** the import-specific safety:
 
-1. **Validate every collection `blank()` declares as an array** — not just `events`. A wrong type is a refusal, not a coercion.
+1. ~~**Validate every collection `blank()` declares as an array** — not just `events`. A wrong type is a refusal, not a coercion.~~
+   **CHANGED IN IMPLEMENTATION (v9.80): coerced, not refused.** The plan was wrong and the code told me so. `migrate`'s `from < 8` block already coerces a junk `notes` on purpose — *"coercing here is cheaper than making every reader defensive, and it destroys nothing that was ever usable"* — and an existing test, `'a save whose notes key is junk is coerced, not trusted'`, pins that behaviour with `notes = 'not an array'`. Refusing would have broken it, and would lock a user out of the entire app over a field that held nothing. The coercion runs **after** `migrate` so migrate's own repairs are not undone. The residual risk — a collection arriving as some other *shape* is discarded rather than quarantined — is accepted and written into the code comment; this app has never written one.
 2. **Force a snapshot before the overwrite**, bypassing the daily throttle (`snapshot({ force:true })`). Today, if a snapshot was already taken in the last 24h, the pre-import state exists nowhere.
 3. **Move `save(); render();` out of the `try`**, with their own catch that says what actually happened and offers Settings → Backup → Restore.
 4. **Call `applyTheme()`** after adopting, so a light-theme backup does not leave the wrong palette until relaunch.
@@ -288,7 +289,7 @@ Three functions currently turn parsed JSON into `S`, and they disagree:
 |---|---|---|---|
 | 1 | `adoptParsed` extracted, `load()` uses it, tests prove identical behaviour | **v9.78** ✅ **DONE** | low |
 | 2 | D2 (save failure) + persist-granted field | **v9.79** ✅ **DONE** | low; no stored-shape change |
-| 3 | F5 (import/restore through `adoptParsed`) | v9.80 | medium; touches the restore path |
+| 3 | F5 (import/restore through `adoptParsed`) | **v9.80** ✅ **DONE** | medium; touches the restore path |
 | 4a | D1 storage half: `deletedAt` at all eight sites, `SCHEMA_VERSION` 10, 30-day window, 24-hour floor, `oldDeleted` used | v9.81 | **highest — changes the stored shape.** Alone, so if anything is wrong there is exactly one suspect |
 | 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | v9.82 | medium; new screen, no stored-shape change |
 

@@ -3944,6 +3944,29 @@ module.exports = async function runModuleTests(test){
       'is now dead and nothing else would have noticed. Found ' + sites.length);
   });
 
+  test('every path from a saved file to S goes through adoptParsed (v9.80)', () => {
+    // Three functions used to do this and disagreed. The guard is that none of
+    // them rebuilds S by hand again.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const strip = t => t.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const imp = strip(src.split('function importBackup(file){')[1].split('\n}')[0]);
+    const res = strip(src.split('function restoreSnapshot(key){')[1].split('\n}')[0]);
+    [['importBackup', imp], ['restoreSnapshot', res]].forEach(([name, fn]) => {
+      assert.ok(/adoptParsed\(/.test(fn), name + ' no longer routes through adoptParsed');
+      assert.ok(!/Object\.assign\(blank\(\)/.test(fn), name + ' rebuilds S by hand again');
+      assert.ok(!/migrate\(/.test(fn), name + ' migrates on its own again');
+    });
+    // The order that IS the fix: refuse, confirm, snapshot, then adopt.
+    assert.ok(imp.indexOf('adoptParsed(') < imp.indexOf('confirm('),
+      'importBackup asks before it has even read the file');
+    assert.ok(imp.indexOf('snapshot({ force:true })') < imp.indexOf('S = next'),
+      'importBackup replaces the state before keeping a copy of it');
+    // And the catch that used to lie about what happened.
+    const after = imp.split('S = next')[1];
+    assert.ok(!/not a FlyerSnap backup/.test(after),
+      'a failure AFTER the overwrite still claims the file was not a backup');
+  });
+
   test('render() puts the failed-save banner above every screen (v9.79)', () => {
     // The wiring half of the banner test. The behavioural half cannot reach
     // this, because the harness hands out a fresh element per getElementById.

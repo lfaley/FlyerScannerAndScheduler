@@ -3887,6 +3887,10 @@ function adoptParsed(parsed){
   // settings object. Reading it afterwards would merge the save against itself
   // and every default added since the file was written would be lost.
   const defaults = base.settings;
+  // Same reason: which keys are collections is read off blank() BEFORE the
+  // saved data overwrites them, so a collection added in a later version is
+  // covered here the day it is added, with no list to keep in step.
+  const arrayKeys = Object.keys(base).filter(k => Array.isArray(base[k]));
   const s = Object.assign(base, parsed);
   // settings is nested, so merge it rather than letting old saves drop new keys
   s.settings = Object.assign({}, defaults, parsed.settings||{});
@@ -3894,7 +3898,22 @@ function adoptParsed(parsed){
   s.settings.starCarry = Object.assign({}, (parsed.settings||{}).starCarry||{});
   // Version comes from the SAVED data -- blank() already stamped the current
   // one onto the merge target, so reading it from `s` would skip migration.
-  return migrate(s, parsed.schemaVersion);
+  const out = migrate(s, parsed.schemaVersion);
+  // Every collection blank() declares as an array must BE an array by the time
+  // a render path touches it. Object.assign copies a null STRAIGHT OVER the
+  // default, which is how a backup containing "kids":null blank-screened the
+  // app on every launch: allPeople() does S.kids.filter(...), load() accepted
+  // the file so __locked never fired, and the recovery screen was unreachable
+  // (DATA-LOSS-PLAN.md F5).
+  //
+  // Coerced, not refused -- a deliberate change from what the plan said. The
+  // house style is already coercion: migrate's from<8 block coerces a junk
+  // `notes` for exactly this reason ("cheaper than making every reader
+  // defensive"), and a test pins it. Refusing would lock a user out of the whole
+  // app over a field that held nothing. It runs AFTER migrate so migrate's own
+  // repairs happen first and are not undone here.
+  arrayKeys.forEach(k => { if(!Array.isArray(out[k])) out[k] = []; });
+  return out;
 }
 
 function load(){
@@ -4077,11 +4096,16 @@ function snapshotKeys(){
   }catch(e){ /* enumeration can throw where storage is partitioned. An empty list means "no snapshots found", which is the safe reading -- it can only cause the app to keep MORE than it needed */ }
   return out.sort();
 }
-function snapshot(){
+function snapshot(opts){
   try{
+    // `force` is for the one caller that is about to destroy the current state
+    // on purpose (importBackup). The daily throttle is right for save(), but it
+    // means the newest snapshot can already be today's -- and then the state an
+    // import replaces would exist nowhere at all.
+    const force = !!(opts && opts.force);
     const now = Date.now();
     const last = Number(localStorage.getItem('flyersnap-lastsnapshot') || 0);
-    if(now - last < 24*3600*1000) return;      // at most one a day
+    if(!force && now - last < 24*3600*1000) return;      // at most one a day
     const raw = localStorage.getItem('flyersnap');
     if(!raw) return;
     localStorage.setItem(SNAP_PREFIX + new Date().toISOString().slice(0,10), raw);
@@ -4093,18 +4117,22 @@ function snapshot(){
 function restoreSnapshot(key){
   const raw = localStorage.getItem(key);
   if(!raw){ alert('That snapshot is gone.'); return; }
-  let parsed;
-  try{
-    parsed = JSON.parse(raw);
-    if(!parsed || !Array.isArray(parsed.events)) throw new Error('bad shape');
-  }catch(e){ alert('That snapshot is unreadable too.'); return; }
+  // Same door as load() and importBackup as of v9.80. This path used to skip
+  // migration AND the nested settings merges, so a snapshot taken under an
+  // older schema was rendered and persisted un-upgraded for the whole session,
+  // and one taken before an alerts key existed came back missing it.
+  let next;
+  try{ next = adoptParsed(JSON.parse(raw)); }
+  catch(e){ alert('That snapshot is unreadable too.'); return; }
   if(!confirm('Restore the snapshot from ' + key.replace(SNAP_PREFIX,'') + '?\n\nAnything added since then will be replaced.')) return;
-  S = Object.assign(blank(), parsed);
-  const defaults = blank().settings;
-  S.settings = Object.assign({}, defaults, parsed.settings||{});
+  S = next;
   loadError = null;
+  // Written directly rather than through save(): save() would snapshot the
+  // state we are replacing, which on the recovery screen is the broken one,
+  // and evict a good snapshot to make room for it.
   localStorage.setItem('flyersnap', JSON.stringify(S));
   view = {tab:'events', sub:null, data:null};
+  applyTheme();
   render();
   toast('Snapshot restored');
 }
@@ -4544,8 +4572,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.79';
-const APP_TAGLINE = 'a failed save says so';
+const APP_VERSION = 'v9.80';
+const APP_TAGLINE = 'one door in, for every saved file';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never
@@ -11858,19 +11886,42 @@ function importBackup(file){
   if(!file) return;
   const r = new FileReader();
   r.onload = ()=>{
+    // THREE STEPS, IN THIS ORDER, AND THE ORDER IS THE FIX.
+    //
+    // The old version did all of it inside one try whose catch said "That file
+    // is not a FlyerSnap backup." -- so a throw AFTER the overwrite reported
+    // that nothing had happened at the exact moment everything had. It also
+    // validated `events` and nothing else, skipped migration, and skipped the
+    // nested settings merges that load() does.
+    let next;
+    // 1. Understand the file. adoptParsed reads no storage and writes none, so
+    //    a file we cannot use is refused with NOTHING destroyed.
     try{
-      const data = JSON.parse(r.result);
-      if(!data || !Array.isArray(data.events)) throw new Error('bad');
-      if(!confirm('Replace everything in the app with this backup?')) return;
-      const defaults = blank().settings;
-      S = Object.assign(blank(), data);
-      S.settings = Object.assign({}, defaults, data.settings||{});
-      delete S.__locked;               // a good file clears the lock
-      loadError = null;
-      view = {tab:'events', sub:null, data:null};
-      save(); render();
+      next = adoptParsed(JSON.parse(r.result));
+    }catch(e){
+      alert('That file is not a FlyerSnap backup.');
+      return;
+    }
+    if(!confirm('Replace everything in the app with this backup?')) return;
+    // 2. Keep what is about to be replaced. Forced past the daily throttle: if
+    //    today's snapshot was already taken, the state being overwritten would
+    //    otherwise exist nowhere.
+    snapshot({ force:true });
+    // 3. Adopt it. Past this line the old state is gone, so nothing here may be
+    //    reported as "that file is not a backup".
+    S = next;
+    delete S.__locked;               // a good file clears the lock
+    loadError = null;
+    view = {tab:'events', sub:null, data:null};
+    try{
+      save();
+      applyTheme();                  // a light-theme backup onto a dark phone
+      render();
       toast('Backup restored');
-    }catch(e){ alert('That file is not a FlyerSnap backup.'); }
+    }catch(e){
+      alert('The backup was restored, but the app could not finish opening it.\n\n'
+        + ((e && e.message) || '') + '\n\nClose FlyerSnap and open it again.');
+    }
   };
   r.readAsText(file);
 }
