@@ -2087,6 +2087,81 @@ test('two emails in one batch are both marked handled (v9.87)', () => {
     'an email whose only event was UNTICKED came back -- reviewing it and saying no is still a review');
 });
 
+// ---------------------------------------------------------------------------
+// D5 (v9.88): nothing starts a new review batch over the top of an open one.
+// ---------------------------------------------------------------------------
+test('a batch under review is never replaced without asking (v9.88)', () => {
+  boot(GOOD);
+  pendingSource = 'Email - Field Trip';
+  pendingEvents = [{ title:'Field trip', date:dayAhead(4), selected:true, personIds:[] }];
+  let asked = 0;
+  const real = confirm;
+  confirm = (m) => { asked++; return false; };
+  let allowed;
+  try { allowed = confirmReplacePending(); } finally { confirm = real; }
+  assert.strictEqual(asked, 1, 'a batch under review was about to be replaced in silence');
+  assert.strictEqual(allowed, false, 'declining did not stop the replacement');
+  assert.strictEqual(pendingEvents.length, 1, 'the batch was destroyed anyway');
+});
+
+test('with nothing under review it does not ask at all (v9.88)', () => {
+  // The common case by far. A dialog on every first scan would be its own defect.
+  boot(GOOD);
+  pendingEvents = [];
+  let asked = 0;
+  const real = confirm;
+  confirm = () => { asked++; return true; };
+  let allowed;
+  try { allowed = confirmReplacePending(); } finally { confirm = real; }
+  assert.strictEqual(asked, 0, 'it asked about replacing nothing');
+  assert.strictEqual(allowed, true, 'a first scan was blocked');
+});
+
+test('the question names how many items and where they came from (v9.88)', () => {
+  boot(GOOD);
+  pendingSource = 'Email - Field Trip';
+  pendingEvents = [
+    { title:'A', date:dayAhead(4), selected:true, personIds:[] },
+    { title:'B', date:dayAhead(4), selected:true, personIds:[] }
+  ];
+  let said = '';
+  const real = confirm;
+  confirm = (m) => { said = m; return true; };
+  try { confirmReplacePending(); } finally { confirm = real; }
+  assert.ok(/2 items/.test(said), 'the count is missing: ' + JSON.stringify(said));
+  assert.ok(/Email - Field Trip/.test(said), 'it does not say what is about to be lost: ' + JSON.stringify(said));
+});
+
+test('the assistant refuses to draft over a batch instead of destroying it (v9.88)', () => {
+  // The one replace path with no confirm: a modal out of a chat answer is its
+  // own surprise, and the assistant can say it in its own reply instead.
+  //
+  // NOT written as an `async` test, on purpose. This harness registers an async
+  // test's promise and settles it at the END (tests.js), so an async test runs
+  // CONCURRENTLY with every test declared after it -- and anything it asserts
+  // about shared module state (pendingEvents, S, ...) is racing them. The first
+  // draft of this test awaited performRoute and then read pendingEvents, and by
+  // then a later test had already emptied it: it failed while the code was
+  // correct. The DRAFT refusal returns without awaiting anything, so the state
+  // assertion is made synchronously, before any microtask can interleave, and
+  // only the answer -- a local -- is checked in the promise.
+  boot(GOOD);
+  pendingSource = 'Photo 2026-08-31';
+  pendingEvents = [{ title:'Bake sale', date:dayAhead(5), selected:true, personIds:[] }];
+  const p = performRoute({
+    consequence: CONSEQUENCE.DRAFT, intent:'add_event',
+    params: { title:'Dentist', date: dayAhead(9) }
+  });
+  assert.strictEqual(pendingEvents.length, 1, 'the assistant replaced the batch under review');
+  assert.strictEqual(pendingEvents[0].title, 'Bake sale', 'the wrong batch survived');
+  return p.then(res => {
+    assert.ok(/still waiting on the review screen/.test(res.answer),
+      'it did not say why it declined: ' + JSON.stringify(res.answer));
+    assert.ok(/Photo 2026-08-31/.test(res.answer),
+      'it did not say what is waiting: ' + JSON.stringify(res.answer));
+  });
+});
+
 console.log('\nEvent grouping and density');
 
 test('events fall into the right time buckets', () => {

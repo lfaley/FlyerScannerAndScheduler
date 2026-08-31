@@ -690,3 +690,72 @@ My lean is **C**, on the grounds that the thing being protected is a model call
 rather than data, and A and B both pull in a schema change to fix provenance for a
 case that is uncommon. But this is a taste call about your own app, not a
 correctness one, so it is yours.
+
+**Decision: C.** Built as v9.88 — see §15.
+
+
+---
+
+## 15. D5 as built (v9.88)
+
+One guard, `confirmReplacePending()`, declared beside the state it protects, and
+asked **before** the model call so declining costs nothing:
+
+```js
+function confirmReplacePending(){
+  const n = pendingEvents.length;
+  if(!n) return true;
+  return confirm('You still have ' + n + ' item' + (n === 1 ? '' : 's') +
+    ' under review from ' + (pendingSource || 'an earlier scan') + '.\n\n' +
+    'Starting a new one replaces ' + (n === 1 ? 'it' : 'them') + '. Continue?');
+}
+```
+
+Wired into three of the four replace paths: `handleCapture`, `handleLinkCapture`
+and `openEmailReview`. Declining sends the user back to the batch they kept
+(`sub('review')`) rather than stranding them where they were.
+
+`openEmailReview` is safe to ask from because the background check never reaches
+it — `checkEmail(true)` sets `pendingEmailCount` and returns — so the question can
+only ever follow a tap. Declining there leaves the queue untouched, since
+`seenMsgs` is written on save.
+
+**The fourth path is deliberately different.** The assistant's DRAFT branch does
+not open a modal; a dialog appearing out of a chat answer is its own surprise, and
+the assistant has a better place to put the message. It refuses and explains:
+*"You have 1 item still waiting on the review screen from Photo 2026-08-31. Save
+or skip it first, then ask me again and I will draft this one."*
+
+### A harness property that made a correct test fail
+
+The first version of the assistant test was `async` and `await`ed `performRoute`
+before reading `pendingEvents`. **It failed while the code was right.**
+
+`tests-cases.js:21` registers an async test's promise in `pendingTests` and
+`tests.js:136` settles them all at the very end — so an async test runs
+**concurrently with every test declared after it**, and anything it asserts about
+shared module state is racing them. A later test had already emptied
+`pendingEvents` by the time the assertion ran. The probe made it obvious: the
+refusal message was verbatim correct while `pendingEvents.length` read `0`.
+
+Rewritten synchronously: the DRAFT refusal returns without awaiting anything, so
+the state assertion is made **before** any microtask can interleave, and only the
+answer — a local — is checked in the returned promise. The reason is written into
+the test, because the next person to reach for `async` here will hit the same wall.
+
+Worth knowing beyond this test: any existing async in-page test that asserts on
+`S` or another module global has the same exposure. Not audited; noted.
+
+### Tests: 829 total, from 825
+
+| # | Revert | Result |
+|---|---|---|
+| **M49** | the guard always allows the replace | **RED ×2** — `never replaced without asking` and `the question names how many items` |
+| **M50** | it asks even when there is nothing to replace | **RED** — `with nothing under review it does not ask at all` |
+| **M51** | the assistant drafts over the batch again | **RED** — `the assistant refuses to draft over a batch` |
+
+M49 and M50 are the matched pair again: one proves the question fires when it must,
+the other proves a first scan is never interrupted.
+
+`node tests.js` 829/0 · `inline.js --check` in sync · a11y audit clean across all
+48 screens.

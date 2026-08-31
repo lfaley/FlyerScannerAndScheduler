@@ -4652,7 +4652,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.87';
+const APP_VERSION = 'v9.88';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -6693,6 +6693,16 @@ async function performRoute(route, question){
   // ---- DRAFT: hand to the screen the user already knows ------------------
   if(route.consequence === CONSEQUENCE.DRAFT){
     if(route.intent === 'add_event'){
+      // The one replace path that does NOT get a confirm. A modal appearing out
+      // of a chat answer is its own surprise, and the assistant has somewhere
+      // better to put the message: its own reply. Refuse rather than destroy.
+      if(pendingEvents.length){
+        const n = pendingEvents.length;
+        return { answer:`You have ${n} item${n===1?'':'s'} still waiting on the review screen`
+            + `${pendingSource ? ' from ' + pendingSource : ''}. Save or skip ${n===1?'it':'them'} first,`
+            + ' then ask me again and I will draft this one.',
+          cited:[], domain:'events', sourceNote:'Nothing was changed.' };
+      }
       const draft = buildEventDraft(route.params, allPeople(), aiModelName());
       pendingEvents = [draft];
       pendingSource = 'assistant';
@@ -7944,6 +7954,10 @@ async function extractFromRawItems(items){
 }
 
 async function openEmailReview(fresh){
+  // Safe to ask here: the background check (checkEmail(true)) never reaches this
+  // function -- it sets pendingEmailCount and returns -- so this is always a tap.
+  // Declining leaves the queue untouched, because seenMsgs is written on save.
+  if(!confirmReplacePending()){ sub('review'); return; }
   const rawItems = fresh.filter(isMessageRef);
   if(rawItems.length){
     const { out, failures } = await extractFromRawItems(rawItems);
@@ -8693,6 +8707,32 @@ function emptyState(icon, title, body, cta){
 // ---------- Capture & Review ----------
 let pendingEvents = [], pendingSource = '', captureAppend = false;
 
+/**
+ * Nothing starts a new review batch over the top of one already open.
+ *
+ * pendingEvents is never persisted, so an assignment to it throws away the
+ * extraction that produced the current batch. Four paths did that silently:
+ * openEmailReview, handleCapture, handleLinkCapture and the assistant's DRAFT
+ * branch. Scan a flyer while an email batch is open and the emails vanished
+ * mid-review with no warning and no way back to them.
+ *
+ * A confirm rather than a merge, deliberately. What is lost is the WORK, not the
+ * data: an abandoned email batch stays in the watcher queue, because seenMsgs is
+ * only written on save, and the photo is still on the phone. Merging would fix a
+ * cheaper problem at the price of a per-row source field, since saveReview
+ * stamps every saved event with one pendingSource and a merged batch would carry
+ * the wrong provenance for half of it.
+ *
+ * Asked BEFORE the model call, never after, so declining costs nothing.
+ */
+function confirmReplacePending(){
+  const n = pendingEvents.length;
+  if(!n) return true;
+  return confirm('You still have ' + n + ' item' + (n === 1 ? '' : 's') +
+    ' under review from ' + (pendingSource || 'an earlier scan') + '.\n\n' +
+    'Starting a new one replaces ' + (n === 1 ? 'it' : 'them') + '. Continue?');
+}
+
 function renderCapture(m){
   setHeader('Add Paperwork', true);
   m.innerHTML = `
@@ -8761,6 +8801,9 @@ async function handleCapture(fileList, isPdf){
   if(setupErr){ alert(setupErr); nav('settings'); return; }
   const append = captureAppend && pendingEvents.length > 0;
   captureAppend = false;
+  // Before the model call, so saying no costs nothing. Declining puts the user
+  // back on the batch they kept rather than stranding them on the capture screen.
+  if(!append && !confirmReplacePending()){ sub('review'); return; }
   sub('busy', {msg:'Reading the document…', hint: aiWorkingHint()});
   try{
     let found = [];
@@ -8874,6 +8917,7 @@ async function handleLinkCapture(url){
   if(setupErr){ alert(setupErr); nav('settings'); return; }
   const append = captureAppend && pendingEvents.length > 0;
   captureAppend = false;
+  if(!append && !confirmReplacePending()){ sub('review'); return; }
   sub('busy', {msg:'Fetching the link…', hint: aiWorkingHint()});
   try{
     const found = await extractEventsFromUrl(url);
