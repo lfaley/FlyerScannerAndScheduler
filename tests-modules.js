@@ -2375,9 +2375,16 @@ module.exports = async function runModuleTests(test){
     const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
     ['softDelete(', 'markHandled(', 'completeChore('].forEach(f =>
       assert.ok(fn.includes(f), 'reimplemented instead of calling ' + f));
-    // toggleChore carries the "who did it?" sheet for a chore that belongs to
-    // nobody; skipping it would drop the stars on the floor.
-    assert.ok(fn.includes('toggleChore('), 'the anyone-chore star sheet is bypassed');
+    // The "who did it?" sheet for a chore that belongs to nobody must still be
+    // reached -- skipping it drops the stars on the floor. Until v9.85 this
+    // branch got there by calling toggleChore, and that was the defect:
+    // toggleChore UNticks a chore that is already done, so a confirm button
+    // reading "Mark 'Bins' done for today" could un-complete it. The sheet now
+    // lives in askWhoDidChore, shared with the Chores tab. BOTH halves are
+    // asserted -- the sheet is still reached, and the toggle is not.
+    assert.ok(fn.includes('askWhoDidChore('), 'the anyone-chore star sheet is bypassed');
+    assert.ok(!fn.includes('toggleChore('),
+      'the confirm path routes through a TOGGLE again -- it can un-complete a chore');
   });
 
   test('the confirm card only ever appears on the newest turn', () => {

@@ -4652,7 +4652,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.84';
+const APP_VERSION = 'v9.85';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -6980,11 +6980,16 @@ function confirmPendingAction(chosenId){
       break;
     }
     case 'complete_chore': {
-      // completeChore handles stars and the toast; toggleChore handles the
-      // "who did it?" sheet when the chore belongs to nobody. Use whichever
-      // matches what we know, so the assistant path behaves like a tap.
+      // NEVER toggleChore here. toggleChore UNticks when the chore is already
+      // done, so a confirm button reading "Mark 'Bins' done for today" could
+      // un-complete it -- the exact opposite of what the button said, on the one
+      // confirmed write that had no undo. completeChore now carries the same-day
+      // guard, so calling it directly is safe; when nobody is resolved, ask who
+      // through the same sheet the Chores tab uses rather than guessing.
       const kidId = pa.kidId || target.kidId || null;
-      if(kidId) completeChore(target, kidId); else toggleChore(target.id);
+      if(kidId) completeChore(target, kidId);
+      else if(target.stars > 0 && justKids().length) askWhoDidChore(target);
+      else completeChore(target, null);
       break;
     }
     case 'mark_event_handled':
@@ -9255,8 +9260,13 @@ function starBalances(){
   // Start from stars carried forward when old history was pruned, so balances
   // survive pruning unchanged.
   const bal = Object.assign({}, S.settings.starCarry || {});
+  // Both loops guard kidId and default stars. The redemptions line used to do
+  // NEITHER, one line below a completions line that did both: a redemption with
+  // no kidId wrote bal["undefined"], and one with no stars made the whole
+  // balance NaN, which renders as 0 -- a real star total silently replaced by
+  // zero on the most emotionally loaded number in the app.
   for(const c of S.completions){ if(c.kidId) bal[c.kidId]=(bal[c.kidId]||0)+(c.stars||0); }
-  for(const r of S.redemptions){ bal[r.kidId]=(bal[r.kidId]||0)-r.stars; }
+  for(const r of S.redemptions){ if(r.kidId) bal[r.kidId]=(bal[r.kidId]||0)-(r.stars||0); }
   return bal;
 }
 function renderChores(m){
@@ -9344,16 +9354,36 @@ function toggleChore(id){
   const c = S.chores.find(x=>x.id===id);
   const t = todayISO();
   const done = completionFor(id, t);
-  if(done){ S.completions = S.completions.filter(x=>x!==done); save(); render(); return; }
-  const kids = justKids();
-  // "Anyone" chores with star value: ask who did it so the stars land somewhere
-  if(!c.kidId && c.stars>0 && kids.length){
-    showSheet(c.title, 'Who did it?',
-      kids.map(k=>({label:k.name, icon:'check-circle', fn:()=>completeChore(c, k.id)}))
-        .concat([{label:'Just check it off (no stars)', fn:()=>completeChore(c, null)}]));
+  if(done){
+    // An ordinary untick stays an instant, silent toggle -- ticking it back on
+    // returns the stars, so nothing was destroyed. It is only destroyed once the
+    // stars have been SPENT: the balance goes below zero, the reward is already
+    // redeemed, and no screen in the app can explain why the number fell. That
+    // is the one case worth a question, and it was the one case that had none.
+    const stars = done.stars || 0;
+    const kid = done.kidId ? kidById(done.kidId) : null;
+    if(stars > 0 && kid){
+      const after = (starBalances()[kid.id] || 0) - stars;
+      if(after < 0 && !confirm(
+        kid.name + ' has already spent ' + (stars === 1 ? 'this star' : 'these ' + stars + ' stars') +
+        '.\n\nUnticking "' + ((c && c.title) || 'this chore') + '" puts them on ' + after + '. Continue?')) return;
+    }
+    S.completions = S.completions.filter(x=>x!==done);
+    save(); render();
     return;
   }
+  // "Anyone" chores with star value: ask who did it so the stars land somewhere
+  if(!c.kidId && c.stars>0 && justKids().length){ askWhoDidChore(c); return; }
   completeChore(c, c.kidId);
+}
+
+// One implementation of the "who did it?" sheet. The assistant's confirm path
+// needs the same question and used to reach it by calling toggleChore, which
+// also UNticks -- see the complete_chore branch of confirmPendingAction.
+function askWhoDidChore(c){
+  showSheet(c.title, 'Who did it?',
+    justKids().map(k=>({label:k.name, icon:'check-circle', fn:()=>completeChore(c, k.id)}))
+      .concat([{label:'Just check it off (no stars)', fn:()=>completeChore(c, null)}]));
 }
 // A brief, dependency-free confetti burst for the moment a kid earns stars.
 // Uses the Web Animations API (no library, no CSS), self-cleans, and honours
@@ -9383,13 +9413,39 @@ function celebrateBurst(){
 }
 
 function completeChore(c, kidId){
-  S.completions.push({ id:uid(), choreId:c.id, kidId:kidId||null, date:todayISO(), stars:kidId?(c.stars||0):0 });
+  // The same-day guard lives HERE, not at the call sites. toggleChore checks
+  // before it calls; the assistant path cannot -- performRoute checks at PROPOSE
+  // time and the "yes" can land minutes later, after the chore was ticked in the
+  // Chores tab. That gap pushed a SECOND completion row: starBalances summed
+  // both while completionFor returned only the first, so one later untick left
+  // the chore rendered as NOT done with the extra stars still counted, and no
+  // screen in the app could explain the number. Reproduced before it was fixed.
+  // A deterministic rule like this is checked in code, never left to the model.
+  if(completionFor(c.id, todayISO())){
+    toast(`"${c.title}" is already done today`);
+    return false;
+  }
+  const row = { id:uid(), choreId:c.id, kidId:kidId||null, date:todayISO(), stars:kidId?(c.stars||0):0 };
+  S.completions.push(row);
+  // Undo removes the row THIS call pushed, by reference -- never "the completion
+  // for this chore today", which after a second tap would be someone else's.
+  const undo = { label:'Undo', fn:() => {
+    S.completions = S.completions.filter(x => x !== row);
+    save(); render();
+    toast('Put back — not done');
+  }};
   if(kidId && c.stars>0){
     const kid = kidById(kidId);
-    if(kid) toast(`⭐ ${kid.name} earned ${c.stars} star${c.stars>1?'s':''} — now at ${starBalances()[kid.id]||0}`);
+    if(kid) toast(`⭐ ${kid.name} earned ${c.stars} star${c.stars>1?'s':''} — now at ${starBalances()[kid.id]||0}`, undo);
     celebrateBurst();   // a little confetti for the kid — reduced-motion aware
+  } else {
+    // The starless tick used to say nothing at all. In the Chores tab a second
+    // tap undoes it, but the assistant path has no second tap -- Gordon changed
+    // the day's state and reported it in silence.
+    toast(`Checked off "${c.title}"`, undo);
   }
   save(); render();
+  return true;
 }
 function delChoreById(id){
   const c = S.chores.find(x=>x.id===id);

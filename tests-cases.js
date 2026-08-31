@@ -2987,6 +2987,116 @@ test('deleting a chore keeps its completed history', () => {
   assert.strictEqual(S.chores[0].deleted, true);
 });
 
+// ---------------------------------------------------------------------------
+// Stars (v9.85). Every case below was REPRODUCED against the shipped functions
+// before a line was changed -- see DELETE-HONESTY-PLAN.md section 2.
+// ---------------------------------------------------------------------------
+function starFixture(stars){
+  boot(null);
+  S.kids.push({ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false });
+  S.chores.push({ id:'c1', title:'Bins', kidId:'k1', stars: stars === undefined ? 5 : stars, deleted:false });
+  return S.chores[0];
+}
+
+test('a redemption missing stars cannot turn a real balance into NaN (v9.85)', () => {
+  // The redemptions loop did not default stars, one line below a completions
+  // loop that did. NaN renders as 0 -- a real star total silently replaced.
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  S.redemptions.push({ id:'r1', rewardId:'w1', kidId:'k1', date: todayISO() });
+  assert.strictEqual(starBalances()['k1'], 5,
+    'a malformed redemption row wiped out a real balance');
+});
+
+test('a redemption missing kidId cannot invent an "undefined" child (v9.85)', () => {
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  S.redemptions.push({ id:'r2', rewardId:'w1', stars:2, date: todayISO() });
+  assert.deepStrictEqual(Object.keys(starBalances()), ['k1'],
+    'a redemption with no kid wrote a balance under the key "undefined"');
+});
+
+test('completing the same chore twice in one day counts once (v9.85)', () => {
+  // THE BUG. toggleChore checks before it calls, so tapping twice in the Chores
+  // tab could never do this; the assistant's confirm path called completeChore
+  // DIRECTLY, and performRoute's check happened at propose time, minutes earlier.
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  completeChore(c, 'k1');
+  assert.strictEqual(S.completions.length, 1, 'a second completion row was written');
+  assert.strictEqual(starBalances()['k1'], 5, 'the stars were counted twice');
+});
+
+test('the second completion is refused OUT LOUD, not silently (v9.85)', () => {
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  const said = [];
+  const real = toast;
+  toast = (m) => said.push(m);
+  try { assert.strictEqual(completeChore(c, 'k1'), false, 'the refusal was not reported to the caller'); }
+  finally { toast = real; }
+  assert.ok(/already done today/.test(said.join(' ')), 'nothing was said: ' + JSON.stringify(said));
+});
+
+test('earning stars offers an Undo, and it removes the row it pushed (v9.85)', () => {
+  const c = starFixture(5);
+  const undo = captureUndo(() => completeChore(c, 'k1'));
+  assert.ok(undo, 'completeChore offered no way back -- it was the one confirmed write with none');
+  undo();
+  assert.strictEqual(S.completions.length, 0, 'undo left the completion in place');
+  assert.strictEqual(starBalances()['k1'] || 0, 0, 'undo left the stars behind');
+});
+
+test('a STARLESS tick is acknowledged too, with the same Undo (v9.85)', () => {
+  // It used to say nothing at all. In the Chores tab a second tap undoes it; the
+  // assistant path has no second tap, so Gordon changed the day and stayed quiet.
+  const c = starFixture(0);
+  const undo = captureUndo(() => completeChore(c, null));
+  assert.ok(undo, 'a starless completion is still silent');
+  undo();
+  assert.strictEqual(S.completions.length, 0);
+});
+
+test('an ordinary untick is NOT interrogated -- it stays an instant toggle (v9.85)', () => {
+  // Ticking it back on returns the stars, so nothing was destroyed. A dialog
+  // here would land on a child tapping their own chart every single day.
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  let asked = 0;
+  const real = confirm;
+  confirm = () => { asked++; return true; };
+  try { toggleChore('c1'); } finally { confirm = real; }
+  assert.strictEqual(asked, 0, 'an everyday untick now asks a question');
+  assert.strictEqual(S.completions.length, 0, 'the untick did not happen');
+});
+
+test('unticking stars that are ALREADY SPENT asks first (v9.85)', () => {
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  S.redemptions.push({ id:'r3', rewardId:'w1', kidId:'k1', stars:5, date: todayISO() });
+  assert.strictEqual(starBalances()['k1'], 0, 'fixture wrong: the stars were not spent');
+  let asked = 0;
+  const real = confirm;
+  confirm = () => { asked++; return false; };
+  try { toggleChore('c1'); } finally { confirm = real; }
+  assert.strictEqual(asked, 1, 'destroying spent stars was not questioned');
+  assert.strictEqual(S.completions.length, 1, 'declining the question destroyed them anyway');
+  assert.strictEqual(starBalances()['k1'], 0, 'the balance moved despite the refusal');
+});
+
+test('a balance never renders negative behind the user\'s back (v9.85)', () => {
+  // Earn 5, spend 5, untick: the old code went straight to -5, silently, from a
+  // whole-card tap. Now the only route to a negative number is through a
+  // question the user answered yes to.
+  const c = starFixture(5);
+  completeChore(c, 'k1');
+  S.redemptions.push({ id:'r4', rewardId:'w1', kidId:'k1', stars:5, date: todayISO() });
+  withConfirm(false, () => toggleChore('c1'));
+  assert.ok(starBalances()['k1'] >= 0, 'a refused untick still drove the balance below zero');
+  withConfirm(true, () => toggleChore('c1'));
+  assert.strictEqual(starBalances()['k1'], -5, 'an ACCEPTED untick should still do what it said');
+});
+
 test('deleting one row leaves its neighbours alone', () => {
   boot(null);
   S.lists.push({ id:'l1', name:'A', deleted:false }, { id:'l2', name:'B', deleted:false });

@@ -313,7 +313,7 @@ That is the mistake I made in the last plan; recording it so it is not repeated.
 | Phase | Contents | Version |
 |---|---|---|
 | **1** | N1 (the 90/30 word) and N2 (the prune rule) — the two places the app currently contradicts itself | **v9.84 — DONE**, see §10 |
-| **2** | §5.1 Option A: the five star-system edits | v9.85 |
+| **2** | §5.1 Option A: the five star-system edits | **v9.85 — DONE**, see §11 |
 | **3** | §5.3 D3 dedupe suppression + undo | v9.86 |
 | **4** | §5.4 `bulkTag` undo, §5.5 the three feedback fixes | v9.87 |
 | **5** | §5.2 redemption undo from Star History — only if you want it, after costing | — |
@@ -428,3 +428,94 @@ have seen N2. It was 330 days short.
 does **not** guard the exemption clause — no fixture can make it do so, because
 the tombstone rule removes the row first. Saying so in the file is the point:
 a test that looks like a guard and is not one is the failure rule 30 exists for.
+
+
+---
+
+## 11. Phase 2 as built (v9.85)
+
+All five edits from §5.1 Option A, plus one that fell out of doing them properly.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | `starBalances`' redemptions loop guards `kidId` and defaults `stars`, matching the completions loop one line above it | `starBalances` |
+| 2 | `completeChore` carries the same-day guard, and returns `false` when it refuses | `completeChore` |
+| 3 | `completeChore`'s toast carries an Undo that removes **the row this call pushed**, by reference | `completeChore` |
+| 4 | `toggleChore`'s untick confirms **only** when the balance would go below zero | `toggleChore` |
+| 5 | `confirmPendingAction`'s `complete_chore` branch never calls `toggleChore` | `confirmPendingAction` |
+| 6 | *(new)* the "who did it?" sheet is one function, `askWhoDidChore`, shared by the Chores tab and the assistant | new function |
+
+Item 6 was not in the plan. Writing item 5 meant the confirm path needed the same
+sheet the Chores tab shows, and copying it would have made a second source of truth
+for a question that has to stay identical in both places.
+
+### One behaviour change beyond the plan
+
+`completeChore` now toasts on a **starless** tick as well, with the same Undo. It
+said nothing at all before. In the Chores tab a second tap undoes it, so the silence
+was survivable; on the assistant path there is no second tap, and Gordon was changing
+the day's state and reporting it in silence. Flagging it because it is a visible
+change to an everyday tap that the plan did not ask for.
+
+### Verified against the shipped functions, before and after
+
+The §2 reproduction script was re-extracted from v9.85 by line range and re-run:
+
+```
+--- A2: the assistant path, same sequence as before ---
+  completions = 1  balance = 5
+  what it said: ["TOAST: \"Bins\" is already done today"]
+
+--- A2c: "Mark Bins done" when it is already done ---
+  it asks who rather than unticking: "Bins / Who did it?"
+
+--- A3: earn 5, spend 5, untick ---
+  declining -> balance: 0  completions: 1
+  it asked: "Olivia has already spent these 5 stars. | Unticking "Bins" puts them on -5. Continue?"
+  accepting  -> balance: -5
+
+--- A3: an ordinary untick still costs nothing ---
+  confirms asked: 0  completions: 0
+
+--- A3b: malformed redemption rows ---
+  redemption with no stars -> balance: 5
+  redemption with no kidId -> keys: ["k1"]
+
+--- the new Undo ---
+  TOAST: ⭐ Olivia earned 5 stars — now at 5  [Undo]
+  after Undo -> completions: 0  balance: 0
+```
+
+Every line that was wrong in §2 is right here, and the two things that should NOT
+have changed — an ordinary untick staying silent, an accepted untick still doing
+what it said — did not.
+
+### Tests: 815 total, from 806
+
+Nine new behavioural tests, and one existing test updated rather than deleted.
+
+`the assistant calls the app's own functions rather than reimplementing writes`
+asserted `fn.includes('toggleChore(')`. That assertion was the proxy for a real
+property — *the anyone-chore star sheet is not bypassed* — and the property still
+holds, through `askWhoDidChore`. It now asserts **both halves**: the sheet is still
+reached, **and** `toggleChore` is not called, which is the whole point of item 5.
+The intent is preserved and the guard is stricter than it was.
+
+### Mutation tests — every guard reverted for real
+
+| # | Revert | Result |
+|---|---|---|
+| **M34** | `starBalances`' redemptions guard | **RED ×2** — the NaN test and the `undefined`-key test |
+| **M35** | the same-day guard in `completeChore` | **RED ×2** — `counts once` and `refused OUT LOUD` |
+| **M36** | drop `undo` from the star toast | **RED** — `earning stars offers an Undo` |
+| **M37** | drop the starless acknowledgement | **RED** — `a STARLESS tick is acknowledged too` |
+| **M38** | `after < 0 &&` → `false &&` (never confirm) | **RED ×2** — `ALREADY SPENT asks first` and `never renders negative` |
+| **M39** | `after < 0 &&` → `true &&` (always confirm) | **RED** — `an ordinary untick is NOT interrogated` |
+| **M40** | confirm branch back to `toggleChore` | **RED** — `the anyone-chore star sheet is bypassed` |
+
+M38 and M39 are a matched pair on purpose: one proves the confirm fires when it
+must, the other proves it does not fire when it must not. A single mutation would
+have left half the condition untested.
+
+`node tests.js` 815/0 · `inline.js --check` in sync · a11y audit clean across all
+48 screens.
