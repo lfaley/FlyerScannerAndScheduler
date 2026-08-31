@@ -63,8 +63,33 @@ export function newestFirstId(kind, now, rand){
  * a second content source gets added HERE, not as a second condition somewhere
  * further down.
  */
+// The `where` values whose `detail` is provably free of anything the app was
+// PROCESSING. Everything ELSE is withheld from an automatic report, so a new
+// call site is private by DEFAULT instead of leaking until someone notices.
+//
+// v9.77 inverted this. It was a denylist of one prefix (/^Email:/), and
+// `logProblem('Scanning', err.message, scanContext)` -- scanContext being the
+// free text the user types into "What is this about?", e.g. "Olivia's dance" --
+// was therefore uploaded verbatim to the shared errorReports collection. The
+// ruling it broke is quoted in toReportDoc below.
+//
+// Audited 31 Aug 2026 against every logProblem call site in index.html:
+//   Storage      surviving localStorage key names     content-free
+//   Gordon       aiModelName() / a fixed sentence     content-free
+//   Local model  aiModelName()                        content-free
+//   Recipe scan  a file-read error message            content-free
+//   App          filename:lineno / a rejection text   diagnostics, allowed
+//   Assistant    a transport error message            diagnostics, allowed
+//   Scanning     the user's own typed scan context    WITHHELD
+//   Email: ...   the email subject                    WITHHELD
+//
+// An unlabelled problem ('' or null) is withheld too: an unknown call site is
+// exactly the one whose detail nobody has audited.
+export const CONTENT_FREE_WHERE = new Set(
+  ['Storage', 'Gordon', 'Local model', 'Recipe scan', 'App', 'Assistant']);
+
 export function isThirdPartyContent(where){
-  return /^Email:/.test(String(where || ''));
+  return !CONTENT_FREE_WHERE.has(String(where || ''));
 }
 
 /**

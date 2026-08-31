@@ -1789,6 +1789,34 @@ test('an unterminated thinking block still yields the answer', () => {
   assert.strictEqual(JSON.parse(cleanModelText(raw)).title, 'Y');
 });
 
+test('an Ask answer that obeys the citation rule survives the cleanup (v9.77)', () => {
+  // The bug this pins, observed on the installed PWA 31 Aug 2026: Ask showed
+  // "[1]" and nothing else. ANSWER_CONTRACT rule 2 says "put the reference
+  // number(s) it came from, like [2] or [1][4]" -- so the citation format here
+  // is the shipped prompt's own wording, not an invented shape.
+  const answer = 'Volleyball practice is Tuesday at 5:00 PM [2] and the band concert is Thursday [4].';
+  assert.strictEqual(stripThinking(answer).trim(), answer,
+    'the prose answer was altered on its way to the screen');
+
+  // ...and this is exactly what the old code did to it, kept as the reason the
+  // line above may never be "simplified" back to cleanModelText.
+  assert.strictEqual(cleanModelText(answer).trim(), '[2]',
+    'cleanModelText no longer eats a cited answer -- re-check why this fix exists');
+});
+
+test('a thinking model\'s Ask answer still loses only the reasoning (v9.77)', () => {
+  const raw = '<think>checking the list</think>Braelyn has nothing on Friday [1].';
+  assert.strictEqual(stripThinking(raw).trim(), 'Braelyn has nothing on Friday [1].');
+});
+
+test('extraction still works now that the transport stopped extracting (v9.77)', () => {
+  // The other half: parseExtractedEvents must pull the JSON out itself.
+  const raw = 'Here are the events I found:\n[{"title":"Picture Day","date":"2026-08-13"}]\nHope that helps.';
+  const evs = parseExtractedEvents(raw);
+  assert.strictEqual(evs.length, 1);
+  assert.strictEqual(evs[0].title, 'Picture Day');
+});
+
 test('plain text with no JSON passes through unharmed', () => {
   assert.strictEqual(cleanModelText('READY'), 'READY');
   assert.strictEqual(cleanModelText('Thinking...\nhmm\n...done thinking.\nREADY'), 'READY');

@@ -2572,6 +2572,20 @@ module.exports = async function runModuleTests(test){
     assert.strictEqual(d.problems.length, 1, 'the manual reports are the point of the file');
   });
 
+  test('an address in `where` is redacted, not just one in `message`', () => {
+    // v9.77. `where` is built as 'Email: ' + the sender (index.html), so it is
+    // the one field that ALWAYS carries a third party's address -- and it was
+    // the one field on that line not passed through redact(). The file it
+    // lands in is the one designed to be emailed around.
+    const state = { problems:[{ where:'Email: office@mapleelementary.org',
+      message:'attachment failed', detail:null, first:'x', last:'y', count:1 }] };
+    const json = JSON.stringify(ailog.buildDiagnostics(state, {}));
+    assert.ok(!/office@mapleelementary\.org/.test(json),
+      'a sender address leaked through `where`: ' + json);
+    assert.ok(/Email: \[redacted\]/.test(json),
+      'the Email: label should survive so the reader still knows the source');
+  });
+
   test('the local model URL is only included when asked for', () => {
     const state = { settings:{ localBaseUrl:'http://desk:11434/v1' } };
     assert.strictEqual(ailog.buildDiagnostics(state, {}).app.localBaseUrl, null);
@@ -3865,8 +3879,15 @@ module.exports = async function runModuleTests(test){
     // The failure mode on the other side of the ruling: withholding everything
     // would satisfy the privacy rule and leave Logan unable to tell WHICH model
     // or WHICH screen failed. Every non-email call site must keep its detail.
+    // v9.77: 'Scanning' was in this list on a FALSE PREMISE. The example
+    // detail written here, 'recipe box', reads like a screen name -- but the
+    // call site is `logProblem('Scanning', err.message, scanContext || null)`
+    // (index.html), and scanContext is the free text the USER types into
+    // "What is this about?". So this row asserted that a child's name must
+    // keep travelling to the shared database. It is now withheld, and the
+    // test below pins that. A guard that passes on a wrong premise is the
+    // thing rule 30 is about.
     const keep = [['Local model', 'qwen3-vl:8b-instruct-q8_0'],
-                  ['Scanning', 'recipe box'],
                   ['App', 'TypeError: x is not a function'],
                   ['Assistant', 'router timeout']];
     keep.forEach(([where, detail]) => {
@@ -3874,6 +3895,31 @@ module.exports = async function runModuleTests(test){
         first:'2026-08-23T02:00:00Z', count:1 }, {});
       assert.strictEqual(d.description, detail, where + ' lost its diagnostics');
     });
+  });
+
+  test('a scan failure never carries the user\'s own typed context off the device', () => {
+    // The leak this replaced: "Olivia's dance" typed into the capture screen's
+    // "What is this about?" box reached errorReports verbatim, because the
+    // classifier was a denylist of one prefix and 'Scanning' was not on it.
+    const d = er.toReportDoc({ id:'x', where:'Scanning', message:'timeout',
+      detail:"Olivia's dance", first:'2026-08-31T02:00:00Z', count:1 }, {});
+    assert.strictEqual(d.description, undefined,
+      'the scan context is being uploaded again');
+    // ...and the report is still worth having: the failure itself travels.
+    assert.ok(/timeout/.test(d.message), 'the failure text was lost with it');
+  });
+
+  test('the classifier is an ALLOWLIST, so a NEW call site is private by default', () => {
+    // The property that matters more than any single value: someone adding
+    // logProblem('Photo', err.message, somethingUserTyped) tomorrow gets
+    // withholding for free, instead of leaking until it is noticed.
+    assert.strictEqual(er.isThirdPartyContent('Photo'), true);
+    assert.strictEqual(er.isThirdPartyContent('Some Future Screen'), true);
+    // Mutation check: the allowlist must actually be doing the work. If the
+    // set were emptied, the six audited sources below would all be withheld.
+    ['Storage', 'Gordon', 'Local model', 'Recipe scan', 'App', 'Assistant']
+      .forEach(w => assert.strictEqual(er.isThirdPartyContent(w), false,
+        w + ' lost its diagnostics -- it is an audited, content-free source'));
   });
 
   test('the "Email:" prefix is pinned on BOTH sides, because it is a convention', () => {
@@ -3884,8 +3930,11 @@ module.exports = async function runModuleTests(test){
     assert.strictEqual(er.isThirdPartyContent('Email: someone@x.com'), true);
     assert.strictEqual(er.isThirdPartyContent('Email: unknown'), true);
     assert.strictEqual(er.isThirdPartyContent('Local model'), false);
-    assert.strictEqual(er.isThirdPartyContent(''), false);
-    assert.strictEqual(er.isThirdPartyContent(null), false);
+    // v9.77, a deliberate TIGHTENING: an unlabelled problem is withheld now.
+    // Under the old denylist these returned false (detail travels); an unknown
+    // call site is precisely the one whose detail nobody has audited.
+    assert.strictEqual(er.isThirdPartyContent(''), true);
+    assert.strictEqual(er.isThirdPartyContent(null), true);
 
     // ...and the watcher must still be producing that exact prefix.
     const src = fs.readFileSync('index.html', 'utf8').replace(/\/\/[^\n]*/g, '');
@@ -3893,6 +3942,46 @@ module.exports = async function runModuleTests(test){
     assert.ok(sites.length >= 3,
       'the watcher no longer labels problems "Email: ..." -- the content guard ' +
       'is now dead and nothing else would have noticed. Found ' + sites.length);
+  });
+
+  test('the AI transport does not extract JSON -- that would eat a prose answer', () => {
+    // v9.77. callLocalModel served both the JSON callers and the ONE prose
+    // caller (Ask). It returned cleanModelText(out), whose extractJson returns
+    // the first balanced [...] it finds -- and ANSWER_CONTRACT rule 2 REQUIRES
+    // a [n] citation after every fact. Observed on device 31 Aug 2026: a
+    // four-event answer rendered as "[1]". Read the CODE, not the comments.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('async function callLocalModel(')[1].split('\nasync function ')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/return stripThinking\(out\);/.test(fn),
+      'callLocalModel must return stripThinking(out)');
+    assert.ok(!/cleanModelText/.test(fn),
+      'callLocalModel is extracting JSON again -- every Ask answer becomes "[2]"');
+  });
+
+  test('the Ask answer is never run through the JSON extractor', () => {
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('async function performRoute(')[1].split('\nfunction ')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const line = fn.split('\n').filter(l => /const answer =/.test(l)).join('');
+    assert.ok(/stripThinking\(text\)/.test(line),
+      "performRoute's ANSWER branch must use stripThinking, found: " + line.trim());
+    assert.ok(!/cleanModelText/.test(line),
+      'the prose answer is being JSON-extracted again');
+  });
+
+  test('the JSON callers extract for themselves, now that the transport does not', () => {
+    // The other half of the v9.77 change: moving extraction out of the
+    // transport without moving it INTO the parsers would break every scan.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const ev = src.split('function parseExtractedEvents(')[1].split('\n}')[0];
+    assert.ok(/JSON\.parse\(extractJson\(text\)\)/.test(ev),
+      'parseExtractedEvents no longer extracts the JSON it needs');
+    const rc = src.split('async function extractRecipeFromImages(')[1].split('\n}')[0];
+    assert.ok(/JSON\.parse\(extractJson\(text\)\)/.test(rc),
+      'the recipe parser no longer extracts the JSON it needs');
+    assert.ok(/Could not read that recipe/.test(rc),
+      'a prose reply still surfaces a raw SyntaxError to the user');
   });
 
   test('the guard is one rule in one place, not a condition sprinkled about', () => {

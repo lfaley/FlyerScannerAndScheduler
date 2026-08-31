@@ -255,7 +255,7 @@ export function buildDiagnostics(state, meta){
     aiLog: (s.aiLog || []).slice(-AI_LOG_MAX),
     // The manual side: problems reported by the app's own logProblem().
     problems: (s.problems || []).map(p => ({
-      where: p.where, message: redact(p.message), detail: p.detail ? redact(p.detail) : null,
+      where: redact(p.where), message: redact(p.message), detail: p.detail ? redact(p.detail) : null,
       first: p.first, last: p.last, count: p.count, resolved: !!p.done,
     })),
   };

@@ -3446,7 +3446,7 @@ function buildDiagnostics(state, meta){
     aiLog: (s.aiLog || []).slice(-AI_LOG_MAX),
     // The manual side: problems reported by the app's own logProblem().
     problems: (s.problems || []).map(p => ({
-      where: p.where, message: redact(p.message), detail: p.detail ? redact(p.detail) : null,
+      where: redact(p.where), message: redact(p.message), detail: p.detail ? redact(p.detail) : null,
       first: p.first, last: p.last, count: p.count, resolved: !!p.done,
     })),
   };
@@ -4452,8 +4452,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.76';
-const APP_TAGLINE = 'errors that explain themselves';
+const APP_VERSION = 'v9.77';
+const APP_TAGLINE = 'answers that arrive whole';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never
@@ -4808,7 +4808,14 @@ async function callLocalModel(contentBlocks, maxTokens, system){
   if(choice.finish_reason === 'length'){
     console.log('local model response hit the token limit; output may be truncated');
   }
-  return cleanModelText(out);
+  // v9.77: the transport must NOT pull JSON out of the answer. callLocalModel
+  // serves BOTH the JSON callers (extraction) and the one PROSE caller (Ask),
+  // and extractJson on prose returns the first [n] citation and discards the
+  // sentence -- ANSWER_CONTRACT rule 2 REQUIRES those citations, so every
+  // well-formed Ask answer arrived as "[2]". Confirmed on device 31 Aug 2026.
+  // Strip thinking and fences here, matching callClaude; the JSON callers now
+  // extract for themselves (parseExtractedEvents, extractRecipeFromImages).
+  return stripThinking(out);
 }
 
 async function callClaude(contentBlocks, maxTokens, system){
@@ -4933,7 +4940,10 @@ async function extractEventsFromUrl(url){
 
 function parseExtractedEvents(text){
   let arr;
-  try{ arr = JSON.parse(text); }catch(e){ throw new Error('Could not read that document. Try a clearer photo or link.'); }
+  // extractJson here, not in the transport (v9.77): this parser knows it wants
+  // JSON, the transport does not. Also makes the Anthropic path tolerant of
+  // prose around the JSON, which it never was.
+  try{ arr = JSON.parse(extractJson(text)); }catch(e){ throw new Error('Could not read that document. Try a clearer photo or link.'); }
   return (Array.isArray(arr)?arr:[]).filter(e=>e && e.title && /^\d{4}-\d{2}-\d{2}$/.test(e.date||''))
     .map(e=>({ title:String(e.title), date:e.date,
       time:(e.time && /^\d{2}:\d{2}$/.test(e.time))?e.time:null,
@@ -4955,7 +4965,12 @@ If it is not a recipe, respond with {"title":null}.`;
   const blocks = images.map(im => ({type:'image', source:{type:'base64', media_type:im.mediaType, data:im.base64}}));
   blocks.push({type:'text', text:prompt});
   const text = await callAI(blocks, 2000, GROUNDING_RECIPE, 'extract.recipe');
-  const r = JSON.parse(text);
+  // Same two-step as parseExtractedEvents (v9.77). A model that answers in
+  // prose used to surface a raw SyntaxError to the user here, while both
+  // siblings (extractAny, parseExtractedEvents) say something actionable.
+  let r;
+  try{ r = JSON.parse(extractJson(text)); }
+  catch(e){ throw new Error('Could not read that recipe. Try a clearer photo.'); }
   if(!r || !r.title) throw new Error('That does not look like a recipe.');
   return r;
 }
@@ -6411,7 +6426,12 @@ async function performRoute(route, question){
       history: contextTurns(askState.turns, todayISO()),
     });
     const text = await callAI([{ type:'text', text: built.user }], 700, built.system, 'ask.answer');
-    const answer = cleanModelText(text).trim();
+    // NOT cleanModelText: this is the app's only PROSE answer, and the JSON
+    // extractor inside it returns the first [n] citation and throws the
+    // sentence away. ANSWER_CONTRACT rule 2 demands those citations, so the
+    // better the model behaved, the worse the answer rendered -- observed on
+    // device 31 Aug 2026 as a four-event answer displayed as "[1]".
+    const answer = stripThinking(text).trim();
     return { answer, cited: citedEvents(answer, built.refs), domain,
       sourceNote: domain === 'events'
         ? `Looked at ${scope.label} — ${scope.events.length} event${scope.events.length===1?'':'s'}.`
@@ -6977,8 +6997,33 @@ function newestFirstId(kind, now, rand){
  * a second content source gets added HERE, not as a second condition somewhere
  * further down.
  */
+// The `where` values whose `detail` is provably free of anything the app was
+// PROCESSING. Everything ELSE is withheld from an automatic report, so a new
+// call site is private by DEFAULT instead of leaking until someone notices.
+//
+// v9.77 inverted this. It was a denylist of one prefix (/^Email:/), and
+// `logProblem('Scanning', err.message, scanContext)` -- scanContext being the
+// free text the user types into "What is this about?", e.g. "Olivia's dance" --
+// was therefore uploaded verbatim to the shared errorReports collection. The
+// ruling it broke is quoted in toReportDoc below.
+//
+// Audited 31 Aug 2026 against every logProblem call site in index.html:
+//   Storage      surviving localStorage key names     content-free
+//   Gordon       aiModelName() / a fixed sentence     content-free
+//   Local model  aiModelName()                        content-free
+//   Recipe scan  a file-read error message            content-free
+//   App          filename:lineno / a rejection text   diagnostics, allowed
+//   Assistant    a transport error message            diagnostics, allowed
+//   Scanning     the user's own typed scan context    WITHHELD
+//   Email: ...   the email subject                    WITHHELD
+//
+// An unlabelled problem ('' or null) is withheld too: an unknown call site is
+// exactly the one whose detail nobody has audited.
+const CONTENT_FREE_WHERE = new Set(
+  ['Storage', 'Gordon', 'Local model', 'Recipe scan', 'App', 'Assistant']);
+
 function isThirdPartyContent(where){
-  return /^Email:/.test(String(where || ''));
+  return !CONTENT_FREE_WHERE.has(String(where || ''));
 }
 
 /**
