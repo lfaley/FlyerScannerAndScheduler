@@ -64,7 +64,7 @@ HANDOFF.md.
 
 **Live:** https://lfaley.github.io/FlyerScannerAndScheduler/ (GitHub Pages, deploys on push to main)
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap` (moved here Aug 2026 — older docs may name `FlyerAndScheduler\flyersnap-pwa`; that path is dead)
-**Current version:** v9.47 · **Tests:** 609 passing (`node tests.js`)
+**Current version:** v9.83 · **Tests:** 800 passing (`node tests.js`)
 
 ## Architecture — source-modular, delivery-single-file. This is deliberate.
 
@@ -365,12 +365,23 @@ having checked it.
 
 ## Verification tooling
 
-- `node tests.js` — 752 tests: data safety, migrations, inline-handler
+**One-time setup.** `tests.js` needs nothing but Node. `tools/a11y-audit.js`
+and `tools/preview.js` drive a real browser, so they need Playwright and its
+Chromium, installed once per machine from the repo root:
+`npm install` then `npx playwright install chromium`. Both are devDependencies
+in `package.json`; the app itself still has no dependencies and no build step
+(rule 4), and `node_modules/` is gitignored, so a fresh clone that skips this
+gets `Cannot find module 'playwright'` from those two tools and nothing else.
+`npm test`, `npm run audit` and `npm run preview` are aliases for the three
+commands below.
+
+- `node tests.js` — 800 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
-- `node tools/a11y-audit.js` — ALL 46 screens in the RENDERED DOM: accessible
-  names, tap targets, ARIA state, horizontal overflow, exactly one `<h1>`.
+- `node tools/a11y-audit.js` — ALL 48 entries in its `SCREENS` table, in the
+  RENDERED DOM: accessible names, tap targets, ARIA state, horizontal
+  overflow, exactly one `<h1>`.
   The source tests cannot see a name that computes to nothing at runtime;
   this found exactly that in v9.1, and a 24px back button in v9.15.
   `--only=<key>` for one screen. **Adding a sub-screen means adding it to the
