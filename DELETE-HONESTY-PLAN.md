@@ -586,3 +586,107 @@ Seven new. No existing test needed changing.
 
 `node tests.js` 822/0 · `inline.js --check` in sync · a11y audit clean across all
 48 screens, `dedupe` included.
+
+
+---
+
+## 13. Phase 6 as built (v9.87) — D4
+
+Taken out of order at Logan's direction: D4 was the last remaining HIGH with no
+route back at all. D5 is deliberately **not** in this phase — see §14.
+
+### The change
+
+`pendingMsgIds`, a module-level array, is gone. The message id now rides on the
+review row itself (`msgId`), and the four places that used the global ask a
+derivation instead:
+
+```js
+function pendingMsgIdsOf(){
+  return [...new Set((pendingEvents || []).map(e => e && e.msgId).filter(Boolean))];
+}
+```
+
+`openEmailReview` and `retryEmailTrouble` set `msgId` when they build a row;
+`saveReview`, `dismissPendingEmail` and `renderReview` derive. That makes the
+defect unreachable **by construction** rather than by remembering to clear a
+second variable: replacing `pendingEvents` replaces the ids, because they are the
+same objects.
+
+The behaviour that had to survive did: the ids are derived from **all** rows on
+screen, not only the ticked ones. Reviewing an email and choosing none of its
+events is still a review, and that email should not come back. What it can no
+longer do is mark an email handled because its row was replaced by a photo scan.
+
+### Tests: 825 total, from 822
+
+Three new, and three existing fixtures updated in shape but not in intent — they
+set `pendingMsgIds` directly, which no longer exists; they now put `msgId` on the
+rows. Every assertion in them is unchanged.
+
+### A test of mine that did not reproduce the real sequence
+
+**M46 caught it.** The headline test walked the reported sequence — email batch,
+Back, scan, "Track N items" — and stayed green when the ids were made to outlive
+the rows. The reason: the leak only bites once something has *read* the ids while
+the email rows were up, and in the app that reader is `renderReview`, which checks
+them on every render to decide whether to offer "Skip all from this email". My
+test never rendered, so the stale list was never populated and there was nothing
+to leak.
+
+Adding the one line the real user performs — looking at the review screen — makes
+the test reproduce the defect. That line now carries a comment explaining that it
+is load-bearing, so nobody deletes it as scene-setting.
+
+Second time this batch that a mutation caught a test passing for the wrong reason
+(the first was M44 in §12). Both would have shipped as green guards over nothing.
+
+### Mutation tests
+
+| # | Revert | Result |
+|---|---|---|
+| **M46** | ids outlive the rows (the old parallel-global semantics) | **RED ×3** — the photo-scan test, the screen-gate test, and `skipping everything still marks the email handled` |
+| **M47** | derive from only the TICKED rows | **RED ×3** — the two-emails test and both existing "chose nothing" guards |
+| **M48** | the screen's gate hardcoded to `true` | **RED** — `the "Skip all from this email" control only shows for a real email batch` |
+
+`node tests.js` 825/0 · `inline.js --check` in sync · a11y audit clean across all
+48 screens.
+
+---
+
+## 14. D5 — open, and it needs a decision
+
+With D4 fixed, D5's dangerous half is gone: a replaced batch can no longer mark
+the wrong emails handled. What remains is narrower than the review implied.
+
+**What D5 actually costs, checked rather than assumed.** `openEmailReview` and
+`handleCapture`'s non-append branch both *assign* to `pendingEvents`, destroying a
+batch under review. But an abandoned email batch is **not** lost — `seenMsgs` is
+only written on save, so the watcher offers those emails again. And a photo is
+still on the phone. What is destroyed is the **extraction work**: one model call,
+and the user's place in a review. Annoying and surprising; not permanent data loss.
+That is a lower severity than the review's MEDIUM implied, and it changes what the
+right fix is.
+
+**Why I am not just picking one.** The obvious fix — merge instead of replace —
+has two real costs I could not resolve alone:
+
+1. `saveReview` stamps every saved event with a single `pendingSource`. Merge two
+   batches and half the events get the wrong provenance. Fixing that means a
+   per-row source field, which is more surface than the bug.
+2. Merging brings back a batch the user had walked away from. Scan something,
+   decide it is junk, back out, scan again — and the junk is on screen again to be
+   deselected. Safe, but its own kind of surprise.
+
+**The three options:**
+
+| | What happens when a scan lands on a batch already under review |
+|---|---|
+| **A** | Ask, after the extraction: "Add to the 3 already here" or "Replace them". Needs the per-row source field. Nothing is lost either way. |
+| **B** | Always merge, and toast `Added 3 — 9 from your email are still here`. Needs the per-row source field. No dialog; unwanted rows are one tap from deselected. |
+| **C** | Keep replacing, but `confirm()` first: "You have 3 items still under review. Replace them?". No source work at all — the smallest change that stops the silent destruction. |
+
+My lean is **C**, on the grounds that the thing being protected is a model call
+rather than data, and A and B both pull in a schema change to fix provenance for a
+case that is uncommon. But this is a taste call about your own app, not a
+correctness one, so it is yours.

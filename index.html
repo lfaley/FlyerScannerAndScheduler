@@ -4652,7 +4652,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.86';
+const APP_VERSION = 'v9.87';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -7029,7 +7029,26 @@ function cancelPendingAction(){ pendingAction = null; toast('Left it alone'); re
 // ---------- Gmail watcher ----------
 // A Google Apps Script reads matching emails on Google's servers every 15 min
 // and holds extracted events in a queue. We just fetch and review them.
-let pendingMsgIds = [];
+/**
+ * Which emails the review screen is currently showing, derived from the rows
+ * themselves rather than tracked beside them.
+ *
+ * This used to be a module-level `pendingMsgIds` array, set when an email batch
+ * opened and cleared only by saveReview/dismissPendingEmail -- both of which run
+ * AFTER committing those ids to seenMsgs. Nothing cleared it when pendingEvents
+ * was replaced by a different source, and pendingEvents is replaced by a photo
+ * scan, a link import and the assistant's draft. So: open the email banner, tap
+ * Back, scan a flyer, tap "Track N items" -- and the app wrote the EMAIL ids
+ * into seenMsgs forever. Those emails were never offered again and their events
+ * were gone, with no route back. The review screen even offered "Skip all from
+ * this email" for a batch that was no longer there.
+ *
+ * Carrying the id on the row makes that unreachable by construction: replacing
+ * pendingEvents replaces the ids, because they are the same objects.
+ */
+function pendingMsgIdsOf(){
+  return [...new Set((pendingEvents || []).map(e => e && e.msgId).filter(Boolean))];
+}
 
 function watcherConfigured(){ return !!(S.settings.watcherUrl && S.settings.watcherToken); }
 function personsForSender(from){
@@ -7933,12 +7952,12 @@ async function openEmailReview(fresh){
   } else {
     lastEmailProblems = [];
   }
-  pendingMsgIds = [...new Set(fresh.map(i=>i.msgId))];
   pendingEvents = markDuplicates(fresh.map(i => {
     const ppl = personsForSender(i.from);
     return {
       title:i.title, date:i.date, time:i.time, endTime:i.endTime||null, location:i.location,
       kind:i.kind, notes:i.notes, source:i.source, from:i.from||null,
+      msgId: i.msgId || null,          // the row IS the record that this email was reviewed
       personIds: ppl.slice(), kidId: ppl[0] || null
     };
   }));
@@ -8137,10 +8156,10 @@ async function retryEmailTrouble(){
       const mapped = markDuplicates(out.map(i => ({
         title:i.title, date:i.date, time:i.time, endTime:i.endTime||null, location:i.location,
         kind:i.kind, notes:i.notes, source:i.source, from:i.from||null,
+        msgId: i.msgId || null,
         personIds: personsForSender(i.from).slice(), kidId: personsForSender(i.from)[0] || null,
       })), pendingEvents);
       pendingEvents = pendingEvents.concat(mapped);
-      pendingMsgIds = [...new Set(pendingMsgIds.concat(out.map(i => i.msgId)))];
     }
     lastEmailProblems = keep.concat(failures);
     // Drop briefs for emails that are no longer in the trouble list (they imported).
@@ -9026,7 +9045,7 @@ function renderReview(m){
     </div>`).join('');
   html += `<div style="text-align:center"><button class="linkbtn" onclick="scanAnother()">${ico('plus')}Scan another page</button></div>
     <button class="btn fab" onclick="saveReview()">Track ${n} item${n===1?'':'s'}</button>
-    ${pendingMsgIds.length ? `<div style="text-align:center;margin-top:8px">
+    ${pendingMsgIdsOf().length ? `<div style="text-align:center;margin-top:8px">
       <button class="linkbtn" onclick="dismissPendingEmail()">Skip all from this email</button></div>` : ''}
     <div style="height:70px"></div>`;
   m.innerHTML = html;
@@ -9051,9 +9070,9 @@ function tagAll(personId){
 }
 // Mark the current email batch handled without tracking anything from it.
 function dismissPendingEmail(){
-  if(pendingMsgIds.length){
-    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs||[]).concat(pendingMsgIds))].slice(-400);
-    pendingMsgIds = [];
+  const ids = pendingMsgIdsOf();
+  if(ids.length){
+    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs||[]).concat(ids))].slice(-400);
   }
   save();
   toast('Skipped — these will not come back');
@@ -9070,7 +9089,7 @@ function saveReview(){
     // Deselecting everything is a legitimate answer: "none of these". This used
     // to bail out before recording the message ids, so the same events came back
     // on every scan with no way to dismiss them.
-    if(pendingMsgIds.length){
+    if(pendingMsgIdsOf().length){
       if(!confirm('Nothing is selected.\n\nSkip everything from this email? It will not be offered again.')) return;
       dismissPendingEmail();
       return;
@@ -9083,10 +9102,14 @@ function saveReview(){
       kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, aiSource:e.aiSource||null, exported:false, unread:true, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
-  // the screen leaves them in the queue for next time.
-  if(pendingMsgIds.length){
-    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs||[]).concat(pendingMsgIds))].slice(-400);
-    pendingMsgIds = [];
+  // the screen leaves them in the queue for next time. Derived from the rows ON
+  // SCREEN, and from ALL of them rather than only the ticked ones: reviewing an
+  // email and choosing none of its events is still a review, and that email
+  // should not come back. What it can no longer do is mark an email handled
+  // because its row happened to be replaced by something else.
+  const handled = pendingMsgIdsOf();
+  if(handled.length){
+    S.settings.seenMsgs = [...new Set((S.settings.seenMsgs||[]).concat(handled))].slice(-400);
   }
   save();
   toast(`Tracking ${chosen.length} item${chosen.length===1?'':'s'} — tap any event to add calendar alerts`);

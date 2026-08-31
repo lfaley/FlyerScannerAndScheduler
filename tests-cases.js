@@ -1975,11 +1975,13 @@ console.log('\nDeselected email events stay gone');
 test('tracking some marks the whole email handled', () => {
   boot(GOOD);
   S.kids = []; S.events = []; S.settings.seenMsgs = [];
-  pendingMsgIds = ['msg-1'];
+  // v9.87: the msgId rides on the ROW. The fixture changed shape, the intent did
+  // not -- an email whose events were reviewed is still marked handled, and the
+  // UNTICKED row's id counts just as much as the ticked one's.
   pendingSource = 'Email - J31';
   pendingEvents = [
-    { title:'Want this', date:dayAhead(3), selected:true,  personIds:[] },
-    { title:'Not this',  date:dayAhead(3), selected:false, personIds:[] }
+    { title:'Want this', date:dayAhead(3), selected:true,  personIds:[], msgId:'msg-1' },
+    { title:'Not this',  date:dayAhead(3), selected:false, personIds:[], msgId:'msg-1' }
   ];
   saveReview();
   assert.strictEqual(S.events.length, 1, 'only the selected one tracked');
@@ -1998,23 +2000,91 @@ test('an already-handled message is not offered again', () => {
 test('skipping everything still marks the email handled', () => {
   boot(GOOD);
   S.kids = []; S.events = []; S.settings.seenMsgs = [];
-  pendingMsgIds = ['msg-9'];
   pendingEvents = [
-    { title:'None of these', date:dayAhead(2), selected:false, personIds:[] }
+    { title:'None of these', date:dayAhead(2), selected:false, personIds:[], msgId:'msg-9' }
   ];
   dismissPendingEmail();
   assert.strictEqual(S.events.length, 0, 'nothing tracked');
   assert.ok(S.settings.seenMsgs.includes('msg-9'), 'still marked handled so it stops returning');
-  assert.strictEqual(pendingMsgIds.length, 0, 'batch cleared');
+  assert.strictEqual(pendingMsgIdsOf().length, 0, 'batch cleared');
 });
 
 test('saving with nothing selected dismisses rather than dead-ending', () => {
   boot(GOOD);
   S.kids = []; S.events = []; S.settings.seenMsgs = [];
-  pendingMsgIds = ['msg-7'];
-  pendingEvents = [{ title:'Nope', date:dayAhead(2), selected:false, personIds:[] }];
+  pendingEvents = [{ title:'Nope', date:dayAhead(2), selected:false, personIds:[], msgId:'msg-7' }];
   saveReview();
   assert.ok(S.settings.seenMsgs.includes('msg-7'), 'no longer a dead end');
+});
+
+test('a photo scan cannot mark unreviewed emails as handled (v9.87)', () => {
+  // THE BUG, as the sequence that produced it. pendingMsgIds was a module-level
+  // array cleared only AFTER its ids were committed to seenMsgs, and nothing
+  // cleared it when pendingEvents was replaced by a different source.
+  //   email banner -> Back -> Add paperwork -> scan -> "Track N items"
+  // wrote the EMAIL ids into seenMsgs, so those emails were never offered again
+  // and their events were gone with no route back.
+  boot(GOOD);
+  S.kids = []; S.events = []; S.settings.seenMsgs = [];
+  pendingSource = 'Email - Field Trip';
+  pendingEvents = [
+    { title:'Field trip', date:dayAhead(4), selected:true, personIds:[], msgId:'msg-untouched' }
+  ];
+  // The user LOOKS at the review screen. This line is not decoration: the leak
+  // only bit once something had read the ids while the email rows were up, and
+  // renderReview reads them on every render to decide whether to offer "Skip all
+  // from this email". Without it, M46 (ids outliving the rows) went undetected --
+  // the test passed because nothing had populated the stale list yet.
+  renderReview({ innerHTML:'' });
+  // Back does not clear a batch under review, and never did -- that part is fine.
+  back();
+  // handleCapture's non-append branch, verbatim: a fresh batch REPLACES pendingEvents.
+  pendingSource = 'Photo 2026-08-31';
+  pendingEvents = [
+    { title:'Bake sale', date:dayAhead(5), selected:true, personIds:[] }
+  ];
+  saveReview();
+  assert.strictEqual(S.events.length, 1, 'the scanned event was not tracked');
+  assert.strictEqual(S.events[0].title, 'Bake sale', 'the wrong event was tracked');
+  assert.ok(!S.settings.seenMsgs.includes('msg-untouched'),
+    'a photo scan marked an unreviewed email as handled, permanently');
+});
+
+test('the "Skip all from this email" control only shows for a real email batch (v9.87)', () => {
+  // The same leak, on screen: the review screen offered to skip a batch that was
+  // not there, because it asked the parallel global rather than the rows.
+  boot(GOOD);
+  const m = { innerHTML:'' };
+  pendingSource = 'Email';
+  pendingEvents = [{ title:'From an email', date:dayAhead(3), selected:true, personIds:[], msgId:'m1' }];
+  assert.strictEqual(pendingMsgIdsOf().length, 1, 'an email batch is not recognised');
+  renderReview(m);
+  assert.ok(/Skip all from this email/.test(m.innerHTML), 'a real email batch cannot be skipped');
+
+  pendingSource = 'Photo 2026-08-31';
+  pendingEvents = [{ title:'From a photo', date:dayAhead(3), selected:true, personIds:[] }];
+  assert.strictEqual(pendingMsgIdsOf().length, 0,
+    'a photo batch still claims to be an email batch');
+  renderReview(m);
+  assert.ok(!/Skip all from this email/.test(m.innerHTML),
+    'the screen offers to skip an email batch that is not there');
+});
+
+test('two emails in one batch are both marked handled (v9.87)', () => {
+  // Deriving from the rows must not quietly narrow what gets marked. A batch
+  // spans however many messages the watcher queued.
+  boot(GOOD);
+  S.kids = []; S.events = []; S.settings.seenMsgs = [];
+  pendingSource = 'Email';
+  pendingEvents = [
+    { title:'A', date:dayAhead(3), selected:true,  personIds:[], msgId:'m-a' },
+    { title:'B', date:dayAhead(3), selected:false, personIds:[], msgId:'m-b' },
+    { title:'C', date:dayAhead(3), selected:true,  personIds:[], msgId:'m-a' }
+  ];
+  saveReview();
+  assert.ok(S.settings.seenMsgs.includes('m-a'), 'the ticked email was not marked handled');
+  assert.ok(S.settings.seenMsgs.includes('m-b'),
+    'an email whose only event was UNTICKED came back -- reviewing it and saying no is still a review');
 });
 
 console.log('\nEvent grouping and density');
