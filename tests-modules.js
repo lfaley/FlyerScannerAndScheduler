@@ -3944,6 +3944,21 @@ module.exports = async function runModuleTests(test){
       'is now dead and nothing else would have noticed. Found ' + sites.length);
   });
 
+  test('there is ONE way to build S from parsed JSON (v9.78)', () => {
+    // DATA-LOSS-PLAN.md scaffold. Three copies disagreed; a fourth must not
+    // appear. This reads the code, not the comments.
+    const src = fs.readFileSync('index.html', 'utf8');
+    assert.ok(/function adoptParsed\(parsed\)\{/.test(src.replace(/\s+/g, ' ').replace(/ \{/g, '{')),
+      'adoptParsed is gone');
+    const fn = src.split('function load(){')[1].split('\n}')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/adoptParsed\(JSON\.parse\(raw\)\)/.test(fn),
+      'load() no longer routes through adoptParsed');
+    // ...and it must not have kept its own copy of the merge/migrate logic.
+    assert.ok(!/migrate\(/.test(fn), 'load() migrates on its own again');
+    assert.ok(!/Object\.assign/.test(fn), 'load() merges on its own again');
+  });
+
   test('the AI transport does not extract JSON -- that would eat a prose answer', () => {
     // v9.77. callLocalModel served both the JSON callers and the ONE prose
     // caller (Ask). It returned cleanModelText(out), whose extractJson returns

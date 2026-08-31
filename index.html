@@ -3847,26 +3847,49 @@ const SLOTS = ['breakfast','lunch','snack','dinner','dessert'];
 // and const/let are in the temporal dead zone until their line executes.
 let S = load();
 
-function load(){
+/**
+ * Turn a PARSED save/backup object into a state object: check the shape, merge
+ * onto blank() so a key added since the file was written is never missing,
+ * merge the nested settings sub-objects, and migrate. THROWS on a shape it
+ * cannot use -- the caller decides what that means (quarantine on boot, or
+ * refuse an import).
+ *
+ * v9.78, scaffold step of DATA-LOSS-PLAN.md. This logic existed THREE times and
+ * the copies disagreed: load() merged the nested settings and migrated,
+ * importBackup() did neither, restoreSnapshot() did neither. So a restored
+ * backup ran the whole session on an un-upgraded shape, and a restored snapshot
+ * silently lost any settings.alerts key added since it was taken. One function,
+ * three callers, and no fourth way to build S out of JSON.
+ *
+ * Pure with respect to storage: it reads no localStorage and writes none. That
+ * is what lets a caller validate a file BEFORE destroying what it would replace.
+ */
+function adoptParsed(parsed){
+  // Shape check -- a JSON blob that parses but isn't ours is still unusable
+  if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.events)){
+    throw new Error('Saved data is not in the expected format');
+  }
   const base = blank();
+  // Captured BEFORE the assign below replaces base.settings with the SAVED
+  // settings object. Reading it afterwards would merge the save against itself
+  // and every default added since the file was written would be lost.
+  const defaults = base.settings;
+  const s = Object.assign(base, parsed);
+  // settings is nested, so merge it rather than letting old saves drop new keys
+  s.settings = Object.assign({}, defaults, parsed.settings||{});
+  s.settings.alerts = Object.assign({}, defaults.alerts, (parsed.settings||{}).alerts||{});
+  s.settings.starCarry = Object.assign({}, (parsed.settings||{}).starCarry||{});
+  // Version comes from the SAVED data -- blank() already stamped the current
+  // one onto the merge target, so reading it from `s` would skip migration.
+  return migrate(s, parsed.schemaVersion);
+}
+
+function load(){
   let raw = null;
   try{
     raw = localStorage.getItem('flyersnap');
-    if(!raw) return base;
-    const parsed = JSON.parse(raw);
-    // Shape check — a JSON blob that parses but isn't ours is still unusable
-    if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.events)){
-      throw new Error('Saved data is not in the expected format');
-    }
-    const defaults = base.settings;
-    const s = Object.assign(base, parsed);
-    // settings is nested, so merge it rather than letting old saves drop new keys
-    s.settings = Object.assign({}, defaults, parsed.settings||{});
-    s.settings.alerts = Object.assign({}, defaults.alerts, (parsed.settings||{}).alerts||{});
-    s.settings.starCarry = Object.assign({}, (parsed.settings||{}).starCarry||{});
-    // Version comes from the SAVED data — blank() already stamped the current
-    // one onto the merge target, so reading it from `s` would skip migration.
-    return migrate(s, parsed.schemaVersion);
+    if(!raw) return blank();
+    return adoptParsed(JSON.parse(raw));
   }catch(e){
     // NEVER silently start empty — that would let the next save() overwrite the
     // only copy. Quarantine the bytes, lock writes, and let the user decide.
@@ -4452,8 +4475,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.77';
-const APP_TAGLINE = 'answers that arrive whole';
+const APP_VERSION = 'v9.78';
+const APP_TAGLINE = 'one way to read a saved file';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never

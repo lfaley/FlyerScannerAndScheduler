@@ -84,6 +84,38 @@ test('healthy data loads with defaults merged in', () => {
   assert.deepStrictEqual(S.settings.alerts.deadline, [7, 1]);
 });
 
+test('adoptParsed fills in a default added since the file was written (v9.78)', () => {
+  // The whole reason load() merged nested settings and the other two paths did
+  // not. A save written before `alerts.event` existed must still come back with
+  // it, or the reminders screen reads undefined.
+  const s = adoptParsed({ events: [], settings: { apiKey: 'k', alerts: { deadline: [3] } } });
+  assert.deepStrictEqual(s.settings.alerts.deadline, [3], 'the saved value must win');
+  assert.deepStrictEqual(s.settings.alerts.event, [2, 0], 'the missing key must come from blank()');
+  assert.strictEqual(s.settings.apiKey, 'k');
+});
+
+test('adoptParsed migrates, using the version in the FILE (v9.78)', () => {
+  // schemaVersion 1 means every migration block must run. The from<3 block
+  // gives an event its personIds, so that is the cheapest observable proof
+  // that migrate() ran rather than being skipped.
+  const s = adoptParsed({ events: [{ id:'e1', title:'X', date:'2026-12-01', kidId:'k1' }],
+                          kids: [{ id:'k1', name:'Olivia' }], schemaVersion: 1 });
+  assert.deepStrictEqual(s.events[0].personIds, ['k1'], 'migrate() did not run');
+  assert.strictEqual(s.schemaVersion, SCHEMA_VERSION, 'the version was not stamped forward');
+});
+
+test('adoptParsed REFUSES a shape it cannot use, and writes nothing (v9.78)', () => {
+  // It throws rather than returning a broken state, so an importer can check a
+  // file BEFORE overwriting anything. Storage must be untouched either way.
+  const before = localStorage.getItem('flyersnap');
+  [null, 42, [1,2,3], {}, { events:'nope' }, { events:{} }].forEach(bad => {
+    assert.throws(() => adoptParsed(bad), /not in the expected format/,
+      'accepted a bad shape: ' + JSON.stringify(bad));
+  });
+  assert.strictEqual(localStorage.getItem('flyersnap'), before,
+    'adoptParsed touched storage; it must be pure with respect to it');
+});
+
 test('a full disk warns loudly, once', () => {
   boot(GOOD);
   storageWarned = false; globalThis.lastAlert = null;
