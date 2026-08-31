@@ -759,3 +759,108 @@ the other proves a first scan is never interrupted.
 
 `node tests.js` 829/0 · `inline.js --check` in sync · a11y audit clean across all
 48 screens.
+
+
+---
+
+## 16. A1 as built (v9.89) — and the guard that was supposed to prevent it
+
+### The write
+
+`performRoute`'s NAVIGATE branch did this:
+
+```js
+    if(target === 'notes' || target === 'lists'){
+      S.settings.notesArea = target === 'lists' ? 'lists' : 'notes';
+      save();
+    }
+```
+
+CLAUDE.md states, under "THE ASSISTANT CAN ACT": *"`performRoute()` NEVER writes.
+It resolves an entity and proposes."* and, of that list, *"The safety properties
+below are each enforced by a test, and none of them is optional."* The write made
+the first sentence false and, as it turns out, the second one too.
+
+### The guard did not guard
+
+`tests-modules.js` has a test literally named
+`performRoute never writes; confirmPendingAction is the only path that does`.
+It checked a **denylist of seven shapes** — `S.lists.push`, `S.listItems.push`,
+`S.chores.push`, `S.events.push`, `softDelete(`, `completeChore(`, `markHandled(`.
+`S.settings.notesArea = ...; save();` matches none of them.
+
+**Demonstrated, not argued.** With the write restored and the old guard back, the
+suite reports **833 passed, 0 failed**. A denylist is the wrong instrument for an
+invariant whose entire point is that *unknown* writes are the danger — the same
+lesson as the `errorReports` denylist-to-allowlist change in v9.77, which the
+review flagged and which had not been generalised.
+
+The guard now asserts two closed properties instead of enumerating shapes:
+
+```js
+    assert.ok(!/\bsave\(/.test(pr), 'performRoute persists something ...');
+    const assign = pr.match(/\bS\.[A-Za-z_.]+\s*=[^=]/);
+    assert.strictEqual(assign, null, 'performRoute assigns into S: ' + ...);
+```
+
+Nothing reaches storage except through `save()`; nothing changes the running app
+except through an assignment into `S`. The seven named shapes are kept underneath,
+because a named shape gives a better failure message than a regex.
+
+A second test was added because those assertions are only as good as the slice
+they read: `the guarded slice really is performRoute and nothing else` fails if a
+function is ever moved between `performRoute` and `confirmPendingAction`, which
+would otherwise put *its* `save()` inside the guard and invite someone to weaken
+the guard rather than move the function.
+
+### The fix
+
+The behaviour the write existed for is real: both halves of the Notes tab are
+addressable by name, and asking Gordon for notes must not drop you on lists just
+because that is where you were last. `nav()` **already did exactly this write** for
+`'lists'` — half the rule lived in the router and half in the navigation function.
+It now lives entirely in `nav`, which gained an optional `area`:
+
+```js
+function nav(tab, area){
+  ...
+  if(tab === 'lists'){ area = 'lists'; tab = 'notes'; }
+  if(area && S.settings) S.settings.notesArea = area === 'lists' ? 'lists' : 'notes';
+```
+
+and the NAVIGATE branch is now purely a destination and a navigation.
+
+No `save()` — deliberately, matching what `nav('lists')` has always done. The area
+is where you are looking; it rides along with the next write. A tab **tap** passes
+no area and is unchanged, so the Notes tab still remembers which half you were on.
+
+### One existing test needed its split widened
+
+`choosing a tab is a deliberate departure and clears the origin` split on the
+literal `'function nav(tab){'` and broke the moment `nav` gained a parameter —
+while `nav` was doing exactly the right thing. Its own comment already recorded
+being bitten this way once in v9.61, when it was tied to the function being a
+one-liner. It now splits on `'function nav('`: match the name, not the shape.
+Intent and every assertion unchanged.
+
+### Tests: 834 total, from 829
+
+| # | Revert | Result |
+|---|---|---|
+| **M52** | the write back in `performRoute` | **RED ×2** — the new guard AND `a NAVIGATE route changes no stored data` |
+| **M53** | the write back **and** the old denylist guard restored | **GREEN, 833/0** — the proof that the old guard enforced nothing |
+| **M54** | `nav` ignores its `area` argument | **RED ×3** — including the pre-existing `nav("lists") still works` guard |
+| **M55** | a plain notes tab tap forces the notes half | **RED** — `TAPPING the notes tab still remembers which half you were on` |
+
+M54 and M55 are the matched pair: one proves a named area moves you, the other
+proves a plain tab tap does not.
+
+`node tests.js` 834/0 · `inline.js --check` in sync · a11y audit clean across all
+48 screens.
+
+### Worth doing separately
+
+`quickRoute`'s change-verb guard, and the routing safety list in CLAUDE.md more
+broadly, are also written as enumerations. This batch changed one of them. The
+others have not been checked and should not be assumed sound because this one was
+fixed.

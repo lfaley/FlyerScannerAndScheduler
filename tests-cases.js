@@ -2162,6 +2162,53 @@ test('the assistant refuses to draft over a batch instead of destroying it (v9.8
   });
 });
 
+// ---------------------------------------------------------------------------
+// A1 (v9.89): performRoute proposes and navigates. It does not write.
+// ---------------------------------------------------------------------------
+test('asking for notes lands on notes, not on wherever you were last (v9.89)', () => {
+  // The behaviour the removed write existed to produce. It has to survive the
+  // fix, or the fix is a regression dressed up as a cleanup.
+  boot(GOOD);
+  setNotesArea('lists');
+  assert.strictEqual(notesArea(), 'lists', 'fixture wrong');
+  nav('notes', 'notes');
+  assert.strictEqual(notesArea(), 'notes', 'asking for notes still drops you on lists');
+  assert.strictEqual(view.tab, 'notes');
+});
+
+test('asking for lists still lands on lists (v9.89)', () => {
+  boot(GOOD);
+  setNotesArea('notes');
+  nav('lists');
+  assert.strictEqual(notesArea(), 'lists', 'the lists translation stopped working');
+  assert.strictEqual(view.tab, 'notes', "'lists' is a half of the notes tab, not a tab");
+});
+
+test('TAPPING the notes tab still remembers which half you were on (v9.89)', () => {
+  // nav() gained a parameter; a tab tap passes none and must be unchanged. If
+  // this ever snaps to 'notes', the tab has stopped remembering where you were.
+  boot(GOOD);
+  setNotesArea('lists');
+  nav('notes');
+  assert.strictEqual(notesArea(), 'lists',
+    'a plain tab tap now overrides the half you were on');
+});
+
+test('a NAVIGATE route changes no stored data (v9.89)', () => {
+  // Stated as the invariant rather than as the one symptom: route, then compare
+  // the whole persisted blob. Synchronous on purpose -- nav() is deferred 350ms
+  // by performRoute, and this asserts on what the ROUTE did, not what the later
+  // navigation does. (An async test here would also race every test after it;
+  // see the v9.88 assistant test for that trap.)
+  boot(GOOD);
+  setNotesArea('lists');
+  save();
+  const before = localStorage.getItem('flyersnap');
+  performRoute({ consequence: CONSEQUENCE.NAVIGATE, params:{ screen:'notes' } });
+  assert.strictEqual(localStorage.getItem('flyersnap'), before,
+    'performRoute persisted something on its way to a navigation');
+});
+
 console.log('\nEvent grouping and density');
 
 test('events fall into the right time buckets', () => {

@@ -1910,7 +1910,11 @@ module.exports = async function runModuleTests(test){
     // one-liner and this split on '\n' -- so the guard passed for the shape of
     // the function rather than its content, and went red the moment nav() grew
     // a second line while still doing exactly the right thing.
-    const fn = script.split('function nav(tab){')[1].split('\n}')[0];
+    //
+    // v9.89: the SIGNATURE is not part of the contract either. This split on
+    // 'function nav(tab){' and broke the moment nav gained a second parameter,
+    // again while doing exactly the right thing. Match the name, not the shape.
+    const fn = script.split('function nav(')[1].split('\n}')[0];
     assert.ok(/askOrigin = null/.test(fn),
       'a stale origin would teleport the user somewhere they did not choose');
     assert.ok(/view = \{tab/.test(fn), 'nav() no longer sets the view');
@@ -2336,10 +2340,40 @@ module.exports = async function runModuleTests(test){
     const pr = script.split('async function performRoute(')[1]
                      .split('function confirmPendingAction(')[0];
     // A write here would bypass the confirm step entirely.
+    //
+    // v9.89: this list of seven shapes is a DENYLIST, and a denylist is the
+    // wrong instrument for an invariant whose whole point is that UNKNOWN
+    // writes are the danger. It let `S.settings.notesArea = ...; save();` sit
+    // in the NAVIGATE branch from v9.61 to v9.89 while reporting green, and
+    // CLAUDE.md cited this very test as the thing that made "performRoute NEVER
+    // writes" true. Same lesson as the errorReports allowlist in v9.77.
+    //
+    // The two assertions below are closed rather than enumerated: nothing
+    // reaches storage except through save(), and nothing changes the running
+    // app except through an assignment into S. The shape list is kept beneath
+    // them because a named shape gives a better failure message than a regex.
+    assert.ok(!/\bsave\(/.test(pr),
+      'performRoute persists something -- it must only propose. Move the write to the ' +
+      'function whose job it is (nav, setNotesArea, ...) or into confirmPendingAction.');
+    const assign = pr.match(/\bS\.[A-Za-z_.]+\s*=[^=]/);
+    assert.strictEqual(assign, null,
+      'performRoute assigns into S: ' + (assign && assign[0].trim()));
     [/S\.lists\.push/, /S\.listItems\.push/, /S\.chores\.push/, /S\.events\.push/,
      /softDelete\(/, /completeChore\(/, /markHandled\(/]
       .forEach(re => assert.ok(!re.test(pr), 'performRoute writes: ' + re));
     assert.ok(/pendingAction = /.test(pr), 'and it must still propose something');
+  });
+
+  test('the guarded slice really is performRoute and nothing else (v9.89)', () => {
+    // The two assertions above are only as good as the slice they read. If a
+    // function were ever moved between performRoute and confirmPendingAction,
+    // ITS save() would fail the guard and someone would "fix" the guard.
+    const pr = script.split('async function performRoute(')[1]
+                     .split('function confirmPendingAction(')[0];
+    const others = (pr.match(/^(?:async )?function \w+/gm) || []);
+    assert.deepStrictEqual(others, [],
+      'another function now sits inside the performRoute guard: ' + others.join(', '));
+    assert.ok(pr.length > 2000, 'the slice is suspiciously small -- the split has stopped working');
   });
 
   test('every CONFIRM intent has a branch that resolves before it proposes', () => {

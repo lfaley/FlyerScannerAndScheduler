@@ -4652,7 +4652,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.88';
+const APP_VERSION = 'v9.89';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -5520,15 +5520,29 @@ function withTransition(fn){
   }
   fn();
 }
-function nav(tab){
+/**
+ * Move to a tab, optionally landing on a named half of the Notes tab.
+ *
+ * `area` exists so performRoute does not have to reach into S.settings itself.
+ * Both halves of the Notes tab are addressable by name -- asking Gordon for
+ * notes must not drop you on lists just because that is where you were last --
+ * and until v9.89 the router achieved that by writing S.settings.notesArea and
+ * calling save(), which made the app's stated invariant ("performRoute NEVER
+ * writes", CLAUDE.md) untrue. nav() already did exactly this write for 'lists',
+ * so the rule belongs here in full rather than half here and half in the router.
+ *
+ * A tab TAP passes no area and is unchanged: the Notes tab still remembers
+ * which half you were on. Only a caller that names an area moves you.
+ */
+function nav(tab, area){
   closeSheet(); askOrigin = null;
   // 'lists' was a tab of its own until v9.61 and is still the name people, the
   // router and the a11y audit use. Translate it instead of stranding the caller
   // on a view.tab that the `tabs` map no longer answers to.
-  if(tab === 'lists'){
-    if(S.settings) S.settings.notesArea = 'lists';
-    tab = 'notes';
-  }
+  if(tab === 'lists'){ area = 'lists'; tab = 'notes'; }
+  // No save() here, deliberately, matching what nav('lists') has always done:
+  // this is where you are looking, and it rides along with the next write.
+  if(area && S.settings) S.settings.notesArea = area === 'lists' ? 'lists' : 'notes';
   view = {tab, sub:null, data:null};
   withTransition(render);
 }
@@ -6680,13 +6694,11 @@ async function performRoute(route, question){
   // ---- NAVIGATE ---------------------------------------------------------
   if(route.consequence === CONSEQUENCE.NAVIGATE){
     const target = route.params.screen;
-    // Both halves of the Notes tab are addressable by name. Asking for notes
-    // must not drop you on lists just because that is where you were last.
-    if(target === 'notes' || target === 'lists'){
-      S.settings.notesArea = target === 'lists' ? 'lists' : 'notes';
-      save();
-    }
-    setTimeout(() => nav(target), 350);
+    // Both halves of the Notes tab are addressable by name -- asking for notes
+    // must not drop you on lists just because that is where you were last. That
+    // is nav()'s job now: this branch computes a destination and goes there, and
+    // touches no state of its own. nav('lists') already forces its own area.
+    setTimeout(() => nav(target, target === 'notes' ? 'notes' : null), 350);
     return { answer:`Opening ${target}.`, cited:[], domain:'events', sourceNote:'' };
   }
 
