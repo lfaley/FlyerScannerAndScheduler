@@ -3944,6 +3944,34 @@ module.exports = async function runModuleTests(test){
       'is now dead and nothing else would have noticed. Found ' + sites.length);
   });
 
+  test('render() puts the failed-save banner above every screen (v9.79)', () => {
+    // The wiring half of the banner test. The behavioural half cannot reach
+    // this, because the harness hands out a fresh element per getElementById.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('function render(){')[1].split('\n}')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(/saveFailedBanner\(\)/.test(fn),
+      'render() no longer shows the banner -- a failing save is silent again');
+    // ...and above the screen, not below it, or it scrolls out of sight.
+    assert.ok(/saveFailedBanner\(\) \+ m\.innerHTML/.test(fn),
+      'the banner must be prepended, not appended');
+  });
+
+  test('a failed save can never report itself through logProblem (v9.79)', () => {
+    // logProblem ends with save(). Logging from save()'s CATCH would recurse
+    // until the stack blew. The record is written from the SUCCESS path, after
+    // the flag is cleared. This reads the shipped code, not the comments.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const fn = src.split('function save(){')[1].split('\n}')[0]
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const halves = fn.split('catch');
+    assert.strictEqual(halves.length, 2, 'save() no longer has exactly one catch');
+    assert.ok(/logProblem\(/.test(halves[0]), 'the recovery record is gone from the success path');
+    assert.ok(!/logProblem\(/.test(halves[1]), 'save()\'s catch calls logProblem -- that recurses');
+    assert.ok(/saveFailed = null;[\s\S]{0,200}logProblem\(/.test(halves[0]),
+      'the flag must be cleared BEFORE logging, or the nested save() recurses');
+  });
+
   test('there is ONE way to build S from parsed JSON (v9.78)', () => {
     // DATA-LOSS-PLAN.md scaffold. Three copies disagreed; a fourth must not
     // appear. This reads the code, not the comments.

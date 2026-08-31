@@ -238,6 +238,10 @@ export function buildDiagnostics(state, meta){
       provider: m.provider || null,
       model: m.model || null,
       hasApiKey: !!(s.settings && s.settings.apiKey),   // whether, never what
+      // Did the browser agree to keep this origin's data? MDN: Safari and the
+      // Chromium browsers decide this silently from the user's interaction
+      // history, so it can change over time and is worth reading, not assuming.
+      persisted: m.persisted === undefined ? null : !!m.persisted,
       aiEnabled: !(s.settings && s.settings.aiEnabled === false),
       localBaseUrl: m.includeLocalUrl ? redact((s.settings || {}).localBaseUrl || '') : null,
       // The context window the local server actually allocated, when the app

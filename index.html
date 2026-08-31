@@ -1060,7 +1060,16 @@ const GORDON_BASE_URL = 'https://desktop-pvl0f9c.tail1c32c9.ts.net/v1';
 const GORDON_MODEL    = 'qwen3-vl:8b-instruct-q4_K_M';
 
 let loadError = null;
-let storageWarned = false;
+// A failed save is STICKY until one succeeds. It used to be a boolean that
+// suppressed the warning after the first failure, so save #2 onward wrote
+// nothing and said nothing (DATA-LOSS-PLAN.md D2). Shape: null, or
+// { kind:'full'|'blocked', at, count }.
+let saveFailed = null;
+// Whether the browser granted persistent storage. navigator.storage.persist()
+// returns a boolean the app used to throw away -- and "was this phone even
+// allowed to keep my data?" is the first question worth asking when something
+// has gone missing. null = not asked yet, or not supported.
+let storagePersisted = null;
 
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
   redemptions:[], lists:[], listItems:[], notes:[], noteFolders:[], noteLabels:[],
@@ -3429,6 +3438,10 @@ function buildDiagnostics(state, meta){
       provider: m.provider || null,
       model: m.model || null,
       hasApiKey: !!(s.settings && s.settings.apiKey),   // whether, never what
+      // Did the browser agree to keep this origin's data? MDN: Safari and the
+      // Chromium browsers decide this silently from the user's interaction
+      // history, so it can change over time and is worth reading, not assuming.
+      persisted: m.persisted === undefined ? null : !!m.persisted,
       aiEnabled: !(s.settings && s.settings.aiEnabled === false),
       localBaseUrl: m.includeLocalUrl ? redact((s.settings || {}).localBaseUrl || '') : null,
       // The context window the local server actually allocated, when the app
@@ -3908,14 +3921,70 @@ function save(){
   try{
     snapshot();                    // stash the last known good copy first
     localStorage.setItem('flyersnap', JSON.stringify(S));
-    storageWarned = false;
+    if(saveFailed){
+      // Cleared FIRST, then logged. logProblem ends with its own save(), so
+      // logging while the flag is still set would recurse; clearing first makes
+      // that nested save a no-op on this branch. Logging from the FAILURE path
+      // would recurse without end, which is why the record happens here.
+      const was = saveFailed;
+      saveFailed = null;
+      logProblem('Storage', was.kind === 'full'
+        ? 'Storage filled up — edits were not being saved'
+        : 'The browser refused to save — edits were not being saved',
+        was.count + ' failed save' + (was.count === 1 ? '' : 's') + ' before it recovered');
+    }
   }catch(e){
-    // Quota exceeded, private mode, etc. Silence here would lose edits invisibly.
-    if(!storageWarned){
-      storageWarned = true;
-      alert('Could not save — storage on this phone is full.\n\nExport a backup from Settings now, then clear out old past events or recipes.');
+    // Silence here loses edits invisibly, and that is exactly what the previous
+    // version did from the SECOND failure onward: one alert, then nothing, while
+    // the user kept typing into memory that dies with the tab.
+    //
+    // The alert still fires once -- an interruption every keystroke is its own
+    // kind of broken -- but the STICKY flag drives a banner that cannot be
+    // dismissed and forgotten, and the failure is recorded the moment a save
+    // works again. Material's snackbar rule is the same idea: a message about
+    // something the user must act on should not vanish on a timer.
+    const kind = isQuotaError(e) ? 'full' : 'blocked';
+    const first = !saveFailed;
+    saveFailed = { kind, at: new Date().toISOString(),
+                   count: (saveFailed ? saveFailed.count : 0) + 1 };
+    if(first){
+      alert(kind === 'full'
+        ? 'Could not save — storage on this phone is full.\n\nExport a backup from Settings now, then clear out old past events or recipes.'
+        : 'Could not save — this browser is not letting FlyerSnap store data.\n\nThis usually means private browsing, or site data is blocked for this site.');
     }
   }
+}
+
+/**
+ * Is this throw "the disk is full", or "this browser will not let us store
+ * anything"? They need different sentences: telling someone in private
+ * browsing to delete old events will not help them.
+ *
+ * MDN's storageAvailable() helper is the source
+ * (developer.mozilla.org/en-US/docs/Web/API/Web_Storage_API/Using_the_Web_Storage_API).
+ * It tests `e.name === 'QuotaExceededError'` AND that something is already
+ * stored -- because a private-browsing localStorage can be present, empty and
+ * zero-quota, which throws the same error for an entirely different reason.
+ *
+ * MDN also checks `e instanceof DOMException`. We check the NAME, which is the
+ * discriminating field: the Node test harness has no DOMException, and a guard
+ * that cannot be exercised by a test is a guard nobody has proven.
+ */
+function isQuotaError(e){
+  if(!e || e.name !== 'QuotaExceededError') return false;
+  try{ return localStorage.length !== 0; }catch(_){ return false; }
+}
+
+/** The banner render() puts above every screen while saving is broken. */
+function saveFailedBanner(){
+  if(!saveFailed) return '';
+  return `<div class="card" style="border-left:5px solid var(--red)">
+    <div class="title">Not saving — your changes are only on this screen</div>
+    <div class="help" style="margin:8px 0 0">${saveFailed.kind === 'full'
+      ? 'Storage on this phone is full. Export a backup now, then clear out old records.'
+      : 'This browser is not letting FlyerSnap store data — private browsing, or site data is blocked for this site.'}</div>
+    <button class="btn alt" style="margin-top:10px" onclick="nav('settings');sub('setBackup')">Open Backup</button>
+  </div>`;
 }
 
 // ---------- Pruning ----------
@@ -4475,8 +4544,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.78';
-const APP_TAGLINE = 'one way to read a saved file';
+const APP_VERSION = 'v9.79';
+const APP_TAGLINE = 'a failed save says so';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never
@@ -5410,6 +5479,8 @@ function render(){
   m.classList.remove('hascomposer');   // only the Ask screen has a composer
   m.classList.remove('isform');        // only form screens need the extra clearance
   (view.sub ? subs[view.sub] : tabs[view.tab])(m);
+  // Above every screen, not just the one where the save happened to fail.
+  if(saveFailed) m.innerHTML = saveFailedBanner() + m.innerHTML;
   if(changedScreen){
     // Retrigger the animation. Only on a genuine navigation -- animating every
     // re-render would make simple taps feel laggy.
@@ -11693,6 +11764,7 @@ function buildDiagnosticsFile(){
     // Null until something has asked. Worth having in the file either way:
     // "we never found out" and "it is 4096" are different problems.
     localContext: typeof localCtx === 'undefined' ? null : localCtx,
+    persisted: storagePersisted,
     userAgent: navigator.userAgent,
   });
   const name = 'flyersnap-diagnostics-' + todayISO() + '.json';
@@ -11826,7 +11898,9 @@ if('serviceWorker' in navigator){
   });
 }
 // Ask iOS to protect this app's storage from eviction
-if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+if(navigator.storage && navigator.storage.persist){
+  navigator.storage.persist().then(ok => { storagePersisted = !!ok; }).catch(()=>{});
+}
 // A manifest shortcut (long-press the home-screen icon) opens
 // ?go=capture. Honour it before the first paint so the app does not flash
 // the events list on the way. Unknown values are ignored -- this is a URL,

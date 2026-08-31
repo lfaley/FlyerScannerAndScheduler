@@ -116,16 +116,79 @@ test('adoptParsed REFUSES a shape it cannot use, and writes nothing (v9.78)', ()
     'adoptParsed touched storage; it must be pure with respect to it');
 });
 
-test('a full disk warns loudly, once', () => {
+test('a full disk alerts once, but the failure STAYS on the record (v9.79)', () => {
+  // REWRITTEN in v9.79, and the old version is worth stating because it was
+  // passing for the wrong reason. It asserted "nags once, not every keystroke"
+  // -- true, and desirable -- but the app had nothing ELSE to show for the
+  // second failure: no flag, no banner, no log. So the test certified the
+  // silence that was losing the edits. The alert is still once; what is new is
+  // that saveFailed persists, which drives the banner on every screen.
   boot(GOOD);
-  storageWarned = false; globalThis.lastAlert = null;
+  saveFailed = null; globalThis.lastAlert = null;
   localStorage._fail = true;
   save();
-  assert.ok(/storage on this phone is full/i.test(globalThis.lastAlert || ''));
+  assert.ok(/storage on this phone is full/i.test(globalThis.lastAlert || ''),
+    'the first failure must still say something');
+  assert.ok(saveFailed, 'the failure left no trace');
+  assert.strictEqual(saveFailed.kind, 'full');
+  assert.strictEqual(saveFailed.count, 1);
+
   globalThis.lastAlert = null;
   save();
   assert.strictEqual(globalThis.lastAlert, null, 'nags once, not every keystroke');
+  assert.strictEqual(saveFailed.count, 2, 'the second failure was not recorded');
   localStorage._fail = false;
+  saveFailed = null;
+});
+
+test('a browser that refuses to store says so, not "your disk is full" (v9.79)', () => {
+  // Telling someone in private browsing to delete old events does not help
+  // them. isQuotaError separates the two using MDN's test.
+  boot(GOOD);
+  saveFailed = null; globalThis.lastAlert = null;
+  const realSet = localStorage.setItem;
+  localStorage.setItem = () => { const e = new Error('denied'); e.name = 'SecurityError'; throw e; };
+  save();
+  localStorage.setItem = realSet;
+  assert.strictEqual(saveFailed.kind, 'blocked');
+  assert.ok(/not letting FlyerSnap store data/i.test(globalThis.lastAlert || ''),
+    'wrong advice for a blocked-storage failure: ' + globalThis.lastAlert);
+  saveFailed = null;
+});
+
+test('a save that works again clears the flag and records what happened (v9.79)', () => {
+  boot(GOOD);
+  saveFailed = null; globalThis.lastAlert = null;
+  S.problems = [];
+  localStorage._fail = true;
+  save(); save();
+  localStorage._fail = false;
+  save();
+  assert.strictEqual(saveFailed, null, 'the banner would never go away');
+  const p = (S.problems || []).filter(x => x.where === 'Storage');
+  assert.strictEqual(p.length, 1, 'expected exactly one Storage problem, got ' + p.length);
+  assert.ok(/2 failed saves/.test(p[0].detail || ''), 'detail was: ' + p[0].detail);
+});
+
+test('the banner says which of the two problems it is, and vanishes with it (v9.79)', () => {
+  // NOTE ON METHOD: this checks the pure builder, not render()'s DOM write.
+  // The harness's document.getElementById returns a NEW stub object on every
+  // call (tests.js), so a test can never hold the same element render() writes
+  // to. The WIRING is pinned separately by a guard that reads render()'s source
+  // in tests-modules.js -- calling the helper and never checking the app uses
+  // it is the exact shape CLAUDE.md rule 30 was written about.
+  saveFailed = { kind:'full', at:'x', count:1 };
+  const full = saveFailedBanner();
+  assert.ok(/Not saving/.test(full), 'the banner does not lead with the outcome');
+  assert.ok(/storage on this phone is full/i.test(full), 'wrong text for a full disk');
+
+  saveFailed = { kind:'blocked', at:'x', count:1 };
+  const blocked = saveFailedBanner();
+  assert.ok(/not letting FlyerSnap store data/i.test(blocked), 'wrong text for blocked storage');
+  assert.ok(!/full/i.test(blocked), 'a blocked browser must not be told its disk is full');
+
+  saveFailed = null;
+  assert.strictEqual(saveFailedBanner(), '', 'the banner outlived the problem');
 });
 
 console.log('\nSnapshots');

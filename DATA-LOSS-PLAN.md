@@ -287,14 +287,16 @@ Three functions currently turn parsed JSON into `S`, and they disagree:
 | Phase | Content | Ships as | Risk |
 |---|---|---|---|
 | 1 | `adoptParsed` extracted, `load()` uses it, tests prove identical behaviour | **v9.78** ✅ **DONE** | low |
-| 2 | D2 (save failure) + persist-granted field | v9.78 | low; no stored-shape change |
-| 3 | F5 (import/restore through `adoptParsed`) | v9.79 | medium; touches the restore path |
-| 4a | D1 storage half: `deletedAt` at all eight sites, `SCHEMA_VERSION` 10, 30-day window, 24-hour floor, `oldDeleted` used | v9.80 | **highest — changes the stored shape.** Alone, so if anything is wrong there is exactly one suspect |
-| 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | v9.81 | medium; new screen, no stored-shape change |
+| 2 | D2 (save failure) + persist-granted field | **v9.79** ✅ **DONE** | low; no stored-shape change |
+| 3 | F5 (import/restore through `adoptParsed`) | v9.80 | medium; touches the restore path |
+| 4a | D1 storage half: `deletedAt` at all eight sites, `SCHEMA_VERSION` 10, 30-day window, 24-hour floor, `oldDeleted` used | v9.81 | **highest — changes the stored shape.** Alone, so if anything is wrong there is exactly one suspect |
+| 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | v9.82 | medium; new screen, no stored-shape change |
 
 **Correction to revision 1:** phase 1 was written as "no version bump — refactor only". That is wrong. `deploy.ps1` step 2 stops any push where `index.html` changed without `APP_VERSION` moving, and then stops again if `APP_VERSION` moved without `sw.js` `CACHE` moving (`deploy.ps1`, Step 2). A refactor that touches `index.html` is still a release. Phase 1 shipped as v9.78.
 
-**One thing phase 2 has to deal with, found while writing phase 1:** `tests-cases.js` has a test called `'a full disk warns loudly, once'` which pins the *current* once-only behaviour — i.e. an existing test asserts the D2 bug. It will have to be rewritten, loudly and with the reason stated, the same way v9.77 handled the `'Scanning'` row.
+**A harness limit found in phase 2, worth recording because it will come up again:** the test sandbox's `document.getElementById` returns a **new stub object on every call** (`tests.js`), so no test can hold the same element `render()` writes into. Anything about what `render()` puts on screen has to be split — behaviour tested on a pure builder, wiring pinned by a guard that reads `render()`'s source. Testing only the builder would be the exact failure rule 30 describes.
+
+**One thing phase 2 had to deal with, found while writing phase 1:** `tests-cases.js` has a test called `'a full disk warns loudly, once'` which pins the *current* once-only behaviour — i.e. an existing test asserts the D2 bug. It will have to be rewritten, loudly and with the reason stated, the same way v9.77 handled the `'Scanning'` row.
 
 D1 last is deliberate. It is the only one that migrates data, and CLAUDE.md is right that `migrate` is the most consequential code in the app. Splitting it at 4a/4b keeps the migration in a release of its own: if a tombstone goes missing after 4a there is one suspect, and if a screen misbehaves after 4b the data is already known good.
 
