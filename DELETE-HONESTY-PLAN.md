@@ -195,12 +195,23 @@ honest trade-off on adopting this fully — it is not free here.
 | **redeem** | Undo exists but lives only in a 7-second toast | **none after 7s** | no | good toast | **MEDIUM** |
 | **N1** | Storage screen says 90 days; the constant is 30 | n/a | n/a | contradicts the next screen | **HIGH (one word)** |
 | **N2** | Past-events prune destroys a tombstone inside its 30 days | n/a | n/a | Recently Deleted shows a false countdown | **MEDIUM-HIGH** |
-| **D3** | "Done (remove nothing)" writes a permanent `notDuplicates` suppression, toasts "Kept everything" | **none** | no | **actively wrong** | **MEDIUM-HIGH** |
+| **D3** | "Done (remove nothing)" writes a permanent `notDuplicates` suppression, toasts "Kept everything" | ~~none~~ **yes** — see the correction below | no | **actively wrong** | **MEDIUM-HIGH** |
 | **D7b** | `bulkTag` overwrites `personIds` for N events | **none** | no | toast, no undo | **MEDIUM** |
 | **D8/D7c** | `clearChecked`, `bulkDelete`, `eventActions` remove | **yes** (Recently Deleted) | mixed | `clearChecked` silent | **LOW-MEDIUM** |
 
-The four rows with **no route back at all** — A3a, A2a, `redeem` after 7s, D3 — are the
-batch. Everything else is polish on top.
+**Correction (31 Aug, while building Phase 3).** The D3 row above said "none" for a
+route back. That is wrong, and it was wrong when I wrote it. Settings → Dismissed
+Warnings has listed every `notDuplicates` pair individually with a "Bring back"
+button since **v9.66** (`renderSetDismissed`, `restoreNotDuplicate`), and
+`dismissedCount()` counts them. I checked `applyDedupe` and `dismissGroup` and did
+not check the screen that undoes what they write, then filed the result as a
+verified finding. D3 is a *feedback* defect, not a data-loss one: the record is
+recoverable, but nothing told you a record had been written, so you would never
+think to go looking. That still needs fixing, and it is still rule 26 — it is one
+severity band lower than the table claimed.
+
+The rows with **no route back at all** are therefore A3a, A2a and `redeem` after 7s.
+Everything else is polish on top.
 
 ---
 
@@ -314,7 +325,7 @@ That is the mistake I made in the last plan; recording it so it is not repeated.
 |---|---|---|
 | **1** | N1 (the 90/30 word) and N2 (the prune rule) — the two places the app currently contradicts itself | **v9.84 — DONE**, see §10 |
 | **2** | §5.1 Option A: the five star-system edits | **v9.85 — DONE**, see §11 |
-| **3** | §5.3 D3 dedupe suppression + undo | v9.86 |
+| **3** | §5.3 D3 dedupe suppression + undo | **v9.86 — DONE**, see §12 |
 | **4** | §5.4 `bulkTag` undo, §5.5 the three feedback fixes | v9.87 |
 | **5** | §5.2 redemption undo from Star History — only if you want it, after costing | — |
 
@@ -519,3 +530,59 @@ have left half the condition untested.
 
 `node tests.js` 815/0 · `inline.js --check` in sync · a11y audit clean across all
 48 screens.
+
+
+---
+
+## 12. Phase 3 as built (v9.86)
+
+### The correction first
+
+§4 said D3 had no durable route back. It has had one since v9.66. See the
+correction inserted under the §4 table. The fix below is therefore about telling
+the truth, not about building a safety net that already existed.
+
+### Changes
+
+| # | Change |
+|---|---|
+| 1 | New `dedupeChoice(g)` returns **an id** (keep this one), **null** (an explicit "Keep both"), or **undefined** (no recorded choice). The old code used a plain `!keep`, which made "we do not know" and "the user reviewed these" write the same permanent record. |
+| 2 | `applyDedupe` records a suppression **only** for `null` — an actual review decision. |
+| 3 | The toast names both halves of what the tap did: `Removed 2 duplicates · 1 pair marked as different`. A tap that changes nothing now says `Nothing changed` rather than `Kept everything`. |
+| 4 | That toast carries an **Undo** which reverses the whole tap — un-deletes the removed copies (restoring `dirty` to what it was, not to `1`) and removes **only the keys this tap contributed**, exactly as `dismissGroup`'s undo has done since v9.66. |
+| 5 | The button says what tapping it will do: `Remove 2 duplicates, keep 1 pair`, or `✓ Done — mark 1 pair as different`. It no longer reads "remove nothing" on a tap that writes a permanent record. |
+| 6 | The screen's help text says "Keep both" is remembered, and names the screen that undoes it. |
+
+### A wrong comment, caught by mutation testing
+
+The first draft of `dedupeChoice`'s docblock asserted that the `undefined` case was
+reachable: dismissing one pair of a group of three would regroup the survivors under
+a new key. **M44 caught that it was not.** Folding `undefined` back into "keep both"
+failed the bogus-id test but *not* the regrouping test — because `dismissGroup`
+suppresses **every** pair in the group, which leaves no group at all, so that test
+was passing over an empty loop.
+
+Two things were wrong and both are fixed: the docblock now states plainly that the
+absent case is **not reachable through the interface today**, with the three reasons
+checked rather than assumed (`sub('dedupe')` has one caller; `openDedupe` records a
+choice for every group; `dismissGroup` acts on a group whole); and the test now
+asserts the property at the function level by clearing `dedupeKeep` directly, with
+the earlier wrong version described in its comment so nobody re-derives it.
+
+The distinction is kept because the *other* `undefined` case — a keep-id belonging to
+no member of the group — is reachable, and is the P5-07 defect shape.
+
+### Tests: 822 total, from 815
+
+Seven new. No existing test needed changing.
+
+| # | Revert | Result |
+|---|---|---|
+| **M41** | the old one-line toast | **RED ×4** — the honesty test, the undo test, and the two that depend on the undo existing |
+| **M42** | undo clears all suppressions, not only this tap's | **RED** — `undo removes only the keys THIS tap added` |
+| **M43** | undo no longer restores the removed copies | **RED** — `undo also puts back the copies the tap deleted` |
+| **M44** | fold "no recorded choice" back into "keep both" | **RED ×2** — the absent-choice test and the bogus-id test |
+| **M45** | the old `Done (remove nothing)` label | **RED** — `the button says what tapping it will do` |
+
+`node tests.js` 822/0 · `inline.js --check` in sync · a11y audit clean across all
+48 screens, `dedupe` included.

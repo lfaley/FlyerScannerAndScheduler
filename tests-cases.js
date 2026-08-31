@@ -3860,6 +3860,130 @@ test('P5-07: a keep-id belonging to no member of the group is refused', () => {
     'a bogus keep-id deleted the whole group');
 });
 
+// ---------------------------------------------------------------------------
+// Duplicate cleanup honesty (v9.86). The way back from a "not duplicates"
+// record has existed since v9.66 (Settings -> Dismissed Warnings). What was
+// missing was any indication that a record had been written at all: the button
+// read "Done (remove nothing)" and the toast said "Kept everything".
+// ---------------------------------------------------------------------------
+function dedupePair(){
+  boot(GOOD);
+  const d = dayAhead(6);
+  S.events = [
+    { id:'p1', title:'Spring Concert', date:d, kind:'event', deleted:false },
+    { id:'p2', title:'Spring Concert Night', date:d, kind:'event', deleted:false },
+  ];
+  S.settings.notDuplicates = [];
+  assert.strictEqual(duplicateGroups().length, 1, 'fixture does not flag as a duplicate');
+  openDedupe();
+  return dedupeGroupKey(duplicateGroups()[0]);
+}
+function captureToast(fn){
+  const real = toast;
+  let said = null, action = null;
+  toast = (m, a) => { said = m; action = a; };
+  try { fn(); } finally { toast = real; }
+  return { said, action };
+}
+
+test('a tap that only suppresses does not report "Kept everything" (v9.86)', () => {
+  const key = dedupePair();
+  setDedupeKeep(key, null);                       // "Keep both"
+  const { said } = captureToast(() => applyDedupe());
+  assert.strictEqual(S.settings.notDuplicates.length, 1, 'fixture wrong: nothing was suppressed');
+  assert.ok(/marked as different/.test(said),
+    'the tap wrote a permanent record and said: ' + JSON.stringify(said));
+});
+
+test('the suppression a tap wrote can be undone from that tap (v9.86)', () => {
+  const key = dedupePair();
+  setDedupeKeep(key, null);
+  const { action } = captureToast(() => applyDedupe());
+  assert.ok(action && action.fn, 'no way back was offered from the tap that wrote it');
+  action.fn();
+  assert.strictEqual(S.settings.notDuplicates.length, 0, 'undo left the suppression in place');
+});
+
+test('undo removes only the keys THIS tap added (v9.86)', () => {
+  const key = dedupePair();
+  S.settings.notDuplicates = ['older~decision'];
+  setDedupeKeep(key, null);
+  const { action } = captureToast(() => applyDedupe());
+  action.fn();
+  assert.deepStrictEqual(S.settings.notDuplicates, ['older~decision'],
+    'undo reached back and reversed a decision made earlier');
+});
+
+test('undo also puts back the copies the tap deleted (v9.86)', () => {
+  const key = dedupePair();
+  setDedupeKeep(key, 'p1');                       // keep p1, remove p2
+  const { said, action } = captureToast(() => applyDedupe());
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 1, 'fixture wrong: nothing was removed');
+  assert.ok(/Removed 1 duplicate/.test(said), said);
+  action.fn();
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 2, 'undo did not restore the removed copy');
+  assert.strictEqual(S.events.find(e => e.id === 'p2').dirty, undefined,
+    'undo left the restored row flagged as dirty');
+});
+
+test('a group with no recorded choice is left alone, not filed as a decision (v9.86)', () => {
+  // NOT reachable through the interface today -- openDedupe() records a choice
+  // for every group on screen, sub('dedupe') has no other caller, and
+  // dismissGroup() suppresses or restores a group whole, so no key can go
+  // missing while the screen is open. An earlier draft of this test claimed a
+  // reachable path (dismissing one pair of a group of three) and was wrong:
+  // dismissGroup suppresses ALL pairs in the group, which leaves no group at
+  // all, so the test passed over an empty loop -- for the wrong reason.
+  // Asserted at the function level instead, because "absent" and "keep both"
+  // must stay different answers.
+  boot(GOOD);
+  const d = dayAhead(9);
+  S.events = [
+    { id:'u1', title:'Field Trip', date:d, kind:'event', deleted:false },
+    { id:'u2', title:'Field Trip Forms', date:d, kind:'event', deleted:false },
+  ];
+  S.settings.notDuplicates = [];
+  assert.strictEqual(duplicateGroups().length, 1, 'fixture does not flag as a duplicate');
+  openDedupe();
+  dedupeKeep = {};                                  // no choice recorded for anything
+  applyDedupe();
+  assert.strictEqual(S.settings.notDuplicates.length, 0,
+    'a group with no recorded choice was filed as "reviewed, and different"');
+  assert.strictEqual(S.events.filter(e => !e.deleted).length, 2,
+    'a group with no recorded choice lost an event');
+});
+
+test('a keep-id in no member of the group records nothing either (v9.86)', () => {
+  // The existing P5-07 guard proves this state deletes nothing. It is also a
+  // DEFECT state, not a review, so it must not be filed as one.
+  boot(GOOD);
+  const d = dayAhead(8);
+  S.events = [
+    { id:'z1', title:'Recital', date:d, kind:'event', deleted:false },
+    { id:'z2', title:'Recital Night', date:d, kind:'event', deleted:false },
+  ];
+  S.settings.notDuplicates = [];
+  openDedupe();
+  setDedupeKeep(dedupeGroupKey(duplicateGroups()[0]), 'not-in-this-group');
+  applyDedupe();
+  assert.strictEqual(S.settings.notDuplicates.length, 0,
+    'a bogus keep-id was filed as "you reviewed these and they are different"');
+});
+
+test('the button says what tapping it will do, both halves (v9.86)', () => {
+  const key = dedupePair();
+  const m = { innerHTML:'' };
+  setDedupeKeep(key, null);
+  renderDedupe(m);
+  assert.ok(/mark 1 pair as different/.test(m.innerHTML),
+    'the button still hides the suppression behind "remove nothing": ' +
+    (m.innerHTML.match(/<button class="btn[^>]*>[^<]*/) || [''])[0]);
+  assert.ok(!/remove nothing/.test(m.innerHTML), 'the misleading label is still there');
+  setDedupeKeep(key, 'p1');
+  renderDedupe(m);
+  assert.ok(/Remove 1 duplicate/.test(m.innerHTML), 'the removal count went missing');
+});
+
 test('P4-01: sign-out only claims success when the token is really gone', () => {
   boot(GOOD);
   const realRemove = localStorage.removeItem;

@@ -4652,7 +4652,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.85';
+const APP_VERSION = 'v9.86';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -8462,31 +8462,81 @@ function openDedupe(){
 }
 function setDedupeKeep(key, id){ dedupeKeep[key] = id; render(); }
 
+/**
+ * What a group's on-screen choice actually was.
+ *
+ *   an id   -> keep that copy, remove the rest
+ *   null    -> the user tapped "Keep both": a reviewed decision
+ *   absent  -> no choice was recorded for this group
+ *
+ * The old code folded the third case into the second with a plain `!keep`, so
+ * "we do not know" and "the user reviewed these and they are different" wrote
+ * the same permanent record.
+ *
+ * Reachability, checked rather than assumed: `absent` cannot be produced
+ * through the interface today. openDedupe() records a choice for every group on
+ * screen, sub('dedupe') has no other caller, and dismissGroup() suppresses or
+ * restores a group's pairs as a whole, so no group's key can go missing while
+ * the screen is open. The distinction is kept anyway because the id-in-no-group
+ * case below IS reachable, and because folding an unknown into a user decision
+ * is precisely the shape that gave the P5-07 defect its teeth.
+ */
+function dedupeChoice(g){
+  const key = dedupeGroupKey(g);
+  if(!Object.prototype.hasOwnProperty.call(dedupeKeep, key)) return undefined;
+  const id = dedupeKeep[key];
+  // Belt and braces: even with a stable key, an id that is not in THIS group
+  // must never be treated as "keep this one" -- that is the shape that deleted
+  // both events. It is not a "keep both" either; it is a defect state, and a
+  // defect state must not be recorded as a decision the user made.
+  if(id && !g.some(e => e.id === id)) return undefined;
+  return id;
+}
+
 function applyDedupe(){
   const groups = duplicateGroups();
-  let removed = 0;
   if(!S.settings.notDuplicates) S.settings.notDuplicates = [];
+  const cleared = [];   // rows this tap deleted, with what they looked like first
+  const added = [];     // suppression keys this tap contributed, and only this tap
+
   groups.forEach(g => {
-    const keep = dedupeKeep[dedupeGroupKey(g)];
-    // Belt and braces: even with a stable key, an id that is not in THIS group
-    // must never be treated as "keep this one" -- that is the shape that
-    // deleted both events.
-    if(!keep || !g.some(e => e.id === keep)){
+    const keep = dedupeChoice(g);
+    if(keep === undefined) return;               // not reviewed -- leave it alone
+    if(keep === null){
       // "Keep both" means you have reviewed this pair and they are different.
       // Record it so the banner stops re-flagging the same events forever.
       for(let x = 0; x < g.length; x++)
         for(let y = x + 1; y < g.length; y++){
           const k = pairKey(g[x], g[y]);
-          if(S.settings.notDuplicates.indexOf(k) < 0) S.settings.notDuplicates.push(k);
+          if(S.settings.notDuplicates.indexOf(k) < 0){ S.settings.notDuplicates.push(k); added.push(k); }
         }
       return;
     }
     g.forEach(e => {
-      if(e.id !== keep){ markDeleted(e); e.dirty = 1; removed++; }
+      if(e.id !== keep){ cleared.push({ e, dirty: e.dirty }); markDeleted(e); e.dirty = 1; }
     });
   });
+
+  const removed = cleared.length, kept = added.length;
   save();
-  toast(removed ? `Removed ${removed} duplicate${removed===1?'':'s'}` : 'Kept everything');
+
+  // Say what the tap DID. Until v9.86 a tap that suppressed pairs and removed
+  // nothing reported "Kept everything" from a button labelled "remove nothing"
+  // -- while writing a permanent record that those events are different. The
+  // way back existed (Settings -> Dismissed Warnings, v9.66) but nothing told
+  // you there was anything to go back from. Rule 26.
+  const parts = [];
+  if(removed) parts.push(`Removed ${removed} duplicate${removed===1?'':'s'}`);
+  if(kept) parts.push(`${kept} pair${kept===1?'':'s'} marked as different`);
+  const undo = () => {
+    cleared.forEach(c => { unmarkDeleted(c.e); if(c.dirty === undefined) delete c.e.dirty; else c.e.dirty = c.dirty; });
+    S.settings.notDuplicates = (S.settings.notDuplicates || []).filter(k => !added.includes(k));
+    save(); render();
+    toast('Put back');
+  };
+  if(parts.length) toast(parts.join(' \u00b7 '), { label:'Undo', fn: undo });
+  else toast('Nothing changed');
+
   view = { tab:'events', sub:null, data:null };
   render();
 }
@@ -8500,7 +8550,9 @@ function renderDedupe(m){
     return;
   }
   let html = `<div class="help">These landed on the same day and look like the same thing.
-    Pick the copy to keep -- the others are removed. Nothing is deleted until you tap the button at the bottom.</div>`;
+    Pick the copy to keep -- the others are removed. Nothing happens until you tap the button at the bottom.
+    "Keep both" is remembered, so the pair stops being offered; you can change that in
+    Settings \u2192 Dismissed Warnings.</div>`;
 
   html += groups.map((g, i) => `<div class="card">
     <div style="font-size:13px;font-weight:800;margin-bottom:8px">${friendly(g[0].date)}</div>
@@ -8523,11 +8575,22 @@ function renderDedupe(m){
     </div>
   </div>`).join('');
 
-  const removing = groups.reduce((n, g) => n + (dedupeKeep[dedupeGroupKey(g)] ? g.length - 1 : 0), 0);
+  // Both halves of what the button will do, counted the same way applyDedupe
+  // counts them. The old label read "Done (remove nothing)" whenever nothing was
+  // being deleted -- on a tap that could still write permanent suppressions.
+  const removing = groups.reduce((n, g) => {
+    const k = dedupeChoice(g);
+    return n + (k ? g.length - 1 : 0);
+  }, 0);
+  const keeping = groups.filter(g => dedupeChoice(g) === null).length;
+  const label = removing && keeping
+      ? `Remove ${removing} duplicate${removing===1?'':'s'}, keep ${keeping} pair${keeping===1?'':'s'}`
+    : removing ? `Remove ${removing} duplicate${removing===1?'':'s'}`
+    : keeping ? `\u2713 Done \u2014 mark ${keeping} pair${keeping===1?'':'s'} as different`
+    : '\u2713 Done';
   html += `<div class="card" style="position:sticky;bottom:76px">
-    <button class="btn ${removing?'':'alt'}" onclick="applyDedupe()">
-      ${removing ? `Remove ${removing} duplicate${removing===1?'':'s'}` : '✓ Done (remove nothing)'}
-    </button></div><div style="height:70px"></div>`;
+    <button class="btn ${removing?'':'alt'}" onclick="applyDedupe()">${label}</button>
+    </div><div style="height:70px"></div>`;
   m.innerHTML = html;
 }
 
