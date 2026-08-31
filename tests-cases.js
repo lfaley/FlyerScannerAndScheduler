@@ -491,6 +491,89 @@ test('recent history is never pruned', () => {
   assert.ok(S.events.some(e => e.id === 'e9'), 'recent past event kept');
 });
 
+test('Recently Deleted gathers every collection, newest first (v9.83)', () => {
+  boot(null);
+  const t = (mins) => new Date(Date.now() - mins*60000).toISOString();
+  S.lists.push({ id:'L1', name:'Costco', deleted:true, deletedAt: t(30) });
+  S.events.push({ id:'E1', title:'Recital', date:'2026-12-01', deleted:true, deletedAt: t(5) });
+  S.kids.push({ id:'K1', name:'Ana', deleted:true, deletedAt: t(90) });
+  S.notes.push({ id:'N1', body:'Shopping ideas', deleted:false });
+  const rows = deletedRows();
+  assert.deepStrictEqual(rows.map(r => r.id), ['E1','L1','K1'], 'wrong order or wrong rows');
+  assert.deepStrictEqual(rows.map(r => r.label), ['Event','List','Person']);
+  assert.strictEqual(deletedCount(), 3);
+});
+
+test('a row with no deletedAt sorts last and says so (v9.83)', () => {
+  boot(null);
+  S.lists.push({ id:'L1', name:'Undated', deleted:true },
+                { id:'L2', name:'Dated', deleted:true, deletedAt: new Date().toISOString() });
+  assert.deepStrictEqual(deletedRows().map(r => r.id), ['L2','L1']);
+  assert.strictEqual(daysLeftDeleted(null), null);
+});
+
+test('days left counts down from the retention window (v9.83)', () => {
+  const t = (days) => new Date(Date.now() - days*24*3600*1000).toISOString();
+  assert.strictEqual(daysLeftDeleted(t(0)), KEEP_SOFT_DELETED_DAYS);
+  assert.strictEqual(daysLeftDeleted(t(KEEP_SOFT_DELETED_DAYS - 1)), 1);
+  assert.strictEqual(daysLeftDeleted(t(KEEP_SOFT_DELETED_DAYS + 5)), 0, 'never goes negative');
+});
+
+test('Restore brings a row back and leaves no stamp behind (v9.83)', () => {
+  boot(null);
+  S.lists.push({ id:'L1', name:'Costco', deleted:true, deletedAt: new Date().toISOString() });
+  restoreDeleted('lists', 'L1');
+  assert.strictEqual(S.lists[0].deleted, false);
+  assert.ok(!('deletedAt' in S.lists[0]), 'a restored row still carries a deletedAt');
+  assert.strictEqual(deletedCount(), 0);
+});
+
+test('Delete now really removes it (v9.83)', () => {
+  boot(null);
+  S.lists.push({ id:'L1', name:'Costco', deleted:true, deletedAt: new Date().toISOString() });
+  purgeDeleted('lists', 'L1');
+  assert.strictEqual(S.lists.length, 0, 'the row survived a permanent delete');
+});
+
+test('Delete now ASKS first, and taking it back leaves the row alone (v9.83)', () => {
+  // Added after a mutation run: deleting the confirm() from purgeDeleted was
+  // caught by NOTHING, because the harness answers every confirm with true.
+  // This is the app's one deliberate hard delete -- rule 26 says a permanent
+  // action must wear its manners, and a guard nobody has proven can fail is
+  // decoration.
+  boot(null);
+  S.lists.push({ id:'L1', name:'Costco', deleted:true, deletedAt: new Date().toISOString() });
+  const realConfirm = confirm;
+  let asked = false;
+  confirm = () => { asked = true; return false; };
+  try{ purgeDeleted('lists', 'L1'); }
+  finally { confirm = realConfirm; }
+  assert.ok(asked, 'a permanent delete happened without asking');
+  assert.strictEqual(S.lists.length, 1, 'saying No still deleted the row');
+});
+
+test('the Recently Deleted screen has a sentence when there is nothing in it (v9.83)', () => {
+  // Rule 29: an empty collection is TRUTHY, and a list with nothing in it is
+  // not a list. Checked on .length, and the empty case says something.
+  boot(null);
+  const m = { innerHTML:'' };
+  renderSetDeleted(m);
+  assert.ok(/Nothing deleted/.test(m.innerHTML), 'no empty state: ' + m.innerHTML);
+  assert.ok(!/Restore/.test(m.innerHTML), 'offered a Restore button with nothing to restore');
+});
+
+test('the screen lists what was deleted, with a way back and a way out (v9.83)', () => {
+  boot(null);
+  S.lists.push({ id:'L1', name:'Costco', deleted:true, deletedAt: new Date().toISOString() });
+  const m = { innerHTML:'' };
+  renderSetDeleted(m);
+  assert.ok(/Costco/.test(m.innerHTML), 'the row is not shown');
+  assert.ok(/restoreDeleted\('lists','L1'\)/.test(m.innerHTML), 'no Restore control');
+  assert.ok(/purgeDeleted\('lists','L1'\)/.test(m.innerHTML), 'no permanent-delete control');
+  assert.ok(new RegExp(KEEP_SOFT_DELETED_DAYS + ' days? left').test(m.innerHTML),
+    'the time remaining is not shown: ' + m.innerHTML);
+});
+
 test('markDeleted and unmarkDeleted are a pair (v9.82)', () => {
   const row = { id:'x', name:'thing', deleted:false };
   markDeleted(row);

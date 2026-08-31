@@ -1589,10 +1589,29 @@ module.exports = async function runModuleTests(test){
   // as reachable as one written into renderSetTrouble directly.
   const settingsFamily = ['renderSettings', 'renderSetPeople', 'renderSetAI',
     'renderSetCapabilities', 'renderSetReminders', 'renderSetAppearance',
-    'renderSetBackup', 'renderSetTrouble', 'renderSetDismissed',
+    'renderSetBackup', 'renderSetTrouble', 'renderSetDismissed', 'renderSetDeleted',
     'diagnosticsSection', 'appearanceSection', 'aiCapabilitySection']
     .map(n => (script.split('function ' + n + '(')[1] || '').split('\nfunction ')[0])
     .join('\n');
+
+  test('every Settings screen is inside the reachability corpus (v9.83)', () => {
+    // settingsFamily is a HAND-KEPT list, so a new settings screen can ship and
+    // fall silently OUTSIDE the guard that stops controls vanishing -- which is
+    // exactly what just happened to renderSetDeleted, and what is still true of
+    // gordonAuthCard's markup. This turns that gap into a failing test instead
+    // of a surprise six months from now.
+    const src = fs.readFileSync('index.html', 'utf8');
+    const subs = src.split('const subs = {')[1].split('};')[0];
+    const screens = [...new Set(subs.match(/\bset[A-Z][A-Za-z]*/g) || [])];
+    assert.ok(screens.length > 5, 'found only ' + screens.length + ' settings screens; the parse is wrong');
+    const listed = fs.readFileSync('./tests-modules.js', 'utf8')
+      .split('const settingsFamily = [')[1].split(']')[0];
+    const missing = screens
+      .map(s => 'render' + s[0].toUpperCase() + s.slice(1))
+      .filter(fn => !listed.includes("'" + fn + "'"));
+    assert.deepStrictEqual(missing, [],
+      'settings screens outside the reachability corpus: ' + missing.join(', '));
+  });
 
   console.log('\nThe benchmark runs inside the app (v9.17)');
 
@@ -1929,6 +1948,9 @@ module.exports = async function runModuleTests(test){
       'setErrorReports(',                                     // FS-UI-03
       // v9.66. The way back from a dismissal -- the whole point of the screen.
       'clearDismissedConflicts()', 'clearNotDuplicates()',
+      // v9.83. Registered the day it shipped, per rule 23: this list is an
+      // ALLOWLIST, so a control left out of it has no protection at all.
+      'restoreDeleted(', 'purgeDeleted(',
     ];
     const missing = mustSurvive.filter(c => !settingsFamily.includes(c));
     assert.deepStrictEqual(missing, [], 'lost in the reorganisation: ' + missing.join(', '));
@@ -2896,7 +2918,7 @@ module.exports = async function runModuleTests(test){
     // left out of it has no protection at all.
     const list = fs.readFileSync('./tests-modules.js', 'utf8')
       .split('const mustSurvive = [')[1].split('];')[0];
-    ['removeKey()', 'setErrorReports('].forEach(c =>
+    ['removeKey()', 'setErrorReports(', 'restoreDeleted(', 'purgeDeleted('].forEach(c =>
       assert.ok(list.includes(c), c + ' is not registered in mustSurvive'));
   });
 

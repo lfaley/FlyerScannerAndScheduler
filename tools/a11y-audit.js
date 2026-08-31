@@ -150,6 +150,9 @@ const SCREENS = [
       S.settings.notDuplicates = ['e1~e2']; view = { tab:'settings', sub:'setDismissed', data:null }` },
   { key:'setDismissed-empty', setup:`S.settings.dismissedConflicts = []; S.settings.notDuplicates = [];
       view = { tab:'settings', sub:'setDismissed', data:null }` },
+  { key:'setDeleted', setup:`S.lists.push({id:'ld1',name:'Old list',deleted:true,deletedAt:new Date().toISOString()});
+      view = { tab:'settings', sub:'setDeleted', data:null }` },
+  { key:'setDeleted-empty', setup:`view = { tab:'settings', sub:'setDeleted', data:null }` },
   { key:'setBackup',       setup:`sub('setBackup')` },
   { key:'setTrouble',      setup:`S.settings.aiProvider='local'; sub('setTrouble')` },
 

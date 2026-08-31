@@ -292,7 +292,9 @@ Three functions currently turn parsed JSON into `S`, and they disagree:
 | 3 | F5 (import/restore through `adoptParsed`) | **v9.80** ✅ **DONE** | medium; touches the restore path |
 | — | The recipe-repo session's note: view-transition rejections, the lost local failure, the raw error code on a scan | **v9.81** ✅ **DONE** | low |
 | 4a | D1 storage half: `deletedAt` paired at twelve sites, `SCHEMA_VERSION` 10, 30-day window, `oldDeleted` finally used | **v9.82** ✅ **DONE** | **highest — changes the stored shape** |
-| 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | v9.83 | medium; new screen, no stored-shape change |
+| 4b | D1 surface half: the Recently Deleted screen, hub row, `mustSurvive` + SCREENS registrations, storage-screen line | **v9.83** ✅ **DONE** | medium; new screen, no stored-shape change |
+
+**All five phases are complete.** D1, D2 and F5 are closed. Remaining from the review, in the other batches: the delete-honesty cluster (D3, D7, D8, D9-adjacent, A2, A3), duplicate detection (P1, P2, D4), the assistant items (A4–A7), and the documentation corrections.
 
 **Correction to revision 1:** phase 1 was written as "no version bump — refactor only". That is wrong. `deploy.ps1` step 2 stops any push where `index.html` changed without `APP_VERSION` moving, and then stops again if `APP_VERSION` moved without `sw.js` `CACHE` moving (`deploy.ps1`, Step 2). A refactor that touches `index.html` is still a release. Phase 1 shipped as v9.78.
 
@@ -325,6 +327,14 @@ Three things worth recording, because two of them were my errors.
 3. **A bug I introduced and the tests caught on the first run.** The `from < 10` block iterated `(s[coll] || []).forEach(...)`, but `adoptParsed` coerces junk collections *after* `migrate`, so a save carrying `notes: 'not an array'` reached it as a string and threw. The v9.80 test caught it immediately. Fixed with `Array.isArray` — the same defence migrate's own `from < 8` block already had, which I should have copied rather than re-derived.
 
 Two existing test fixtures were updated (`'old soft-deleted rows are actually removed'`, `'pruning drops deleted notes and counts them'`): both constructed tombstones by hand with no `deletedAt`, because until v9.82 the field did not exist. Intent preserved, fixtures brought to the new shape, and the reason written into each.
+
+## 6b. What phase 4b found
+
+**A guard that had never been proven to fail, found by mutating.** Deleting the `confirm()` out of `purgeDeleted` — the app's one deliberate hard delete — was caught by **nothing**, because the test harness answers every `confirm` with `true`. A behavioural test now overrides `confirm` to return false and asserts both that it was asked and that the row survived. This is rule 30 earning its keep: the mutation run is the only reason anyone knows that guard was decoration.
+
+**A structural gap in an existing guard, now closed.** `settingsFamily` in `tests-modules.js` — the corpus the "controls must stay reachable" test searches — is a **hand-kept list of render function names**. A new settings screen ships and falls silently outside the guard, which is exactly what happened to `renderSetDeleted` on its first run, and is still true of `gordonAuthCard`'s markup. A new test now derives the settings screens from `render()`'s own `subs` map and fails if any is missing from the corpus, so the gap is a failing test rather than a surprise later.
+
+**Still open, and worth someone's attention:** the reachability test proves a control exists *in the markup of the settings family*, not that the family is *navigable to it*. Removing the hub row for a screen would leave every test green while making the screen unreachable. Not fixed here; noted because it is the same class of problem as the two above.
 
 ## 7. Decisions — settled 31 Aug 2026
 

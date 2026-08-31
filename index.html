@@ -4636,8 +4636,8 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.82';
-const APP_TAGLINE = 'a delete remembers when';
+const APP_VERSION = 'v9.83';
+const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
  * A provider forced for the current operation, or null. In memory ONLY -- never
@@ -5599,7 +5599,7 @@ function render(){
     setPeople:renderSetPeople, setAI:renderSetAI, setCapabilities:renderSetCapabilities,
     setReminders:renderSetReminders, setAppearance:renderSetAppearance,
     setBackup:renderSetBackup, setTrouble:renderSetTrouble,
-    setDismissed:renderSetDismissed,
+    setDismissed:renderSetDismissed, setDeleted:renderSetDeleted,
     ask:renderAsk};
   const tabs = {events:renderEvents, chores:renderChores,
     notes:renderNotes, meals:renderMeals, settings:renderSettings};
@@ -10897,6 +10897,10 @@ function renderSettings(m){
     settingsRow('cloud', 'Backup', S.settings.lastBackup
       ? 'Last export ' + friendly(S.settings.lastBackup)
       : 'Never exported', 'setBackup', S.settings.lastBackup ? null : 'amber-accent') +
+    settingsRow('trash', 'Recently deleted', deletedCount()
+      ? deletedCount() + ' item' + (deletedCount() === 1 ? '' : 's')
+        + ' \u00b7 ' + KEEP_SOFT_DELETED_DAYS + ' days to change your mind'
+      : 'Nothing deleted', 'setDeleted') +
     settingsRow('history', 'Dismissed warnings', dismissedCount()
       ? dismissedCount() + ' silenced' : 'Nothing silenced', 'setDismissed') +
     settingsRow('flask', 'When something goes wrong', trouble, 'setTrouble',
@@ -11178,6 +11182,105 @@ function restoreNotDuplicate(key){
   toast('Back in the duplicates list');
 }
 
+// ---------------------------------------------------------------------------
+// Recently Deleted (v9.83). The window without this screen was storage spent on
+// a safety net nobody could reach: a soft delete was invisible, and the only
+// route back to a row was an undo toast that leaves after 7 seconds. Google
+// Drive, Apple Photos, Apple Notes and Dropbox all pair the retention window
+// with a place you can browse -- see DATA-LOSS-PLAN.md 1.4.
+//
+// Sibling of renderSetDismissed, deliberately: that screen is already this
+// pattern for suppressions, and two ways back should not look like two
+// different ideas.
+// ---------------------------------------------------------------------------
+
+// Which collections carry soft deletes, and how to name a row in each. ONE
+// table, so a new collection is added here rather than in three separate
+// switches. noteFolders/noteLabels are absent on purpose: prune does not age
+// them either, and a folder comes back by re-adding it under the same name.
+const DELETED_COLLS = [
+  { coll:'events',    label:'Event',     name: r => r.title || 'Untitled' },
+  { coll:'chores',    label:'Chore',     name: r => r.title || 'Untitled' },
+  { coll:'lists',     label:'List',      name: r => r.name  || 'Untitled' },
+  { coll:'listItems', label:'List item', name: r => r.text  || 'Untitled' },
+  { coll:'notes',     label:'Note',      name: r => noteTitleOf(r) || 'Untitled' },
+  { coll:'rewards',   label:'Reward',    name: r => r.title || 'Untitled' },
+  { coll:'kids',      label:'Person',    name: r => r.name  || 'Untitled' },
+];
+
+/** Every soft-deleted row across every collection, newest deletion first. */
+function deletedRows(){
+  const out = [];
+  DELETED_COLLS.forEach(d => (S[d.coll] || []).forEach(r => {
+    if(r && r.deleted){
+      out.push({ coll:d.coll, label:d.label, id:r.id, name:d.name(r), at:r.deletedAt || null });
+    }
+  }));
+  // Undated rows sort last. They are the ones prune will never remove, so they
+  // are the least urgent thing here.
+  return out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
+
+function deletedCount(){ return deletedRows().length; }
+
+/** Whole days before prune may take it. null when the row carries no date. */
+function daysLeftDeleted(at){
+  if(!at) return null;
+  const due = Date.parse(at) + KEEP_SOFT_DELETED_DAYS * 24 * 3600 * 1000;
+  if(!isFinite(due)) return null;
+  return Math.max(0, Math.ceil((due - Date.now()) / (24 * 3600 * 1000)));
+}
+
+function restoreDeleted(coll, id){
+  const row = (S[coll] || []).find(x => x.id === id);
+  if(!row) return;
+  unmarkDeleted(row);
+  save(); render();
+  toast('Restored');
+}
+
+function purgeDeleted(coll, id){
+  const row = (S[coll] || []).find(x => x.id === id);
+  if(!row) return;
+  // The one place in the app that hard-deletes on purpose, so it asks -- and it
+  // says the part that matters, which is that there is no undo behind it.
+  if(!confirm('Delete this permanently?\n\nIt cannot be brought back.')) return;
+  S[coll] = (S[coll] || []).filter(x => x.id !== id);
+  save(); render();
+  toast('Deleted permanently');
+}
+
+function renderSetDeleted(m){
+  setHeader('Recently Deleted', true);
+  const rows = deletedRows();
+  // .length, not truthiness -- an empty array is truthy, and rule 29 exists
+  // because a chooser with nothing to choose between has shipped here before.
+  if(!rows.length){
+    m.innerHTML = `<div class="empty"><div class="et">Nothing deleted</div>
+      <div class="eb">Anything you delete waits here for ${KEEP_SOFT_DELETED_DAYS} days
+      before it is cleared for good, so you can change your mind.</div></div>`;
+    return;
+  }
+  m.innerHTML = `<div class="help">Deleted items wait ${KEEP_SOFT_DELETED_DAYS} days before they
+    are cleared for good. They still use storage until then.</div>`
+    + rows.map(r => {
+      const left = daysLeftDeleted(r.at);
+      const when = left === null ? 'no date recorded'
+        : left === 0 ? 'clears at the next cleanup'
+        : left + ' day' + (left === 1 ? '' : 's') + ' left';
+      return `<div class="card row">
+        <div class="grow">
+          <div class="title" style="font-size:15px">${esc(r.name)}</div>
+          <div class="meta" style="font-size:12px">${esc(r.label)} \u00b7 ${esc(when)}</div>
+        </div>
+        <button class="linkbtn" onclick="restoreDeleted('${esc(r.coll)}','${esc(r.id)}')">Restore</button>
+        <button class="linkbtn" style="color:var(--red)"
+          aria-label="Delete ${esc(r.name)} permanently"
+          onclick="purgeDeleted('${esc(r.coll)}','${esc(r.id)}')">Delete now</button>
+      </div>`;
+    }).join('');
+}
+
 function renderSetBackup(m){
   setHeader('Backup', true);
   m.innerHTML = `<div class="sect">Backup</div>
@@ -11194,6 +11297,7 @@ function renderSetBackup(m){
       <button class="linkbtn" onclick="restoreSnapshot('${k}')">Restore</button></div>`).join('')
       || `<div class="help" style="font-style:italic">None yet — the first appears after a day of use.</div>`}
     <div class="help" style="margin-top:8px">Storage used: ${(storageBytes()/1024).toFixed(0)} KB of roughly 5,000 KB.
+      Deleted items still use storage until they are cleared.
       ${S.settings.lastPrune ? 'Last cleanup: '+friendly(S.settings.lastPrune)+'.' : ''}</div>
     <button class="btn alt" onclick="manualPrune()">${ico('sparkles')}Clean up old data</button>
     <div class="help" style="font-size:12px;margin-top:6px">Removes chore history over a year old (star totals are kept),
