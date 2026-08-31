@@ -4103,8 +4103,24 @@ function pruneData(){
                        S.chores.length + S.rewards.length + S.kids.length);
 
   // Very old past events.
+  //
+  // A DATED tombstone is exempt. Without that clause the two rules in this
+  // function contradict each other: an event dated three years ago and deleted
+  // TODAY passes the tombstone test above (its deletedAt is minutes old) and is
+  // then destroyed here, while Recently Deleted is on screen counting down
+  // KEEP_SOFT_DELETED_DAYS days for it.
+  //
+  // `deletedAt` is required, not decorative. An undated tombstone is KEPT by the
+  // rule above on purpose (unknown is never a licence to destroy), so exempting
+  // it here as well would make it immortal -- the one row that can never age
+  // out. It keeps the sweep it has always had.
+  //
+  // Deliberately NOT `&& !oldDeleted(e)`: an expired tombstone is already gone
+  // by this line, so that clause could never change an outcome. A condition
+  // that cannot fail is not a safety net, it is decoration that reads like one.
   const beforeEvents = S.events.length;
-  S.events = S.events.filter(e => !e.date || e.date >= eventCutoff);
+  S.events = S.events.filter(e => !e.date || e.date >= eventCutoff ||
+                                  (e.deleted && !!e.deletedAt));
   removed += beforeEvents - S.events.length;
 
   // Watcher message ids don't need to be remembered forever.
@@ -4636,7 +4652,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.83';
+const APP_VERSION = 'v9.84';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -11301,7 +11317,7 @@ function renderSetBackup(m){
       ${S.settings.lastPrune ? 'Last cleanup: '+friendly(S.settings.lastPrune)+'.' : ''}</div>
     <button class="btn alt" onclick="manualPrune()">${ico('sparkles')}Clean up old data</button>
     <div class="help" style="font-size:12px;margin-top:6px">Removes chore history over a year old (star totals are kept),
-      deleted items over 90 days old, and events over two years old.</div>`;
+      deleted items over ${KEEP_SOFT_DELETED_DAYS} days old, and events over two years old.</div>`;
 }
 
 function renderSetTrouble(m){

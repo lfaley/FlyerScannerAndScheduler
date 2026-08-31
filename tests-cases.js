@@ -647,6 +647,75 @@ test('deleting an old event does not make it disappear on the next prune (v9.82)
     'an event dated long ago was destroyed the moment it was deleted');
 });
 
+test('an event past the two-year window still gets its full tombstone (v9.84)', () => {
+  // THE BUG the guard above was 330 days short of catching. It uses -400, which
+  // is inside KEEP_PAST_EVENTS_DAYS (730), so the SECOND rule in pruneData never
+  // fired on it. pruneData runs two independent filters over S.events: the
+  // tombstone rule, then a past-events rule that read only the event's own date.
+  // A three-year-old event deleted TODAY passed the first and was destroyed by
+  // the second -- while Recently Deleted was on screen counting down 30 days.
+  boot(GOOD);
+  S.events.push({ id:'d4', title:'Ancient date, deleted today',
+    date: dayAhead(-(KEEP_PAST_EVENTS_DAYS + 200)), kind:'event' });
+  markDeleted(S.events[S.events.length - 1]);
+  pruneData();
+  assert.ok(S.events.some(e => e.id === 'd4'),
+    'a very old event was destroyed the moment it was deleted, mid-countdown');
+});
+
+test('an EXPIRED tombstone still goes, however old the event was (v9.84)', () => {
+  // End-to-end, not a guard on the exemption clause. Reverting that clause does
+  // NOT turn this red -- the tombstone rule above removes the row before the
+  // past-events rule is reached, so no fixture can tell the two apart here.
+  // Recorded because a test that cannot fail for its stated reason is worse than
+  // no test (rule 30); this one earns its place as a whole-function property.
+  boot(GOOD);
+  S.events.push({ id:'d5', title:'Ancient date, deleted two months ago',
+    date: dayAhead(-(KEEP_PAST_EVENTS_DAYS + 200)), kind:'event', deleted:true,
+    deletedAt: new Date(Date.now() - (KEEP_SOFT_DELETED_DAYS + 30)*24*3600*1000).toISOString() });
+  pruneData();
+  assert.ok(!S.events.some(e => e.id === 'd5'), 'an expired tombstone survived a prune');
+});
+
+test('an UNDATED tombstone keeps the sweep it has always had (v9.84)', () => {
+  // The exemption requires deletedAt. A row we cannot date is kept by the
+  // tombstone rule on purpose, so exempting it here too would make it the one
+  // row in the app that can never be cleared by anything.
+  boot(GOOD);
+  S.events.push({ id:'d7', title:'Ancient, deleted, no stamp',
+    date: dayAhead(-(KEEP_PAST_EVENTS_DAYS + 200)), kind:'event', deleted:true });
+  pruneData();
+  assert.ok(!S.events.some(e => e.id === 'd7'),
+    'an undated tombstone became immortal -- nothing left can ever clear it');
+});
+
+test('a stray deletedAt on a LIVE row does not buy it an exemption (v9.84)', () => {
+  // Why `e.deleted &&` is load-bearing rather than decoration. unmarkDeleted
+  // removes deletedAt when it restores a row, so the app never makes this shape
+  // -- but importBackup takes whatever JSON it is handed, and a hand-edited or
+  // third-party file can carry `deleted:false` beside a leftover deletedAt.
+  // Without the clause that row would dodge the past-events sweep forever while
+  // showing up in the app as a perfectly normal event.
+  boot(GOOD);
+  S.events.push({ id:'d8', title:'Live, but carrying a stale stamp',
+    date: dayAhead(-(KEEP_PAST_EVENTS_DAYS + 200)), kind:'event', deleted:false,
+    deletedAt: new Date().toISOString() });
+  pruneData();
+  assert.ok(!S.events.some(e => e.id === 'd8'),
+    'a live event dodged the two-year sweep on the strength of a stale deletedAt');
+});
+
+test('a LIVE event past the two-year window is still pruned (v9.84)', () => {
+  // The exemption is for tombstones only. Nothing about the fix should keep a
+  // three-year-old event that was never deleted -- that rule is why it exists.
+  boot(GOOD);
+  S.events.push({ id:'d6', title:'Ancient, never deleted',
+    date: dayAhead(-(KEEP_PAST_EVENTS_DAYS + 200)), kind:'event' });
+  pruneData();
+  assert.ok(!S.events.some(e => e.id === 'd6'),
+    'the past-events rule stopped working on ordinary old events');
+});
+
 test('every collection gets the same 30-day window (v9.82)', () => {
   // No sampling one collection and assuming the other six -- six of them had
   // no age test at all before this.

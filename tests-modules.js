@@ -1594,6 +1594,19 @@ module.exports = async function runModuleTests(test){
     .map(n => (script.split('function ' + n + '(')[1] || '').split('\nfunction ')[0])
     .join('\n');
 
+  test('the Storage screen states the REAL retention window (v9.84)', () => {
+    // v9.82 moved KEEP_SOFT_DELETED_DAYS from 90 to 30 and left this sentence
+    // saying 90. Recently Deleted interpolates the constant and said 30, so two
+    // Settings screens two rows apart disagreed about how long a user's deleted
+    // data survives. A number typed next to a constant is a second source of
+    // truth; this test only passes while the screen reads the constant.
+    const src = fs.readFileSync('index.html', 'utf8');
+    assert.ok(src.includes('deleted items over ${KEEP_SOFT_DELETED_DAYS} days old'),
+      'the Storage screen no longer derives its retention window from the constant');
+    assert.ok(!/deleted items over \d+ days old/.test(src),
+      'the retention window is hardcoded again -- it will go stale like the 90 did');
+  });
+
   test('every Settings screen is inside the reachability corpus (v9.83)', () => {
     // settingsFamily is a HAND-KEPT list, so a new settings screen can ship and
     // fall silently OUTSIDE the guard that stops controls vanishing -- which is
