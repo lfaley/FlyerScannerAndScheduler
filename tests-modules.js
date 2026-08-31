@@ -796,6 +796,34 @@ module.exports = async function runModuleTests(test){
      'put eggs on the list', 'remove that event'].forEach(q => {
       assert.strictEqual(rt.quickRoute(q), null, q + ' must not be fast-pathed');
     });
+
+    // v9.90. Every sentence above is an IMPERATIVE, and imperatives are stopped
+    // one check later by isQuestion -- so not one of them was ever stopped by the
+    // change-verb guard this test is named for. Deleting that guard outright left
+    // this test green (mutation G4b); the only failure anywhere in the suite was
+    // an unrelated classification mismatch in the routing corpus.
+    //
+    // Measured, not assumed: with the guard removed, ALL THIRTY of its verbs turn
+    // "can you <verb> the costco list?" into ask_lists at 0.95 confidence with
+    // autoRun=true -- a write answered as a read, never reaching the model router,
+    // so validateRoute and the confirm step never run.
+    //
+    // The verb list is pinned HERE rather than read from the source, which would
+    // be circular: a test that derives the list from the code it guards passes
+    // whatever the code says. CLAUDE.md's rule is "widen it when adding a verb,
+    // never narrow it", so this is the minimum set. Adding a verb to the router
+    // needs no change here; REMOVING one fails, which is the whole point.
+    const CHANGE_VERBS = ['add','put','create','make','start','remove','delete','del',
+      'get rid','clear','set','schedule','book','open','go to','take me','tick',
+      'check off','cross off','mark','done','finish','finished','did','move',
+      'reschedule','rename','change','update','edit'];
+    const opts = { lists:['Costco'], people:['Olivia'], chores:['Bins'] };
+    CHANGE_VERBS.forEach(v => {
+      const q = 'can you ' + v + ' the costco list?';
+      assert.strictEqual(rt.quickRoute(q, opts), null,
+        JSON.stringify(q) + ' is question-shaped AND changes data. Only the ' +
+        'change-verb guard stops it, and "' + v + '" is no longer in that guard.');
+    });
   });
 
   test('anything the fast path returns is read-only and pre-validated', () => {
@@ -2406,7 +2434,11 @@ module.exports = async function runModuleTests(test){
   });
 
   test('every write the assistant makes is undoable', () => {
-    const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
+    // codeOf: a branch carrying `// TODO: give this a toast with label:'Undo'`
+    // and no actual undo used to pass this. Proved 31 Aug (mutation G1b) --
+    // exactly the prose-not-code failure CLAUDE.md warns about, sitting on the
+    // assistant's most important safety property.
+    const fn = codeOf(script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0]);
     // Either an explicit Undo toast, or one of the app's own helpers which
     // carry their own (softDelete, markHandled, completeChore/toggleChore).
     const branches = fn.split('case ').slice(1);
@@ -2420,15 +2452,43 @@ module.exports = async function runModuleTests(test){
 
   test('undo removes the items it added, by id, not by text', () => {
     // Undoing by text would delete an identically-named item the user added.
-    const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
-    const branch = fn.split("case 'add_list_item':")[1].split('case ')[0];
-    assert.ok(/added\.includes\(i\.id\)/.test(branch), branch.slice(0, 300));
+    //
+    // v9.90: this used to inspect the add_list_item branch and nothing else, so
+    // the same defect one branch over shipped green -- proved by rewriting
+    // create_list's undo to filter on `l.name !== name` (mutation G2). Now every
+    // branch that ADDS a row is checked, so a new adding intent is covered the
+    // day it lands rather than whenever someone remembers to extend this.
+    const fn = codeOf(script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0]);
+    const branches = fn.split('case ').slice(1)
+      .map(b => ({ name: b.slice(0, b.indexOf(':')), body: b }))
+      .filter(b => /S\.[A-Za-z]+\.push\(|\.push\(row\)/.test(b.body));
+    assert.ok(branches.length >= 2,
+      'expected at least create_list and add_list_item to add rows, found ' + branches.length);
+    branches.forEach(b => {
+      const undo = b.body.split("label:'Undo'")[1] || '';
+      assert.ok(/\.id\b/.test(undo),
+        'the undo in ' + b.name + ' does not mention an id, so it is undoing by value: ' +
+        undo.slice(0, 200));
+      assert.ok(!/\bfilter\(\s*\w+\s*=>\s*\w+\.(name|text|title)\s*!==/.test(undo),
+        'the undo in ' + b.name + ' filters by NAME -- it would delete an identically-named ' +
+        'row the user added');
+    });
   });
 
   test('the assistant calls the app’s own functions rather than reimplementing writes', () => {
-    const fn = script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0];
+    const fn = codeOf(script.split('function confirmPendingAction(')[1].split('\nfunction cancelPendingAction')[0]);
     ['softDelete(', 'markHandled(', 'completeChore('].forEach(f =>
       assert.ok(fn.includes(f), 'reimplemented instead of calling ' + f));
+    // v9.90: presence is not absence. The three assertions above only prove the
+    // helpers appear SOMEWHERE in this function -- delete_chore was rewritten to
+    // inline softDelete's body (keeping markDeleted and an undo, so the other two
+    // guards stayed quiet) and this test never noticed (mutation G3b). A soft
+    // delete performed by hand here is the thing the property forbids.
+    assert.ok(!/\.deleted\s*=\s*true/.test(fn),
+      'a branch sets .deleted by hand instead of calling softDelete()');
+    assert.ok(!/markDeleted\(/.test(fn),
+      'a branch reaches past softDelete() to markDeleted() -- softDelete is what ' +
+      'carries the undo toast and the label the user reads');
     // The "who did it?" sheet for a chore that belongs to nobody must still be
     // reached -- skipping it drops the stars on the floor. Until v9.85 this
     // branch got there by calling toggleChore, and that was the defect:

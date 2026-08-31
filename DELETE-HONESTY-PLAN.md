@@ -864,3 +864,81 @@ proves a plain tab tap does not.
 broadly, are also written as enumerations. This batch changed one of them. The
 others have not been checked and should not be assumed sound because this one was
 fixed.
+
+
+---
+
+## 17. The guard audit (v9.90) — three of four siblings were hollow
+
+§16 ended by saying that finding one hollow guard is a reason to suspect its
+siblings, not to feel better about them. This is that audit. Every verdict below
+is a mutation actually run, not a reading of the test.
+
+Run in a synchronised copy of the repo rather than the live one, because
+mutation testing means deliberately breaking the code and a deploy firing
+mid-mutation would commit a planted bug. That precaution exists because it
+already happened once this session.
+
+### Verdicts
+
+| Property (CLAUDE.md, "each enforced by a test") | Mutation | Verdict |
+|---|---|---|
+| Every write is undoable | **G1** a new `case` that writes with no undo | **RED** — sound, and it named the branch |
+| " | **G1b** the same branch plus `// TODO: give this a toast with label:'Undo'` | **GREEN** — read prose, not code |
+| Undo by id, never by text | **G2** `create_list` undo rewritten to `filter(l => l.name !== name)` | **GREEN** — it only ever inspected `add_list_item` |
+| Call the app's own functions | **G3** `delete_chore` reimplemented crudely | RED, but by two OTHER guards |
+| " | **G3b** reimplemented while keeping `markDeleted` and an undo | **GREEN** — presence-only; it never checked for the reimplementation |
+| `quickRoute` short-circuits only to read-only intents | **G4b** the change-verb guard DELETED outright | **GREEN** — no test at all |
+
+### The change-verb guard
+
+Two tests, sixteen sentences, and every sentence is an **imperative**. Imperatives
+are stopped one check later by `isQuestion`, so not one of the sixteen was ever
+stopped by the guard they are named for. Deleting the guard entirely left both
+green; the suite's only failure was an unrelated classification mismatch in the
+routing corpus.
+
+**A measurement I got wrong first.** Probing which verbs mattered, I ran against a
+router that still had 26 of the 30 verbs in place, and concluded only four were
+load-bearing. That is the same confounding error as a test passing for the wrong
+reason, committed in the measurement instead of the test. Rebuilt against a router
+with the guard fully removed: **all 30 of 30 are load-bearing.** Without it,
+`"can you add milk to the costco list?"` returns `ask_lists` at 0.95 confidence
+with `autoRun=true` — a write answered as a read, never reaching `validateRoute`
+or the confirm step.
+
+### The fixes
+
+1. **Undo guard** reads `codeOf(...)`, so a comment cannot satisfy it.
+2. **Undo-by-id** now checks **every** branch that pushes a row: the undo must
+   mention an `.id`, and must not filter on `name`/`text`/`title`.
+3. **Own-functions** gained the absence half: no branch may set `.deleted = true`
+   by hand or reach past `softDelete()` to `markDeleted()`.
+4. **Change-verb** pins all 30 verbs **in the test** — deriving them from the
+   source would be circular — and asserts a question-shaped sentence per verb.
+
+### Re-run
+
+| # | Mutation | Before | After |
+|---|---|---|---|
+| **G1b** | missing undo behind a comment | GREEN | **RED** |
+| **G2** | undo by text in another branch | GREEN | **RED**, naming `create_list` |
+| **G3b** | `softDelete` inlined, undo kept | GREEN | **RED** |
+| **G4b** | the whole guard deleted | GREEN | **RED** |
+| **G4c** | four verbs removed | GREEN | **RED** |
+| **G4d** | ONE verb (`del`) removed | GREEN | **RED** |
+| **G4e** | `cancel` ADDED (widening) | — | **GREEN**, as the docs require |
+
+G4d and G4e are the matched pair: the smallest narrowing fails, and a legitimate
+widening does not. A guard that blocked widening would be deleted the first time
+someone needed it.
+
+`tests-modules.js` only — `index.html` and `js/router.js` are untouched, so no
+version or CACHE bump. 834/0 on Logan's machine, `inline.js --check` in sync.
+
+### Still not audited
+
+`js/ai-actions.js` is described in CLAUDE.md as the user-facing disclosure list
+that "must be updated too — it exists so the promise a user reads cannot drift
+from what the code does, and it HAS drifted before." Whether anything enforces
+that has not been checked.
