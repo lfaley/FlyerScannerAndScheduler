@@ -4138,6 +4138,53 @@ function pruneData(){
 const SNAP_PREFIX = 'flyersnap-snap-';
 const SNAP_KEEP = 3;
 
+/**
+ * The API key belongs in exactly ONE place: localStorage['flyersnap'] on this
+ * device. Anything else that persists the state -- a rolling snapshot, the
+ * downloaded backup file -- gets it blanked.
+ *
+ * Measured before this existed (v9.90): an exported
+ * `flyersnap-backup-<date>.json` carried a plaintext sk-ant- key, and that file
+ * is the one designed to LEAVE the phone -- into email, iCloud, a laptop's
+ * Downloads folder. The snapshots carried it too, which is why "Remove key from
+ * this device" left three restorable copies behind.
+ *
+ * OWASP Secrets Management is explicit that a revoked secret "must be removed
+ * from the exposed system immediately". A copy that is never written needs no
+ * removal, so the fix is at the WRITE, not at the delete.
+ */
+function redactSaved(raw){
+  // Takes the stored STRING, not S: snapshot() archives the previous blob on
+  // purpose, and re-serialising the live S here would archive the wrong state.
+  let obj;
+  try{ obj = JSON.parse(raw); }
+  catch(e){ return null; }         // unreadable -- see the caller
+  if(obj && obj.settings && obj.settings.apiKey) obj.settings.apiKey = '';
+  try{ return JSON.stringify(obj); }catch(e){ return null; }
+}
+
+/**
+ * Blank the key in snapshots that older versions already wrote.
+ *
+ * A snapshot that will not parse is LEFT EXACTLY AS IT WAS. It cannot be
+ * restored either (restoreSnapshot goes through JSON.parse), so there is nothing
+ * to protect in it -- and destroying a rescue copy during a security tidy is the
+ * recovery-path failure rule 28 is about. Returns how many it changed.
+ */
+function scrubSnapshots(){
+  let cleaned = 0;
+  snapshotKeys().forEach(k => {
+    let raw = null;
+    try{ raw = localStorage.getItem(k); }catch(e){ return; }
+    if(!raw || raw.indexOf('"apiKey"') < 0) return;
+    const next = redactSaved(raw);
+    if(next === null || next === raw) return;
+    try{ localStorage.setItem(k, next); cleaned++; }
+    catch(e){ /* no room to rewrite it: leaving the old one is better than losing it */ }
+  });
+  return cleaned;
+}
+
 function snapshotKeys(){
   const out = [];
   try{
@@ -4160,7 +4207,13 @@ function snapshot(opts){
     if(!force && now - last < 24*3600*1000) return;      // at most one a day
     const raw = localStorage.getItem('flyersnap');
     if(!raw) return;
-    localStorage.setItem(SNAP_PREFIX + new Date().toISOString().slice(0,10), raw);
+    // A snapshot that cannot be parsed cannot be redacted -- and cannot be
+    // restored either, since restoreSnapshot parses it. Skipping is the honest
+    // trade: an archived credential is worse than a missing archive of a blob
+    // nothing could have recovered from anyway.
+    const safe = redactSaved(raw);
+    if(safe === null) return;
+    localStorage.setItem(SNAP_PREFIX + new Date().toISOString().slice(0,10), safe);
     localStorage.setItem('flyersnap-lastsnapshot', String(now));
     const keys = snapshotKeys();
     while(keys.length > SNAP_KEEP) localStorage.removeItem(keys.shift());
@@ -4652,7 +4705,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.89';
+const APP_VERSION = 'v9.90';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -11505,6 +11558,8 @@ function renderSetBackup(m){
       <button class="btn alt" onclick="exportBackup()">${ico('download')}Export backup</button>
       <button class="btn alt" onclick="document.getElementById('fImport').click()">${ico('upload')}Restore</button>
     </div>
+    <div class="help" style="margin-top:10px">Backups and snapshots do not include your API key,
+      so restoring one will not bring it back \u2014 paste it again in Settings \u2192 ${esc(aiName())}.</div>
     <div class="help" style="margin-top:10px">Automatic snapshots (kept on this phone, once a day, last ${SNAP_KEEP}):</div>
     ${snapshotKeys().reverse().map(k=>`<div class="card row" style="padding:10px">
       <div class="grow" style="font-size:13px">${k.replace(SNAP_PREFIX,'')}</div>
@@ -12195,6 +12250,11 @@ function removeKey(){
   if(!confirm('Remove the API key from this device?\n\nAnthropic features stop working until you paste a new one. This cannot be undone.')) return;
   S.settings.apiKey = '';
   save();
+  // save() snapshots the PREVIOUS blob, so the removal itself used to be able to
+  // archive a fresh copy of the key. snapshot() redacts at the write now, and
+  // this clears anything an older version left behind -- so the promise this
+  // button makes is true when it is made, not at the next boot.
+  scrubSnapshots();
   const box = document.getElementById('apiKey');
   if(box) box.value = '';
   render();
@@ -12302,7 +12362,10 @@ function exportDiagnostics(){
 function exportBackup(){
   S.settings.lastBackup = todayISO();
   save();
-  const blob = new Blob([JSON.stringify(S, null, 1)], {type:'application/json'});
+  // Redacted through the same door as the snapshots. This file is the copy that
+  // leaves the device; it must not carry a credential.
+  const body = redactSaved(JSON.stringify(S)) || JSON.stringify(S, null, 1);
+  const blob = new Blob([body], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'flyersnap-backup-'+todayISO()+'.json';

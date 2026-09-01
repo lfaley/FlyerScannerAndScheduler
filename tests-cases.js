@@ -155,8 +155,13 @@ test('an import snapshots what it replaces, even on a day already snapshotted (v
   localStorage.setItem('flyersnap-lastsnapshot', String(Date.now()));
   const doomed = localStorage.getItem('flyersnap');
   importBackup({ __text: '{"events":[],"kids":[]}' });
-  const snaps = snapshotKeys().map(k => localStorage.getItem(k));
-  assert.ok(snaps.includes(doomed),
+  // v9.90: parsed, and with apiKey blanked -- see the note on 'a save snapshots
+  // the previous good copy'. Still asserts the WHOLE replaced state survived.
+  const want = JSON.parse(doomed);
+  want.settings = Object.assign({}, want.settings, { apiKey: '' });
+  const same = (a, b) => { try{ assert.deepStrictEqual(a, b); return true; }catch(e){ return false; } };
+  const snaps = snapshotKeys().map(k => JSON.parse(localStorage.getItem(k)));
+  assert.ok(snaps.some(x => same(x, want)),
     'the replaced state was not kept: ' + JSON.stringify(snapshotKeys()));
 });
 
@@ -294,7 +299,114 @@ test('a save snapshots the previous good copy', () => {
   save();
   const keys = snapshotKeys();
   assert.strictEqual(keys.length, 1);
-  assert.strictEqual(localStorage.getItem(keys[0]), GOOD);
+  // v9.90: compared PARSED, not byte-for-byte. Snapshots go through
+  // redactSaved() now, which re-serialises and blanks settings.apiKey, so a
+  // string comparison against the GOOD literal fails on formatting alone. The
+  // property that mattered is unchanged and still asserted in full: the previous
+  // state is recoverable, minus the one field that must never be archived.
+  const snap = JSON.parse(localStorage.getItem(keys[0]));
+  const want = JSON.parse(GOOD);
+  want.settings = Object.assign({}, want.settings, { apiKey: '' });
+  assert.deepStrictEqual(snap, want);
+  assert.strictEqual(snap.settings.apiKey, '', 'the snapshot archived the API key');
+});
+
+// ---------------------------------------------------------------------------
+// The API key never leaves the live blob (v9.90). Every case below was measured
+// against the shipped functions before a line changed -- see KEY-EXPOSURE-PLAN.md.
+// ---------------------------------------------------------------------------
+const KEY_FIXTURE = 'sk-ant-THIS-IS-THE-SECRET-0123456789';
+function withKey(){
+  boot(GOOD);
+  S.settings.apiKey = KEY_FIXTURE;
+  save();
+  // The control. Every assertion below is worthless if this is not true -- the
+  // first probe of this defect reported all-clear because it had set a variable
+  // that was not the one the code reads.
+  assert.ok(localStorage.getItem('flyersnap').includes(KEY_FIXTURE),
+    'fixture is broken: the live blob does not contain the key');
+}
+
+test('the downloaded backup file carries no API key (v9.90)', () => {
+  // THE BIG ONE, and it was not in the review. This file is designed to leave
+  // the phone -- email, iCloud, a laptop's Downloads folder.
+  withKey();
+  exportBackup();
+  assert.ok(lastBlob, 'no file was produced');
+  assert.ok(!String(lastBlob).includes(KEY_FIXTURE),
+    'the exported backup contains the API key in plain text');
+  const parsed = JSON.parse(String(lastBlob));
+  assert.strictEqual(parsed.settings.apiKey, '', 'the key field was not blanked');
+  assert.ok(Array.isArray(parsed.events), 'the redaction cost the rest of the backup');
+});
+
+test('a snapshot carries no API key (v9.90)', () => {
+  withKey();
+  localStorage.removeItem('flyersnap-lastsnapshot');
+  snapshot({ force:true });
+  const keys = snapshotKeys();
+  assert.ok(keys.length, 'no snapshot was written');
+  keys.forEach(k => assert.ok(!localStorage.getItem(k).includes(KEY_FIXTURE),
+    k + ' archived the API key'));
+});
+
+test('snapshots an OLDER VERSION wrote are cleaned (v9.90)', () => {
+  // Prevention only helps from here on. The copies already on the device were
+  // written verbatim by v9.89 and earlier.
+  withKey();
+  const legacy = SNAP_PREFIX + '2026-08-01';
+  localStorage.setItem(legacy, localStorage.getItem('flyersnap'));
+  assert.ok(localStorage.getItem(legacy).includes(KEY_FIXTURE), 'fixture is broken');
+  assert.strictEqual(scrubSnapshots(), 1, 'the sweep reported cleaning nothing');
+  assert.ok(!localStorage.getItem(legacy).includes(KEY_FIXTURE), 'the old snapshot kept the key');
+  assert.ok(JSON.parse(localStorage.getItem(legacy)).events.length,
+    'the sweep destroyed the rest of the snapshot');
+});
+
+test('a snapshot that will not parse is left exactly as it was (v9.90)', () => {
+  // It cannot be restored either -- restoreSnapshot parses it -- so there is
+  // nothing in it to protect, and destroying a rescue copy during a security
+  // tidy is the recovery-path failure rule 28 exists for.
+  boot(GOOD);
+  const broken = SNAP_PREFIX + '2026-07-01';
+  const garbage = '{"settings":{"apiKey":"sk-ant-x" and then it stops';
+  localStorage.setItem(broken, garbage);
+  scrubSnapshots();
+  assert.strictEqual(localStorage.getItem(broken), garbage,
+    'an unreadable snapshot was rewritten or destroyed');
+});
+
+test('"Remove key from this device" leaves no restorable copy (v9.90)', () => {
+  // D6, stated as the promise the button makes. Its own docblock: "the entire
+  // point here is that the value stops existing."
+  withKey();
+  const legacy = SNAP_PREFIX + '2026-08-02';
+  localStorage.setItem(legacy, localStorage.getItem('flyersnap'));
+  removeKey();
+  const everywhere = [localStorage.getItem('flyersnap')]
+    .concat(snapshotKeys().map(k => localStorage.getItem(k)));
+  everywhere.forEach((blob, i) => assert.ok(!String(blob).includes(KEY_FIXTURE),
+    'copy ' + i + ' still holds the key after it was removed'));
+});
+
+test('removing the key does not ARCHIVE it on the way out (v9.90)', () => {
+  // save() snapshots the PREVIOUS blob, so with the last snapshot over a day
+  // old, tapping "remove" used to be able to file a fresh copy of the very key
+  // it claims to erase. This is the 24-hour window the plan flagged as read but
+  // not yet reproduced.
+  withKey();
+  localStorage.setItem('flyersnap-lastsnapshot', String(Date.now() - 48*3600*1000));
+  removeKey();
+  snapshotKeys().forEach(k => assert.ok(!localStorage.getItem(k).includes(KEY_FIXTURE),
+    'removing the key archived it in ' + k));
+});
+
+test('the Backup screen says the key is not included (v9.90)', () => {
+  boot(GOOD);
+  const m = { innerHTML:'' };
+  renderSetBackup(m);
+  assert.ok(/do not include your API key/i.test(m.innerHTML),
+    'nothing tells the user a restore will not bring the key back');
 });
 
 test('snapshots are throttled to one a day', () => {
