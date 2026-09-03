@@ -122,6 +122,14 @@ only on confirm.
   `ollama rm qwen3-vl:8b-instruct-q8_0`, `ollama rm qwen2.5:14b-instruct`.
 - If you ever change the model tag: change it in **all** of
   `VITE_HOSTED_AI_MODEL` (GitHub Variable), recipe `GORDON_MODEL`, FlyerSnap
-  `GORDON_MODEL`, both migration sets, and this file — together.
+  `GORDON_MODEL`, both migration sets, **every default in `scripts/`**, and this
+  file — together.
+  - `scripts/` was missing from this list until 2026-08-31, and that is exactly why it
+    drifted: `scripts/corpus/generateDescriptions.mjs` and `scripts/regenerateCorpus.ts`
+    were still defaulting to `qwen2.5:14b-instruct` — a tag this very file says never to
+    use and that `src/lib/aiConfig.ts:150` lists in `BAD_MODEL_TAGS`. Both were corrected
+    the same day. `scripts/classifyCorpus.mjs:32` had it right and shows the intended
+    shape: `process.env.GORDON_MODEL || 'qwen3-vl:8b-instruct-q4_K_M'`.
+  - Check with: `grep -rn "qwen" scripts src .github` before calling a tag change done.
 - FlyerSnap deploy always bumps `APP_VERSION` **and** `sw.js` CACHE, keeps the
   inlined `js/` copies identical to source, and requires "N passed, 0 failed".
