@@ -475,6 +475,42 @@ const eq = (got, want, what) => {
       selectMode = false; selectedEvents = new Set(); render(); });
   });
 
+  await check('a real tap on Restore brings a folder back with its notes (v10.3)', async () => {
+    // The vm tests call restoreDeleted directly. This taps the button on the
+    // real screen and reads the result back out of localStorage -- a restore
+    // nobody saved is a restore that is gone next time the app opens.
+    await pg.evaluate(() => {
+      S.noteFolders = [{ id:'f1', name:'School', deleted:false }];
+      S.noteLabels = [];
+      S.notes = [
+        { id:'n1', title:'Uniform sizes', body:'x', folderId:'f1', labelIds:[], deleted:false, archived:false },
+        { id:'n2', title:'Bus times',     body:'y', folderId:'f1', labelIds:[], deleted:false, archived:false },
+      ];
+      save();
+      delNoteGroup('noteFolders', 'f1');       // the toast Undo is deliberately ignored
+      view = { tab:'settings', sub:'setDeleted', data:null };
+      render();
+    });
+    await pg.waitForTimeout(250);
+    const text = await pg.evaluate(() => document.body.innerText);
+    if(!/Note folder/.test(text) || !/School/.test(text))
+      throw new Error('the folder is not listed in Recently Deleted:\n' + text.slice(0, 300));
+    const unfiled = await pg.evaluate(() => S.notes.filter(n => !n.folderId).length);
+    if(unfiled !== 2) throw new Error('the fixture did not empty the folder');
+    await pg.getByRole('button', { name: 'Restore' }).first().click();
+    await pg.waitForTimeout(300);
+    const saved = await pg.evaluate(() => {
+      const d = JSON.parse(localStorage.getItem('flyersnap'));
+      return { back: d.notes.filter(n => n.folderId === 'f1').map(n => n.title).sort(),
+        stillDeleted: !!(d.noteFolders.find(f => f.id === 'f1') || {}).deleted,
+        held: 'heldNoteIds' in (d.noteFolders.find(f => f.id === 'f1') || {}) };
+    });
+    if(saved.stillDeleted) throw new Error('the folder is still marked deleted after Restore');
+    if(JSON.stringify(saved.back) !== JSON.stringify(['Bus times', 'Uniform sizes']))
+      throw new Error('the notes did not come back: ' + JSON.stringify(saved.back));
+    if(saved.held) throw new Error('the restored folder still carries heldNoteIds in the SAVED file');
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;

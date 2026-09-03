@@ -386,7 +386,7 @@ gets `Cannot find module 'playwright'` from those two tools and nothing else.
 `npm test`, `npm run audit` and `npm run preview` are aliases for the three
 commands below.
 
-- `node tests.js` — 896 tests: data safety, migrations, inline-handler
+- `node tests.js` — 903 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -419,7 +419,7 @@ commands below.
   does not cover it — **it renders the 48 SCREENS, and a sheet is not a screen.**
   The vm harness has no layout at all. If a control's problem is *where it is*,
   only this harness can tell you.
-  25 checks as of v10.1. Two of them exist because the vm harness structurally
+  26 checks as of v10.3. Two of them exist because the vm harness structurally
   cannot reach the code: `saveEventEdit` opens with `syncEventForm()`, which
   re-reads the live inputs (every stub reports `value:''`), and the assistant's
   second "which one did you mean?" is pushed from inside `confirmPendingAction`

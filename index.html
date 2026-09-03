@@ -4241,7 +4241,8 @@ function pruneData(){
   // Soft-deleted rows: once they're old, actually drop them.
   const before = S.events.length + S.listItems.length + S.lists.length +
                  (S.notes || []).length +
-                 S.chores.length + S.rewards.length + S.kids.length;
+                 S.chores.length + S.rewards.length + S.kids.length +
+                 (S.noteFolders || []).length + (S.noteLabels || []).length;
   // ONE rule, used by every collection. This helper already existed and was
   // never called: events were filtered on the event's own DATE, so an event
   // dated last year was destroyed however recently it was deleted and a deleted
@@ -4258,9 +4259,15 @@ function pruneData(){
   S.chores = S.chores.filter(c => !oldDeleted(c));
   S.rewards = S.rewards.filter(r => !oldDeleted(r));
   S.kids = S.kids.filter(k => !oldDeleted(k));
+  // v10.3: these two never aged out at all, so a deleted folder sat in the save
+  // file forever. Now that they are in Recently Deleted they follow its
+  // countdown like every other row.
+  S.noteFolders = (S.noteFolders || []).filter(f => !oldDeleted(f));
+  S.noteLabels = (S.noteLabels || []).filter(l => !oldDeleted(l));
   removed += before - (S.events.length + S.listItems.length + S.lists.length +
                        (S.notes || []).length +
-                       S.chores.length + S.rewards.length + S.kids.length);
+                       S.chores.length + S.rewards.length + S.kids.length +
+                       (S.noteFolders || []).length + (S.noteLabels || []).length);
 
   // Very old past events.
   //
@@ -4908,7 +4915,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.2';
+const APP_VERSION = 'v10.3';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -10741,7 +10748,15 @@ function addNoteGroup(coll, name){
   const key = clean.toLowerCase();
   const dup = S[coll].find(x => String(x.name || '').trim().toLowerCase() === key);
   if(dup){
-    if(dup.deleted){ unmarkDeleted(dup); save(); }   // a re-add un-deletes
+    if(dup.deleted){
+      // A re-add already revived the ROW (same id, so anything still pointing
+      // at it lines up). Reviving it without its notes was a half-restore, and
+      // it was the app's own documented way back. Same rule now as Recently
+      // Deleted: revival is revival.
+      unmarkDeleted(dup);
+      relinkNoteGroup(coll, dup);
+      save();
+    }
     return dup;
   }
   const row = { id:uid(), name:clean, deleted:false };
@@ -10749,6 +10764,37 @@ function addNoteGroup(coll, name){
   save();
   return row;
 }
+/**
+ * Put a revived folder's or label's notes back into it. Returns how many.
+ *
+ * Two things it deliberately will NOT do, because a restore that overrides a
+ * later decision is not a restore:
+ *   - it never touches a note that has since been DELETED;
+ *   - for a folder, it only re-files notes that are still Unfiled. If you moved
+ *     one into "Sports" after the folder went, it stays in Sports.
+ * For a label it just adds the label back, which cannot displace anything --
+ * a note carries as many labels as it likes.
+ */
+function relinkNoteGroup(coll, row){
+  if(!row || !Array.isArray(row.heldNoteIds)) return 0;
+  const isFolder = coll === 'noteFolders';
+  let n = 0;
+  row.heldNoteIds.forEach(nid => {
+    const note = (S.notes || []).find(x => x.id === nid);
+    if(!note || note.deleted) return;
+    if(isFolder){
+      if(note.folderId) return;          // moved somewhere else since; leave it
+      note.folderId = row.id; n++;
+    } else {
+      if(!Array.isArray(note.labelIds)) note.labelIds = [];
+      if(note.labelIds.includes(row.id)) return;
+      note.labelIds.push(row.id); n++;
+    }
+  });
+  delete row.heldNoteIds;
+  return n;
+}
+
 function renameNoteGroup(coll, id, name){
   const clean = String(name || '').trim().slice(0, 40);
   const row = (S[coll] || []).find(x => x.id === id);
@@ -10775,6 +10821,13 @@ function delNoteGroup(coll, id){
     : Array.isArray(n.labelIds) && n.labelIds.includes(id));
 
   markDeleted(row);
+  // WRITE DOWN WHAT WAS IN IT (v10.3). The toast's Undo restored the notes
+  // because `touched` is still in scope; nothing else could, so once the toast
+  // went the membership was gone and the folder was not in Recently Deleted at
+  // all. Measured: delete "School" with three notes, miss the toast, and
+  // re-adding "School" gave back an EMPTY folder -- the app's own documented
+  // way back returned less than it took.
+  row.heldNoteIds = touched.map(n => n.id);
   touched.forEach(n => {
     if(isFolder) n.folderId = null;
     else n.labelIds = n.labelIds.filter(x => x !== id);
@@ -10787,6 +10840,9 @@ function delNoteGroup(coll, id){
         + (touched.length ? ' — ' + touched.length + ' note' + (touched.length === 1 ? '' : 's') + ' kept' : ''),
     { label:'Undo', fn:() => {
       unmarkDeleted(row);
+      // DELETED, not left behind: a live row must not carry a tombstone's
+      // bookkeeping, for the same reason unmarkDeleted removes deletedAt.
+      delete row.heldNoteIds;
       touched.forEach(n => {
         if(isFolder) n.folderId = id;
         else if(!n.labelIds.includes(id)) n.labelIds.push(id);
@@ -12137,16 +12193,24 @@ function restoreNotDuplicate(key){
 
 // Which collections carry soft deletes, and how to name a row in each. ONE
 // table, so a new collection is added here rather than in three separate
-// switches. noteFolders/noteLabels are absent on purpose: prune does not age
-// them either, and a folder comes back by re-adding it under the same name.
+// switches.
+//
+// noteFolders/noteLabels were absent, with a comment saying a folder "comes
+// back by re-adding it under the same name". Measured, and it did not: the row
+// came back EMPTY, because nothing remembered what had been in it. They are
+// here now, and delNoteGroup writes that membership onto the tombstone so
+// Restore can honour it. This screen promises "anything you delete waits here
+// for 30 days" -- two collections quietly opting out made that false.
 const DELETED_COLLS = [
-  { coll:'events',    label:'Event',     name: r => r.title || 'Untitled' },
-  { coll:'chores',    label:'Chore',     name: r => r.title || 'Untitled' },
-  { coll:'lists',     label:'List',      name: r => r.name  || 'Untitled' },
-  { coll:'listItems', label:'List item', name: r => r.text  || 'Untitled' },
-  { coll:'notes',     label:'Note',      name: r => noteTitleOf(r) || 'Untitled' },
-  { coll:'rewards',   label:'Reward',    name: r => r.title || 'Untitled' },
-  { coll:'kids',      label:'Person',    name: r => r.name  || 'Untitled' },
+  { coll:'events',      label:'Event',     name: r => r.title || 'Untitled' },
+  { coll:'chores',      label:'Chore',     name: r => r.title || 'Untitled' },
+  { coll:'lists',       label:'List',      name: r => r.name  || 'Untitled' },
+  { coll:'listItems',   label:'List item', name: r => r.text  || 'Untitled' },
+  { coll:'notes',       label:'Note',      name: r => noteTitleOf(r) || 'Untitled' },
+  { coll:'rewards',     label:'Reward',    name: r => r.title || 'Untitled' },
+  { coll:'kids',        label:'Person',    name: r => r.name  || 'Untitled' },
+  { coll:'noteFolders', label:'Note folder', name: r => r.name || 'Untitled' },
+  { coll:'noteLabels',  label:'Note label',  name: r => r.name || 'Untitled' },
 ];
 
 /** Every soft-deleted row across every collection, newest deletion first. */
@@ -12176,8 +12240,16 @@ function restoreDeleted(coll, id){
   const row = (S[coll] || []).find(x => x.id === id);
   if(!row) return;
   unmarkDeleted(row);
+  // A folder or a label comes back WITH the notes that were in it. Saying the
+  // number matters: relink deliberately skips a note you have since deleted or
+  // filed elsewhere, so "3 notes back in it" and "1 note back in it" are
+  // different outcomes and the user is the only one who can tell whether the
+  // difference is right.
+  const back = relinkNoteGroup(coll, row);
   save(); render();
-  toast('Restored');
+  toast(back
+    ? 'Restored — ' + back + ' note' + (back === 1 ? '' : 's') + ' back in it'
+    : 'Restored');
 }
 
 function purgeDeleted(coll, id){

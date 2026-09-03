@@ -1079,6 +1079,90 @@ tombstone would let `restoreDeleted` re-link them, which makes the row honest
 and makes pruning safe. That is a new persisted field, a special case in a
 deliberately generic restore path, and its own tests.
 
-**Open — needs Logan's ruling.** The user-visible harm today is a handful of
-tiny rows that never age out, against a real change to a data shape. Not built
-on my own judgement.
+**~~Open — needs Logan's ruling.~~ BUILT, v10.3.** Logan asked for the real fix.
+See section 20.
+
+---
+
+## 20. noteFolders / noteLabels as built (v10.3)
+
+The fix §19 described, built. Recently Deleted's promise — *"anything you delete
+waits here for 30 days"* — is now true for these two collections as well.
+
+### The change
+
+1. **`delNoteGroup` writes down what was in it.** It already computed `touched`
+   for the toast's Undo and then threw it away; that list is now stored on the
+   tombstone as `heldNoteIds`.
+2. **`relinkNoteGroup(coll, row)`** — one re-link, used by every way back.
+3. **`DELETED_COLLS`** gains `noteFolders` and `noteLabels`, so both appear in
+   Recently Deleted with a countdown.
+4. **`restoreDeleted`** re-links and says how many came back.
+5. **`addNoteGroup`'s re-add** re-links too. It already revived the row (same
+   id); reviving it *without* its notes was the half-restore §19 warned about,
+   and it was the app's own documented way back.
+6. **`pruneData`** ages both collections, and counts them in what it reports.
+
+### What a restore deliberately will NOT do
+
+A restore that overrides a later decision is not a restore. `relinkNoteGroup`
+skips a note that has since been **deleted**, and — for a folder — a note that
+has since been **filed somewhere else**. Measured:
+
+```
+delete "School" (3 notes), then move "Bus times" to Sports and bin "Lunch codes"
+Restore said:      "Restored — 1 note back in it"
+back in School:    ["Uniform sizes"]
+left in Sports:    ["Bus times"]
+Lunch codes:       still deleted
+```
+
+The count in the toast matters for exactly this reason: "3 notes back in it" and
+"1 note back in it" are different outcomes, and the user is the only one who can
+judge whether the difference is right.
+
+A label just gets added back, which cannot displace anything — a note carries as
+many labels as it likes — and is skipped if already present.
+
+### A live row comes back the shape it went in
+
+`unmarkDeleted` deletes `deletedAt` rather than nulling it, so that an undo is a
+real restoration. `heldNoteIds` follows the same rule: it is removed on every
+path back. Measured byte-for-byte:
+
+```
+row before delete  {"id":"f1","name":"School","deleted":false}
+row after Undo     {"id":"f1","name":"School","deleted":false}   identical
+```
+
+### Tests: 903 total, from 896. Browser checks: 26, from 25.
+
+Seven behavioural tests plus a real-tap browser check that presses **Restore**
+on the actual screen and reads the result back out of `localStorage` — a restore
+nobody saved is a restore that is gone next time the app opens.
+
+### Mutation tests — ten reverts, one at a time. All RED.
+
+| # | Revert | Killed |
+|---|---|---|
+| N1 | the tombstone stops recording membership | 4 tests |
+| N2 | Restore stops re-linking | 4 tests |
+| N3 | the rows drop out of Recently Deleted | 1 |
+| N4 | prune stops ageing them | 1 |
+| N5 | relink stops respecting a note you moved | 1 |
+| N6 | relink stops respecting a note you deleted | 1 |
+| N7 | a restored row keeps its bookkeeping | 1 |
+| N8 | the toast Undo leaves it behind | 1 |
+| N9 | re-add returns to the half-restore | 1 |
+| N10 | a label can be added twice | 1 |
+
+And the browser check was mutation-proved separately (Restore stops re-linking →
+*"the notes did not come back: []"*).
+
+### What the a11y audit does and does not say here
+
+Its seed now includes a deleted folder and a deleted label, so the new row types
+are checked for accessible names and tap targets. **It does not prove they
+appear** — measured: removing the two `DELETED_COLLS` entries leaves the audit
+green, because it asserts nothing about content. Presence is carried by the
+behavioural test, which N3 turned red.

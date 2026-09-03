@@ -162,6 +162,11 @@ const SCREENS = [
   { key:'setDismissed-empty', setup:`S.settings.dismissedConflicts = []; S.settings.notDuplicates = [];
       view = { tab:'settings', sub:'setDismissed', data:null }` },
   { key:'setDeleted', setup:`S.lists.push({id:'ld1',name:'Old list',deleted:true,deletedAt:new Date().toISOString()});
+      // A deleted note folder and label too (v10.3). Without these the screen
+      // renders none of the rows this release added, and its pass would say
+      // nothing about them.
+      S.noteFolders = [{id:'fd1',name:'Old folder',deleted:true,deletedAt:new Date().toISOString(),heldNoteIds:['n1']}];
+      S.noteLabels = [{id:'lb1',name:'old label',deleted:true,deletedAt:new Date().toISOString(),heldNoteIds:[]}];
       view = { tab:'settings', sub:'setDeleted', data:null }` },
   { key:'setDeleted-empty', setup:`view = { tab:'settings', sub:'setDeleted', data:null }` },
   { key:'setBackup',       setup:`sub('setBackup')` },

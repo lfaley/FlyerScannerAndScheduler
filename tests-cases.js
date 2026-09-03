@@ -6247,6 +6247,126 @@ test('P4: removing an event from its sheet says so, and can be undone (v9.99)', 
   assert.ok(!('deletedAt' in back), 'the restored row kept its deletedAt');
 });
 
+// ---------------------------------------------------------------------------
+// Note folders and labels get a real way back (v10.3).
+//
+// MEASURED before: delete a folder holding three notes, miss the seven-second
+// toast, and there was nothing left. The folder was not in Recently Deleted --
+// which promises "anything you delete waits here for 30 days" -- and the app's
+// own documented way back, re-adding it by name, revived the ROW and returned
+// an EMPTY folder. Nothing remembered what had been in it.
+// DELETE-HONESTY-PLAN section 19.
+// ---------------------------------------------------------------------------
+function schoolFolder(){
+  boot(GOOD);
+  S.noteFolders = [{ id:'f1', name:'School', deleted:false },
+                   { id:'f2', name:'Sports', deleted:false }];
+  S.noteLabels = [{ id:'l1', name:'urgent', deleted:false }];
+  S.notes = [
+    { id:'n1', title:'Uniform sizes', body:'x', folderId:'f1', labelIds:['l1'], deleted:false },
+    { id:'n2', title:'Bus times',     body:'y', folderId:'f1', labelIds:[],     deleted:false },
+    { id:'n3', title:'Lunch codes',   body:'z', folderId:'f1', labelIds:[],     deleted:false },
+  ];
+}
+const inFolder = (id) => S.notes.filter(n => n.folderId === id && !n.deleted).map(n => n.title).sort();
+
+test('a deleted note folder waits in Recently Deleted like everything else (v10.3)', () => {
+  schoolFolder();
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  const row = deletedRows().find(r => r.coll === 'noteFolders');
+  assert.ok(row, 'the folder is not in Recently Deleted: '
+    + JSON.stringify(deletedRows().map(r => r.label + ':' + r.name)));
+  assert.strictEqual(row.name, 'School', 'wrong name on the row');
+  assert.ok(row.at, 'no deletion date, so it can never age out or count down');
+});
+
+test('restoring a folder brings its notes back with it (v10.3)', () => {
+  schoolFolder();
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  assert.deepStrictEqual(inFolder('f1'), [], 'the fixture did not empty the folder');
+  const seen = withToast(() => restoreDeleted('noteFolders', 'f1'));
+  assert.deepStrictEqual(inFolder('f1'), ['Bus times', 'Lunch codes', 'Uniform sizes'],
+    'Restore gave back an empty folder');
+  assert.ok(/3 notes back in it/.test(seen[0].msg),
+    'it does not say how many came back: ' + seen[0].msg);
+});
+
+test('a restore never overrides what you did afterwards (v10.3)', () => {
+  // The rule that makes this a restore rather than a rollback. A note you moved
+  // into another folder stays there; a note you deleted stays deleted.
+  schoolFolder();
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  S.notes.find(n => n.id === 'n2').folderId = 'f2';   // moved to Sports
+  markDeleted(S.notes.find(n => n.id === 'n3'));      // and this one binned
+  const seen = withToast(() => restoreDeleted('noteFolders', 'f1'));
+  assert.deepStrictEqual(inFolder('f1'), ['Uniform sizes'], 'it pulled back a note it should not have');
+  assert.deepStrictEqual(inFolder('f2'), ['Bus times'], 'it yanked a note out of the folder you moved it to');
+  assert.strictEqual(S.notes.find(n => n.id === 'n3').deleted, true, 'it resurrected a deleted note');
+  assert.ok(/1 note back in it/.test(seen[0].msg),
+    'the count does not reflect what actually happened: ' + seen[0].msg);
+});
+
+test('labels come back on the notes that carried them (v10.3)', () => {
+  schoolFolder();
+  withToast(() => delNoteGroup('noteLabels', 'l1'));
+  assert.deepStrictEqual(S.notes.find(n => n.id === 'n1').labelIds, [], 'the fixture did not strip the label');
+  withToast(() => restoreDeleted('noteLabels', 'l1'));
+  assert.deepStrictEqual(S.notes.find(n => n.id === 'n1').labelIds, ['l1'], 'the label did not come back');
+  // Twice must not double it up.
+  S.noteLabels.find(l => l.id === 'l1').heldNoteIds = ['n1'];
+  relinkNoteGroup('noteLabels', S.noteLabels.find(l => l.id === 'l1'));
+  assert.deepStrictEqual(S.notes.find(n => n.id === 'n1').labelIds, ['l1'], 'the label was added twice');
+});
+
+test('re-adding a folder by name is a FULL revival, not half of one (v10.3)', () => {
+  // addNoteGroup already revived the row (same id). Reviving it without its
+  // notes was the half-restore the plan called out.
+  schoolFolder();
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  const row = addNoteGroup('noteFolders', 'School');
+  assert.strictEqual(row.id, 'f1', 'a re-add made a second folder instead of reviving the first');
+  assert.deepStrictEqual(inFolder('f1'), ['Bus times', 'Lunch codes', 'Uniform sizes'],
+    're-adding by name still gives back an empty folder');
+});
+
+test('a restored row carries no tombstone bookkeeping (v10.3)', () => {
+  // Same rule unmarkDeleted follows for deletedAt: a live row must come back
+  // the shape it was, or "undo restores it exactly" stops being true.
+  schoolFolder();
+  const before = JSON.stringify(S.noteFolders.find(f => f.id === 'f1'));
+  const seen = withToast(() => delNoteGroup('noteFolders', 'f1'));
+  assert.ok(seen[0].action, 'the delete toast lost its Undo');
+  withToast(() => seen[0].action.fn());
+  assert.strictEqual(JSON.stringify(S.noteFolders.find(f => f.id === 'f1')), before,
+    'the row came back a different shape than it went in');
+  // ...and the same through Recently Deleted.
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  withToast(() => restoreDeleted('noteFolders', 'f1'));
+  assert.ok(!('heldNoteIds' in S.noteFolders.find(f => f.id === 'f1')),
+    'a live folder is still carrying the list of what it once held');
+});
+
+test('an old deleted folder is finally cleared out by prune (v10.3)', () => {
+  // These two collections had NO age test at all, so a deleted folder sat in
+  // the save file forever -- the one thing Recently Deleted's 30-day promise
+  // could not have been true about.
+  schoolFolder();
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  withToast(() => delNoteGroup('noteLabels', 'l1'));
+  const old = new Date(Date.now() - 400 * 24 * 3600 * 1000).toISOString();
+  S.noteFolders.find(f => f.id === 'f1').deletedAt = old;
+  S.noteLabels.find(l => l.id === 'l1').deletedAt = old;
+  const n = pruneData();
+  assert.ok(!S.noteFolders.some(f => f.id === 'f1'), 'a year-old deleted folder survived the cleanup');
+  assert.ok(!S.noteLabels.some(l => l.id === 'l1'), 'a year-old deleted label survived the cleanup');
+  assert.ok(n >= 2, 'the cleanup did not count what it removed: ' + n);
+  // A recent one is NOT swept -- the countdown has to mean something.
+  schoolFolder();
+  withToast(() => delNoteGroup('noteFolders', 'f1'));
+  pruneData();
+  assert.ok(S.noteFolders.some(f => f.id === 'f1'), 'a folder deleted just now was destroyed by the cleanup');
+});
+
 test('P5: a redemption can be undone from Star History for a day (v9.99)', () => {
   boot(GOOD);
   S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false }];
