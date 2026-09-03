@@ -246,6 +246,53 @@ const eq = (got, want, what) => {
     if(/id="gordonPassword"[^>]*value=/.test(html)) throw new Error('the password box now echoes its value');
   });
 
+  await check('the add form refuses a date that does not exist, on screen (v9.97)', async () => {
+    // eventFormErrors is unit-tested, but the only thing that CALLS it is
+    // saveEventEdit, which opens with syncEventForm() -- it reads the live
+    // inputs. In the vm harness every input stub reports value:'', so that path
+    // is untestable there, and this is the only place the real one runs.
+    await pg.evaluate(() => openNewEvent());
+    await pg.waitForTimeout(150);
+    // A title nothing in the fixture uses -- 'Spring Recital' is already seeded
+    // as e9, so asserting on it would have passed no matter what saved.
+    await pg.locator('#efTitle').fill('Kazoo Tryouts');
+    // MEASURED, and the reason this is not a .fill(): a real <input type="date">
+    // REFUSES an impossible value -- Playwright's fill('2026-02-30') errors, and
+    // assigning it leaves the box empty. So the picker can never hand the
+    // validator a 30th of February. What can is a value set in code: a pending
+    // review row the model wrote, an imported backup, or a browser with no date
+    // picker where the field degrades to plain text. That is the case here.
+    const shown = await pg.evaluate(() => {
+      const el = document.getElementById('efDate');
+      el.value = '2026-02-30';
+      return el.value;
+    });
+    if(shown === '2026-02-30')
+      throw new Error('this browser now accepts an impossible date in a date input; ' +
+        'the premise of this check has changed and it needs rewriting');
+    // Degrade the field the way a browser without a date picker does, then type
+    // it. saveEventEdit re-reads the live input first, so nothing short of this
+    // actually reaches the validator.
+    await pg.evaluate(() => {
+      const el = document.getElementById('efDate');
+      el.type = 'text';
+      el.value = '2026-02-30';
+      saveEventEdit();
+    });
+    await pg.waitForTimeout(150);
+    const msg = await pg.locator('#err-date').textContent();
+    if(!/does not exist/.test(msg || ''))
+      throw new Error('the inline message was ' + JSON.stringify(msg));
+    const saved = await pg.evaluate(() => S.events.some(e => e.title === 'Kazoo Tryouts'));
+    if(saved) throw new Error('the impossible date was saved anyway');
+    // And a real one goes through, so the guard is not just refusing everything.
+    await pg.locator('#efDate').fill('2026-09-12');
+    await pg.evaluate(() => saveEventEdit());
+    await pg.waitForTimeout(250);
+    const ok2 = await pg.evaluate(() => S.events.some(e => e.title === 'Kazoo Tryouts'));
+    if(!ok2) throw new Error('a real date was refused too');
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;

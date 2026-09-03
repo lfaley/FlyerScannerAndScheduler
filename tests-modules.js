@@ -1357,10 +1357,19 @@ module.exports = async function runModuleTests(test){
 
   test('validation is inline and next to its field, not a modal alert', () => {
     // NN/g: an error shown away from its field has to be memorised.
+    // The validator moved out of saveEventEdit in v9.97 so it could be tested
+    // on its own, so this reads both halves: the one that BUILDS the errors and
+    // the one that SHOWS them.
+    const build = script.split('function eventFormErrors')[1].split('\nfunction ')[0];
     const save = script.split('function saveEventEdit')[1].split('\nfunction ')[0];
-    assert.ok(!/alert\(/.test(save), 'saveEventEdit still uses alert()');
-    assert.ok(/errors\.title/.test(save) && /errors\.date/.test(save),
+    assert.ok(!/alert\(/.test(save) && !/alert\(/.test(build),
+      'the event form still uses alert()');
+    assert.ok(/errors\.title/.test(build) && /errors\.date/.test(build),
       'per-field errors are not being set');
+    assert.ok(/eventFormErrors\(/.test(save),
+      'saveEventEdit no longer runs the validator');
+    assert.ok(/f\.errors\s*=\s*errors/.test(save),
+      'the errors are built but never handed to the form for rendering');
     assert.ok(/class="fielderr"/.test(script), 'no inline error element');
     assert.ok(/aria-invalid="true"/.test(script), 'invalid fields are not announced');
   });
@@ -1682,6 +1691,52 @@ module.exports = async function runModuleTests(test){
     const fn = codeOf(script.split('async function runReviewAsk(')[1].split('\nfunction ')[0]);
     assert.ok(/\(el && el\.value\) \|\| reviewAsk\.draft/.test(fn),
       'runReviewAsk still reads only the DOM node, so a re-render loses the question');
+  });
+
+  test('a date is checked for VALIDITY, not just shape (v9.97)', () => {
+    // The shape regex was doing this job in four places. Shape is not validity:
+    // '2026-99-99' passed every one of them and reached a real event, where
+    // parseDate rolled it over to "Wednesday, June 7" while every filter and
+    // sort still used the raw string.
+    ['2026-99-99', '2026-02-30', '2026-13-01', '0000-00-00', '9999-99-99',
+     '2026-04-31', '2025-02-29', '2026-00-10', '2026-01-00']
+      .forEach(d => assert.strictEqual(fmt.isRealDate(d), false, 'accepted an impossible date: ' + d));
+    ['2026-09-05', '2026-02-28', '2024-02-29', '2026-12-31', '2026-01-01']
+      .forEach(d => assert.strictEqual(fmt.isRealDate(d), true, 'rejected a real date: ' + d));
+    // Shape still matters -- these were already dropped and must stay dropped.
+    ['next tuesday', '26-9-5', '2026/09/05', '', null, undefined, 20260905]
+      .forEach(d => assert.strictEqual(fmt.isRealDate(d), false, 'accepted a non-date: ' + JSON.stringify(d)));
+  });
+
+  test('a time is checked for VALIDITY too (v9.97)', () => {
+    ['25:00', '12:99', '24:00', '99:99', '-1:00']
+      .forEach(t2 => assert.strictEqual(fmt.isRealTime(t2), false, 'accepted an impossible time: ' + t2));
+    ['00:00', '23:59', '09:30', '12:00']
+      .forEach(t2 => assert.strictEqual(fmt.isRealTime(t2), true, 'rejected a real time: ' + t2));
+    ['9:30', '0930', '', null].forEach(t2 =>
+      assert.strictEqual(fmt.isRealTime(t2), false, 'accepted a non-time: ' + JSON.stringify(t2)));
+  });
+
+  test('an impossible date never survives validateRoute (v9.97)', () => {
+    // The original reproduction, stated as a test: ok:true with the junk intact.
+    const bad = rt.validateRoute({ intent:'edit_event',
+      params:{ event:'recital', date:'2026-99-99', time:'99:99' }, confidence:0.9 });
+    assert.strictEqual(bad.ok, true, 'the intent itself still stands -- date is optional');
+    assert.strictEqual(bad.params.date, undefined, 'an impossible date survived');
+    assert.strictEqual(bad.params.time, undefined, 'an impossible time survived');
+    const good = rt.validateRoute({ intent:'edit_event',
+      params:{ event:'recital', date:'2026-09-12', time:'18:00' }, confidence:0.9 });
+    assert.strictEqual(good.params.date, '2026-09-12', 'a real date was dropped');
+    assert.strictEqual(good.params.time, '18:00', 'a real time was dropped');
+    // A range check alone is not enough, and this is the case that proves it:
+    // every field of 2026-02-30 is in range, so month<=12/day<=31 waves it
+    // through. Only the round-trip catches it. Measured: with the round-trip
+    // removed and the ranges left in place, the 99-99 case above still passed.
+    ['2026-02-30', '2026-04-31', '2025-02-29'].forEach(d => {
+      const r = rt.validateRoute({ intent:'edit_event',
+        params:{ event:'recital', date:d }, confidence:0.9 });
+      assert.strictEqual(r.params.date, undefined, 'a date that does not exist survived: ' + d);
+    });
   });
 
   test('a topic word only counts as a whole word (v9.96)', () => {

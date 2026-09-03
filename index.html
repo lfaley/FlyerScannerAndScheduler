@@ -579,6 +579,42 @@ function relativeTime(iso, now){
   return label(Math.round(abs / 31536000), 'y');
 }
 
+/**
+ * A date that a calendar could actually have.
+ *
+ * The shape regex /^\d{4}-\d{2}-\d{2}$/ was doing this job everywhere -- the
+ * router's param check, the manual add form, the extraction sanitiser and the
+ * Gmail watcher -- and shape is not validity. Measured before this existed:
+ * validateRoute returned ok:true for '2026-99-99' and '99:99', and nothing
+ * downstream looked again, so the value reached a real event.
+ *
+ * It never THREW, which is why nobody noticed. parseDate rolls over silently:
+ * '2026-99-99' renders as "Wednesday, June 7" and '2026-02-30' as "March 2",
+ * while every filter and sort still uses the raw string -- so a row is shown on
+ * one day and reasoned about on another. The ICS export is worse: DTSTART keeps
+ * the junk verbatim while DTEND is computed through a real Date, so the two
+ * disagree by years and the file is garbage to a calendar client.
+ *
+ * Round-tripped through Date rather than a month-length table, because that
+ * table has to know about leap years and this does not. Note Date.UTC maps
+ * years 0-99 into 1900-1999, so the readback also rejects those.
+ */
+function isRealDate(s){
+  if(typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if(m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/** A time a clock could actually show. Same reasoning as isRealDate. */
+function isRealTime(s){
+  if(typeof s !== 'string' || !/^\d{2}:\d{2}$/.test(s)) return false;
+  const [h, mi] = s.split(':').map(Number);
+  return h >= 0 && h <= 23 && mi >= 0 && mi <= 59;
+}
+
+
 // ===== inlined from js/matching.js =====
 /**
  * Event matching and grouping. Pure -- no DOM, no app state.
@@ -2204,8 +2240,10 @@ const typeOk = (spec, v) => {
     case 'string':   return typeof v === 'string' && v.trim() !== '';
     case 'string[]': return Array.isArray(v) && v.length > 0 && v.every(x => typeof x === 'string' && x.trim() !== '');
     case 'number':   return typeof v === 'number' && isFinite(v);
-    case 'date':     return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
-    case 'time':     return typeof v === 'string' && /^\d{2}:\d{2}$/.test(v);
+    // Shape AND validity. The comment below about not coercing was only ever
+    // half true: a wrong SHAPE was dropped, an impossible DATE was passed on.
+    case 'date':     return isRealDate(v);
+    case 'time':     return isRealTime(v);
     case 'enum':     return typeof v === 'string' && (spec.values || []).includes(v);
     default:         return false;
   }
@@ -4734,7 +4772,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.96';
+const APP_VERSION = 'v9.97';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -5247,10 +5285,13 @@ function parseExtractedEvents(text){
   // JSON, the transport does not. Also makes the Anthropic path tolerant of
   // prose around the JSON, which it never was.
   try{ arr = JSON.parse(extractJson(text)); }catch(e){ throw new Error('Could not read that document. Try a clearer photo or link.'); }
-  return (Array.isArray(arr)?arr:[]).filter(e=>e && e.title && /^\d{4}-\d{2}-\d{2}$/.test(e.date||''))
+  // A model can return 2026-02-30 as easily as 2026-02-28. Dropping the whole
+  // row on a bad date is right -- an event with no date cannot be reminded
+  // about -- while a bad TIME just becomes null, as a missing one already does.
+  return (Array.isArray(arr)?arr:[]).filter(e=>e && e.title && isRealDate(e.date||''))
     .map(e=>({ title:String(e.title), date:e.date,
-      time:(e.time && /^\d{2}:\d{2}$/.test(e.time))?e.time:null,
-      endTime:(e.endTime && /^\d{2}:\d{2}$/.test(e.endTime))?e.endTime:null,
+      time:(e.time && isRealTime(e.time))?e.time:null,
+      endTime:(e.endTime && isRealTime(e.endTime))?e.endTime:null,
       location:e.location||null, kind:e.kind==='deadline'?'deadline':'event', notes:e.notes||null }));
 }
 
@@ -9573,15 +9614,25 @@ function toggleEventPerson(id){
   render();
 }
 
+// NN/g: an error must sit next to the field it is about, or the user has to
+// memorise it. A blocking alert also has to be dismissed before they can
+// even look at the form.
+// Pulled out of saveEventEdit (v9.97) so it can be tested on its own:
+// saveEventEdit opens with syncEventForm(), which overwrites the form from the
+// live inputs, so a test calling it could only ever validate a blank form.
+function eventFormErrors(f){
+  const errors = {};
+  if(!(f.title || '').trim()) errors.title = 'Give it a name so you can recognise it later.';
+  if(!isRealDate(f.date)) errors.date = /^\d{4}-\d{2}-\d{2}$/.test(f.date || '')
+    ? 'That date does not exist — check the day and month.'
+    : 'Pick a date — an item with no date cannot be reminded about.';
+  return errors;
+}
+
 function saveEventEdit(){
   syncEventForm();
   const f = eventForm;
-  // NN/g: an error must sit next to the field it is about, or the user has to
-  // memorise it. A blocking alert also has to be dismissed before they can
-  // even look at the form.
-  const errors = {};
-  if(!f.title.trim()) errors.title = 'Give it a name so you can recognise it later.';
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) errors.date = 'Pick a date — an item with no date cannot be reminded about.';
+  const errors = eventFormErrors(f);
   if(Object.keys(errors).length){
     f.errors = errors; render();
     const first = document.getElementById(errors.title ? 'efTitle' : 'efDate');

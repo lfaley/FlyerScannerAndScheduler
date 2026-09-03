@@ -5590,6 +5590,35 @@ function twoEvents(){
   pendingAction = null;
 }
 
+test('the extractor drops a row whose date does not exist (v9.97)', () => {
+  // A model returns 2026-02-30 as easily as 2026-02-28. Dropping the row is
+  // right: an event with no usable date cannot be reminded about. A bad TIME is
+  // softer -- it becomes null, exactly as a missing one already does.
+  boot(GOOD);
+  const out = parseExtractedEvents(JSON.stringify([
+    { title:'Real one',      date:'2026-09-12', time:'18:00' },
+    { title:'Impossible day', date:'2026-02-30', time:'18:00' },
+    { title:'Impossible month', date:'2026-13-01' },
+    { title:'Bad time only',  date:'2026-09-13', time:'25:00' },
+  ]));
+  assert.deepStrictEqual(out.map(e => e.title), ['Real one', 'Bad time only'],
+    'an impossible date made it through, or a real one was dropped');
+  assert.strictEqual(out[1].time, null, 'an impossible time was kept instead of nulled');
+});
+
+test('the add form refuses a date that does not exist, and says which (v9.97)', () => {
+  boot(GOOD);
+  const blank = { title:'Recital', date:'', time:'', kind:'event' };
+  assert.ok(/Pick a date/.test(eventFormErrors(Object.assign({}, blank)).date || ''),
+    'an empty date lost its own message');
+  const impossible = eventFormErrors(Object.assign({}, blank, { date:'2026-02-30' })).date || '';
+  assert.ok(impossible, 'an impossible date passed the form');
+  assert.ok(/does not exist/.test(impossible),
+    'it says "pick a date" for a date that IS picked: ' + JSON.stringify(impossible));
+  assert.ok(!eventFormErrors(Object.assign({}, blank, { date:'2026-09-12' })).date,
+    'a real date was refused');
+});
+
 test('editing an ambiguous event actually edits it once you choose (v9.95)', () => {
   // THE BUG: pa.changes was undefined on this path, so Object.assign(target,{})
   // wrote nothing while the toast said 'Updated "Winter Recital"'.

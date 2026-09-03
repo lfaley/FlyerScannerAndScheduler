@@ -117,3 +117,38 @@ export function relativeTime(iso, now){
   if(abs < 365 * 86400) return label(Math.round(abs / 2592000), 'mo');
   return label(Math.round(abs / 31536000), 'y');
 }
+
+/**
+ * A date that a calendar could actually have.
+ *
+ * The shape regex /^\d{4}-\d{2}-\d{2}$/ was doing this job everywhere -- the
+ * router's param check, the manual add form, the extraction sanitiser and the
+ * Gmail watcher -- and shape is not validity. Measured before this existed:
+ * validateRoute returned ok:true for '2026-99-99' and '99:99', and nothing
+ * downstream looked again, so the value reached a real event.
+ *
+ * It never THREW, which is why nobody noticed. parseDate rolls over silently:
+ * '2026-99-99' renders as "Wednesday, June 7" and '2026-02-30' as "March 2",
+ * while every filter and sort still uses the raw string -- so a row is shown on
+ * one day and reasoned about on another. The ICS export is worse: DTSTART keeps
+ * the junk verbatim while DTEND is computed through a real Date, so the two
+ * disagree by years and the file is garbage to a calendar client.
+ *
+ * Round-tripped through Date rather than a month-length table, because that
+ * table has to know about leap years and this does not. Note Date.UTC maps
+ * years 0-99 into 1900-1999, so the readback also rejects those.
+ */
+export function isRealDate(s){
+  if(typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if(m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/** A time a clock could actually show. Same reasoning as isRealDate. */
+export function isRealTime(s){
+  if(typeof s !== 'string' || !/^\d{2}:\d{2}$/.test(s)) return false;
+  const [h, mi] = s.split(':').map(Number);
+  return h >= 0 && h <= 23 && mi >= 0 && mi <= 59;
+}

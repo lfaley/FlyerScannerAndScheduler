@@ -17,6 +17,7 @@
  */
 
 import { INTENTS, intentById, CONSEQUENCE, runsWithoutAsking } from './intents.js';
+import { isRealDate, isRealTime } from './format.js';
 
 // Below this, we do not act on the classification -- we show the user what
 // the assistant can do instead. Chosen to fail towards disclosure rather than
@@ -94,8 +95,10 @@ const typeOk = (spec, v) => {
     case 'string':   return typeof v === 'string' && v.trim() !== '';
     case 'string[]': return Array.isArray(v) && v.length > 0 && v.every(x => typeof x === 'string' && x.trim() !== '');
     case 'number':   return typeof v === 'number' && isFinite(v);
-    case 'date':     return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
-    case 'time':     return typeof v === 'string' && /^\d{2}:\d{2}$/.test(v);
+    // Shape AND validity. The comment below about not coercing was only ever
+    // half true: a wrong SHAPE was dropped, an impossible DATE was passed on.
+    case 'date':     return isRealDate(v);
+    case 'time':     return isRealTime(v);
     case 'enum':     return typeof v === 'string' && (spec.values || []).includes(v);
     default:         return false;
   }
