@@ -5925,7 +5925,98 @@ function withToast(fn){
 }
 
 // ---------------------------------------------------------------------------
-// The error-report outbox (v9.100). flushErrorReports had NO tests at all, and
+// The rescue file (v10.0). v9.90 stopped exportBackup and snapshot() writing
+// the API key into a file. THIS PATH WAS MISSED -- and it is the worst one to
+// miss, because the rescue file is what a stuck user downloads and then emails
+// to someone for help.
+//
+// MEASURED in a real browser against the shipped code, with the live blob, a
+// pre-v9.90 snapshot, the quarantine bytes and a Gordon session in storage:
+//   LEAKED  sk-ant-SECRET-LIVE-KEY
+//   LEAKED  sk-ant-SECRET-IN-QUARANTINE
+//   LEAKED  sk-ant-SECRET-IN-OLD-SNAPSHOT
+//   LEAKED  REFRESH-TOKEN-LONG-LIVED      <- a long-lived credential
+//   LEAKED  ID-TOKEN-LIVE
+// ---------------------------------------------------------------------------
+function withStorage(pairs, fn){
+  const before = {};
+  for(let i = 0; i < localStorage.length; i++){
+    const k = localStorage.key(i);
+    if(k) before[k] = localStorage.getItem(k);
+  }
+  Object.keys(pairs).forEach(k => localStorage.setItem(k, pairs[k]));
+  try { return fn(); }
+  finally {
+    Object.keys(pairs).forEach(k => {
+      if(k in before) localStorage.setItem(k, before[k]); else localStorage.removeItem(k);
+    });
+  }
+}
+
+test('the rescue file carries no API key, from any of the places one hides (v10.0)', () => {
+  const dump = withStorage({
+    'flyersnap': JSON.stringify({ settings:{ apiKey:'sk-ant-LIVE' }, events:[] }),
+    'flyersnap-snap-2020-01-01': JSON.stringify({ settings:{ apiKey:'sk-ant-OLDSNAP' } }),
+  }, () => JSON.stringify(quarantineDump()));
+  assert.ok(!/sk-ant-LIVE/.test(dump), 'the live API key is in the rescue file');
+  assert.ok(!/sk-ant-OLDSNAP/.test(dump), 'a pre-v9.90 snapshot leaked its key into the rescue file');
+  // ...and the rest of the data is still there, or it is not a rescue file.
+  assert.ok(/flyersnap-snap-2020-01-01/.test(dump), 'the snapshot was dropped entirely');
+
+  // A key the PATTERN cannot see. MEASURED: with structural redaction removed
+  // the assertions above still passed, because every fixture used an sk-ant-
+  // key and the backstop caught them all. This is the case that separates the
+  // two -- and it is reachable, because importBackup writes whatever
+  // settings.apiKey a file contains and never checks its shape (saveKey does,
+  // but that is the other door). Structural redaction blanks the FIELD, so it
+  // does not care what is in it.
+  const odd = withStorage({
+    'flyersnap': JSON.stringify({ settings:{ apiKey:'legacy-token-no-prefix-42' }, events:[] }),
+  }, () => JSON.stringify(quarantineDump()));
+  assert.ok(!/legacy-token-no-prefix-42/.test(odd),
+    'a key that does not match the sk-ant- pattern went out in the rescue file');
+});
+
+test('bytes that will not parse are still scrubbed, and still kept (v10.0)', () => {
+  // flyersnap-quarantine holds what FAILED JSON.parse -- that is why it exists.
+  // redactSaved returns null for it, so structural redaction cannot reach it.
+  const dump = withStorage({
+    'flyersnap-quarantine': '{"settings":{"apiKey":"sk-ant-INQUARANTINE"} TRUNCATED',
+  }, () => quarantineDump());
+  const q = dump['flyersnap-quarantine'] || '';
+  assert.ok(q, 'the unparseable bytes were dropped -- they are the thing being rescued');
+  assert.ok(!/sk-ant-INQUARANTINE/.test(q), 'the key survived inside the unparseable bytes');
+  assert.ok(/TRUNCATED/.test(q),
+    'scrubbing destroyed the broken bytes instead of just the secret in them');
+});
+
+test('the rescue file does not carry the Gordon sign-in (v10.0)', () => {
+  // A refresh token is a long-lived credential, and nothing about a sign-in
+  // helps repair a broken save file -- so it is dropped, not redacted.
+  const dump = withStorage({
+    'flyersnap.gordon.session': JSON.stringify({ email:'a@b.c', idToken:'ID-TOK',
+      refreshToken:'REFRESH-TOK', expiresAt: Date.now() + 3600000 }),
+  }, () => quarantineDump());
+  assert.ok(!('flyersnap.gordon.session' in dump),
+    'the session is in the rescue file: ' + Object.keys(dump).join(', '));
+  assert.ok(!/REFRESH-TOK|ID-TOK/.test(JSON.stringify(dump)), 'a token leaked by another route');
+});
+
+test('the button does not promise more than the file delivers (v10.0)', () => {
+  // The screen now tells the user this file is safe to send to someone. That
+  // sentence is only true while the redaction above is in place, so it is
+  // pinned to it -- an unredacted dump with a reassuring label is worse than
+  // an unredacted dump.
+  // renderRecovery, NOT renderSetTrouble -- the first draft of this test named
+  // the wrong screen and failed for that reason rather than a real one.
+  const src = String(renderRecovery);
+  assert.ok(/safe to send/.test(src), 'the reassurance was removed from the screen');
+  assert.ok(/quarantineDump\(/.test(String(downloadQuarantine)),
+    'downloadQuarantine no longer goes through the redacting dump');
+});
+
+// ---------------------------------------------------------------------------
+// The error-report outbox (v10.0). flushErrorReports had NO tests at all, and
 // its retry rule treated every non-2xx except 403 and 409 as transient.
 //
 // MEASURED against the shipped code, outbox = [400-er, good-one]:
@@ -5966,7 +6057,7 @@ const rep = (status, body) => ({ ok: status >= 200 && status < 300, status,
   text: () => Promise.resolve(body || '{}') });
 const doc = (id) => ({ reportId:id, app:'flyersnap', message:'m-' + id });
 
-atest('the outbox drops a report the server will never accept (v9.100)', async () => {
+atest('the outbox drops a report the server will never accept (v10.0)', async () => {
   // 400, 401, 403 and 404 all carry "Do not retry without fixing the problem"
   // in Firestore's table. Nothing a client repeats will change any of them.
   for(const status of [400, 401, 403, 404]){
@@ -5985,7 +6076,7 @@ atest('the outbox drops a report the server will never accept (v9.100)', async (
   }
 });
 
-atest('a transient failure is kept, and does not take the queue with it (v9.100)', async () => {
+atest('a transient failure is kept, and does not take the queue with it (v10.0)', async () => {
   // 503 UNAVAILABLE: "Retry using exponential backoff." Keeping it is right --
   // and so is not hammering everything behind it in the same pass.
   const h = withFetch([doc('flaky'), doc('later')], () => rep(503));
@@ -5997,7 +6088,7 @@ atest('a transient failure is kept, and does not take the queue with it (v9.100)
   } finally { h.done(); }
 });
 
-atest('a report the server keeps refusing is eventually given up on (v9.100)', async () => {
+atest('a report the server keeps refusing is eventually given up on (v10.0)', async () => {
   // The other half of "retried forever": even a legitimately transient code
   // must not be re-sent at every boot for the life of the install.
   const h = withFetch([doc('doomed')], () => rep(503));
@@ -6009,7 +6100,7 @@ atest('a report the server keeps refusing is eventually given up on (v9.100)', a
   } finally { h.done(); }
 });
 
-atest('a 500 is retried once, not six times (v9.100)', async () => {
+atest('a 500 is retried once, not six times (v10.0)', async () => {
   // Firestore is explicit about INTERNAL: "Do not retry this request more than
   // once." A shared cap would have quietly ignored that.
   const h = withFetch([doc('boom')], () => rep(500));
@@ -6020,7 +6111,7 @@ atest('a 500 is retried once, not six times (v9.100)', async () => {
   } finally { h.done(); }
 });
 
-atest('the two meanings of 409 are told apart by the body (v9.100)', async () => {
+atest('the two meanings of 409 are told apart by the body (v10.0)', async () => {
   // ALREADY_EXISTS and ABORTED share the status number; only error.status in
   // the body separates them (AIP-193). ALREADY_EXISTS means an earlier launch
   // delivered this id -- dropping it is correct. ABORTED means try again.
@@ -6045,7 +6136,7 @@ atest('the two meanings of 409 are told apart by the body (v9.100)', async () =>
   } finally { junk.done(); }
 });
 
-atest('a counter cannot outlive the report it was counting (v9.100)', async () => {
+atest('a counter cannot outlive the report it was counting (v10.0)', async () => {
   // drop() clears the counter for a report it removes, so the sweep at the end
   // of the flush looks redundant -- and MEASURED, removing it turned nothing
   // red. It is not redundant: the outbox is capped at ERROR_OUTBOX_MAX and
@@ -6068,7 +6159,7 @@ atest('a counter cannot outlive the report it was counting (v9.100)', async () =
   } finally { h.done(); }
 });
 
-atest('being offline loses nothing (v9.100)', async () => {
+atest('being offline loses nothing (v10.0)', async () => {
   const h = withFetch([doc('a'), doc('b')], () => { throw new Error('network down'); });
   fetch = () => Promise.reject(new Error('network down'));
   try {

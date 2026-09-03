@@ -393,3 +393,80 @@ third-party storage access* · SHAREDSERVICESGUIDE.md (unverified against the
 recipe app's code) · FlyerSnap: `CLAUDE.md:98`, `CLAUDE.md:135`,
 `index.html:3453-3455`, `index.html:6494`, `css/tokens.css:22`,
 `tests-modules.js:932,942`, `js/ailog.js`.
+
+---
+
+## The rescue file was carrying every secret on the device (v10.0)
+
+v9.90 stopped `exportBackup` and `snapshot()` writing the API key into a file.
+**`downloadQuarantine` was missed** — and it is the worst path to miss, because
+the rescue file is what a stuck user downloads and then emails to someone for
+help. The screen even told them to download it before erasing everything.
+
+Fixing one instance of a defect and not sweeping the class is the same habit
+failure that left `#newItem` behind after the `#reviewAskQ` fix in v9.94.
+
+### Measured, in a real browser, before and after
+
+Storage seeded with a live blob, a pre-v9.90 snapshot, the quarantine bytes and
+a Gordon session; `Blob` stood in front of to capture exactly what would be
+written.
+
+```
+BEFORE (shipped)                    AFTER (v10.0)
+LEAKED  sk-ant-SECRET-LIVE-KEY      absent
+LEAKED  sk-ant-SECRET-IN-QUARANTINE absent
+LEAKED  sk-ant-SECRET-IN-OLD-SNAP   absent
+LEAKED  REFRESH-TOKEN-LONG-LIVED    absent
+LEAKED  ID-TOKEN-LIVE               absent
+```
+
+`downloadQuarantine` dumped every key whose name starts with `flyersnap`,
+verbatim. `GORDON_SESSION_KEY` is `flyersnap.gordon.session`, so it matched —
+putting a **Firebase refresh token**, a long-lived credential for the account,
+into the file alongside the Anthropic key.
+
+### The fix
+
+`quarantineDump()` now sits between storage and the file:
+
+- **Structural redaction first** (`redactSaved`), because it is exact — it
+  blanks the `settings.apiKey` *field* and does not care what is in it.
+- **A pattern scrub as the backstop** (`/sk-ant-[A-Za-z0-9_-]+/`), for the one
+  case structural redaction cannot reach: `flyersnap-quarantine` holds the bytes
+  that failed `JSON.parse`, which is the whole reason they were quarantined.
+  Called what it is in the comment — a pattern match, therefore best-effort —
+  rather than implied to be complete.
+- **The Gordon session is dropped, not redacted.** Nothing about a sign-in token
+  helps repair a broken save file, so there is no reason for it to be in there.
+- Everything else is kept, including the broken bytes. Destroying a rescue copy
+  during a security tidy is the failure rule 28 is about.
+
+The screen now says the key and the sign-in are left out, so the file is safe to
+send to someone — and a test pins that sentence to the redaction, because a
+reassuring label on an unredacted dump is worse than an unredacted dump.
+
+### Mutation tests — seven reverts, one at a time
+
+| # | Revert | Result |
+|---|---|---|
+| Q1 | back to the raw dump | **RED** ×2 |
+| Q2 | structural only, no backstop | **RED** |
+| Q3 | backstop only, no structural | **GREEN first time** |
+| Q4 | Gordon session rides along again | **RED** |
+| Q5 | scrub discards the whole value | **RED** |
+| Q6 | `downloadQuarantine` builds its own raw dump | **RED** |
+| Q7 | the reassurance removed from the screen | **RED** |
+
+**Q3 exposed a weak test.** Every fixture used an `sk-ant-` key, so the backstop
+caught them all and structural redaction looked dead. The case that separates
+them is a key the *pattern* cannot see — and it is reachable, because
+`importBackup` writes whatever `settings.apiKey` a file contains and never
+checks its shape (`saveKey` does, but that is the other door). A
+`legacy-token-no-prefix-42` fixture was added; Q3 then went red.
+
+### Still outstanding, and it needs Logan
+
+Backup files already written to disk by versions before v9.90 **still contain
+the API key**. Nothing in the app can reach them. The key should be rotated at
+the Anthropic console, and old exports deleted.

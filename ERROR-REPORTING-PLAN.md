@@ -69,7 +69,7 @@ remote reports (mutation-tested by removing the call).
 
 ---
 
-## The retry rule was wrong, and it killed the reporter (v9.100)
+## The retry rule was wrong, and it killed the reporter (v10.0)
 
 ### What was shipped
 

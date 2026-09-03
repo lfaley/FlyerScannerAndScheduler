@@ -4377,20 +4377,63 @@ function storageBytes(){
   }catch(e){ /* a size READING. An under-count shows a smaller bar on the storage screen; it changes nothing the app does */ }
   return n;
 }
-function downloadQuarantine(){
+/**
+ * Last-resort scrub for bytes that will not parse.
+ *
+ * A PATTERN MATCH, and therefore best-effort -- said plainly rather than
+ * implied. It exists for one case that structural redaction cannot reach:
+ * `flyersnap-quarantine` holds the bytes that failed JSON.parse, which is
+ * exactly why they were quarantined. redactSaved returns null for those, so
+ * without this the API key would ride out of the app inside them.
+ *
+ * Anthropic keys start with `sk-ant-`, which saveKey() already enforces.
+ */
+function scrubSecretText(s){
+  return String(s == null ? '' : s).replace(/sk-ant-[A-Za-z0-9_\-]+/g, 'sk-ant-REDACTED');
+}
+
+/**
+ * Everything stored under the flyersnap prefix, with the secrets taken out.
+ *
+ * v9.90 stopped exportBackup and snapshot() writing the API key into a file.
+ * THIS PATH WAS MISSED, and it is the worst one to miss: the rescue file is
+ * what a stuck user downloads and then emails to someone for help. Measured in
+ * a real browser before the fix -- the file contained the live API key, the
+ * same key again inside `flyersnap-quarantine`, the key from a pre-v9.90
+ * snapshot, AND the Gordon session, whose refresh token is a long-lived
+ * credential for the account. Four secrets in a file the app tells you to keep.
+ *
+ * Fixing one instance of a defect and not sweeping the class is the same habit
+ * failure that left #newItem behind in v9.94.
+ *
+ * The Gordon session is dropped rather than redacted: nothing about a sign-in
+ * token helps repair a broken save file, so there is no reason for it to be in
+ * there at all.
+ */
+function quarantineDump(){
   const dump = {};
   try{
     for(let i=0;i<localStorage.length;i++){
       const k = localStorage.key(i);
-      if(k && k.indexOf('flyersnap') === 0) dump[k] = localStorage.getItem(k);
+      if(!k || k.indexOf('flyersnap') !== 0) continue;
+      if(k === GORDON_SESSION_KEY) continue;
+      const raw = localStorage.getItem(k);
+      // Structural first, because it is exact; the pattern scrub is the
+      // backstop for anything that would not parse.
+      const clean = redactSaved(raw);
+      dump[k] = scrubSecretText(clean === null ? raw : clean);
     }
   }catch(e){ /* the rescue download is a LAST RESORT, reached when things are already broken. A partial dump is worth more than a thrown one */ }
-  const blob = new Blob([JSON.stringify(dump, null, 1)], {type:'application/json'});
+  return dump;
+}
+
+function downloadQuarantine(){
+  const blob = new Blob([JSON.stringify(quarantineDump(), null, 1)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'flyersnap-rescue-' + todayISO() + '.json';
   document.body.appendChild(a); a.click(); a.remove();
-  toast('Rescue file downloaded — keep it safe');
+  toast('Rescue file downloaded — your API key is not in it');
 }
 function startFresh(){
   if(!confirm('Erase everything and start over?\n\nThis cannot be undone. Download the rescue file first if you have not.')) return;
@@ -4831,7 +4874,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.100';
+const APP_VERSION = 'v10.0';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -5865,7 +5908,9 @@ function renderRecovery(m){
     <button class="btn alt" style="margin-bottom:8px" onclick="document.getElementById('fImport').click()">Restore from a backup file</button>
 
     <div class="sect">Rescue the raw data</div>
-    <div class="help">Download exactly what's stored, unreadable as it is, so it can be repaired by hand.</div>
+    <div class="help">Download what's stored, unreadable as it is, so it can be repaired by hand.
+      Your API key and your ${esc(aiName())} sign-in are left out, so this file is safe to send to
+      someone for help.</div>
     <button class="btn alt" onclick="downloadQuarantine()">${ico('download')}Download rescue file</button>
 
     <div class="sect">Last resort</div>
@@ -7799,7 +7844,7 @@ function queueErrorReport(problem){
     setTimeout(() => { flushErrorReports(); }, 0);
   }catch(e){ /* reporting must never break the app */ }
 }
-// Which failures are worth trying again (v9.100). Firestore's own error table
+// Which failures are worth trying again (v10.0). Firestore's own error table
 // carries a "Recommended action" column, and this follows it:
 //   https://cloud.google.com/firestore/native/docs/use-rest-api
 //   400 INVALID_ARGUMENT / FAILED_PRECONDITION  do not retry without fixing
@@ -7863,7 +7908,7 @@ async function flushErrorReports(){
       }catch(e){ break; } // offline/blocked -- the outbox keeps everything
       const status = res ? res.status : 0;
       // Delivered, or never deliverable. Either way it leaves the queue, and
-      // the loop CONTINUES -- until v9.100 a permanent failure returned, so one
+      // the loop CONTINUES -- until v10.0 a permanent failure returned, so one
       // malformed report blocked every report behind it for the life of the
       // install. Measured: with a 400 at the head, the entry after it was never
       // attempted on any pass, and the 400 was re-sent on every flush and every
@@ -12947,7 +12992,20 @@ function exportBackup(){
   save();
   // Redacted through the same door as the snapshots. This file is the copy that
   // leaves the device; it must not carry a credential.
-  const body = redactSaved(JSON.stringify(S)) || JSON.stringify(S, null, 1);
+  //
+  // The old fallback was `|| JSON.stringify(S, null, 1)` -- on the one path
+  // where redaction fails it wrote the UNREDACTED blob, which is the single
+  // thing this line exists to prevent. It is very hard to reach (the input is
+  // JSON.stringify's own output, so the parse cannot fail), but a fallback
+  // whose failure mode is "leak the credential" is not a fallback worth having.
+  // Refuse instead, and say so.
+  const body = redactSaved(JSON.stringify(S));
+  if(body === null){
+    alert('Could not prepare the backup safely, so nothing was downloaded.\n\nYour data is untouched. Please report this.');
+    logProblem('Backup', 'Could not redact the backup, so it was not written', '');
+    render();
+    return;
+  }
   const blob = new Blob([body], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

@@ -5171,4 +5171,65 @@ module.exports = async function runModuleTests(test){
 
 
 
+  console.log('\nEverything that leaves the device (v10.0)');
+
+  test('no file, clipboard or share path serialises S without redacting it', () => {
+    // THE CLASS, not the instance. v9.90 fixed exportBackup and snapshot();
+    // downloadQuarantine was missed and shipped the API key AND a Firebase
+    // refresh token in the rescue file for ten versions. Fixing one instance of
+    // a defect and not sweeping the class is the habit failure that also left
+    // #newItem behind in v9.94 -- so this guard is about the next one.
+    //
+    // Every expression that builds a file, a clipboard write or a share is
+    // checked: if it reaches the live state or raw storage, a redactor has to
+    // be in the same expression.
+    const html = codeOf(fs.readFileSync(__dirname + '/index.html', 'utf8'));
+    const SINKS = [
+      /new Blob\(\[([\s\S]*?)\]/g,
+      /writeText\(([^)]*)\)/g,
+      /navigator\.share\(\{([\s\S]{0,200}?)\}\)/g,
+    ];
+    // What counts as reaching the user's data, and what counts as cleaning it.
+    const REACHES = /JSON\.stringify\(\s*S\s*[,)]|localStorage\.getItem\(/;
+    const CLEANS  = /redactSaved\(|quarantineDump\(|\bredact\(|buildDiagnostics/;
+    const bad = [];
+    for(const re of SINKS){
+      let m;
+      while((m = re.exec(html))){
+        const expr = m[1];
+        if(REACHES.test(expr) && !CLEANS.test(expr)) bad.push(m[0].slice(0, 90).replace(/\s+/g, ' '));
+      }
+    }
+    assert.deepStrictEqual(bad, [],
+      'a path sends the raw save file off the device: ' + bad.join(' | '));
+  });
+
+  test('the guard above is reading real sinks, not an empty list', () => {
+    // A pattern that matches nothing passes forever. Rule 29: a check with
+    // nothing to check is not a check.
+    const html = codeOf(fs.readFileSync(__dirname + '/index.html', 'utf8'));
+    const blobs = (html.match(/new Blob\(\[/g) || []).length;
+    const copies = (html.match(/writeText\(/g) || []).length;
+    assert.ok(blobs >= 4, 'only ' + blobs + ' Blob sinks found -- the pattern has stopped matching');
+    assert.ok(copies >= 1, 'no clipboard sink found -- the pattern has stopped matching');
+    // And the one that carries the whole save file must still go through the
+    // redacting builders, by name.
+    assert.ok(/redactSaved\(JSON\.stringify\(S\)\)/.test(html),
+      'exportBackup no longer redacts the blob it writes');
+    assert.ok(/JSON\.stringify\(quarantineDump\(\)/.test(html),
+      'downloadQuarantine no longer goes through the redacting dump');
+  });
+
+  test('a failed redaction refuses the export rather than writing it raw', () => {
+    // The old fallback was `redactSaved(...) || JSON.stringify(S, null, 1)`:
+    // on the one path where redaction fails it wrote the UNREDACTED blob --
+    // the single thing that line exists to prevent.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const fn = codeOf(html.split('function exportBackup(')[1].split('\nfunction ')[0]);
+    assert.ok(/body === null/.test(fn), 'exportBackup no longer checks whether redaction worked');
+    assert.ok(!/\|\|\s*JSON\.stringify\(S/.test(fn),
+      'the raw-blob fallback is back');
+    assert.ok(/return;/.test(fn), 'it does not stop -- it carries on and writes something');
+  });
+
 };
