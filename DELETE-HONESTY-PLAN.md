@@ -1041,3 +1041,44 @@ asserted in `tests-cases.js` instead, and mutation-proved there.
 
 §5.1–§5.6 are now all built. 882/0, 22/0 in the browser, a11y clean across 48 screens,
 `inline.js` in sync. v9.99 / `flyersnap-v182`.
+
+---
+
+## 19. noteFolders / noteLabels — measured, and smaller than the note claimed
+
+Carried on the backlog as "`noteFolders`/`noteLabels` tombstones never pruned".
+Read before acting, 3 Sep 2026. Most of what that implied is **not true**:
+
+- **No dangling references.** `delNoteGroup` clears `n.folderId` and removes the
+  id from `n.labelIds` at delete time, so no note points at a deleted row.
+- **No leaked names.** `noteFolderName` already ends `return f && !f.deleted ?
+  f.name : ''`, so a deleted folder's name never renders. `noteLabelsOf` reads
+  the live-only `noteLabels()`.
+- **The tombstone is load-bearing while it exists.** `addNoteGroup` re-uses a
+  deleted row by name and un-deletes it, so re-adding "School" restores the
+  original id rather than making a second one.
+
+What is actually left is one honesty gap, of the same family as N1 and N2:
+
+> Recently Deleted says **"Anything you delete waits here for 30 days before it
+> is cleared for good."** A deleted folder or label is not there, and is never
+> cleared. The sentence is false for two collections.
+
+### Why it is not simply fixed by adding them to `DELETED_COLLS`
+
+`restoreDeleted` only calls `unmarkDeleted`. For a folder that gives back an
+**empty folder** — the notes were unlinked at delete time and nothing records
+which ones they were. A "Restore" button that silently returns less than it took
+is the same class of dishonesty this whole plan is about, so adding the row
+without more would trade one small lie for a larger one.
+
+### The correct fix, and its cost
+
+`delNoteGroup` already computes `touched`. Storing those note ids on the
+tombstone would let `restoreDeleted` re-link them, which makes the row honest
+and makes pruning safe. That is a new persisted field, a special case in a
+deliberately generic restore path, and its own tests.
+
+**Open — needs Logan's ruling.** The user-visible harm today is a handful of
+tiny rows that never age out, against a real change to a data shape. Not built
+on my own judgement.

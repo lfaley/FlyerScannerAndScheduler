@@ -16,10 +16,30 @@ When I asked whether to cap the number of emails auto-read, I said the cost was
 "compute you already own, because Gordon is your own box over Tailscale."
 
 **That is not reliable, and the code says so.** An automatic pass can bill
-Anthropic per email, in three distinct ways:
+Anthropic per email. Three reasons were given here; **the first was wrong and is
+struck through below.** The other two hold, and they are enough:
 
-1. `index.html:4722` — `function aiProvider(){ … return S.settings.aiProvider === 'local' ? 'local' : 'anthropic'; }`
-   **Anthropic is the default.** Local is only used when explicitly selected.
+1. ~~`index.html:4722` — **Anthropic is the default.**~~ **THIS WAS WRONG. Corrected
+   3 Sep 2026, by measurement rather than by reading the expression.**
+
+   `aiProvider()` reads `S.settings.aiProvider === 'local' ? 'local' : 'anthropic'`,
+   which *looks* like Anthropic-by-default. It is not, because the stored value is
+   `'local'` by default: `blank()` sets `aiProvider:'local'`, and the one-time
+   `from < 5` migration moved every existing install onto it. Measured in a real
+   browser against v10.0:
+
+   | save file | stored | `aiProvider()` |
+   |---|---|---|
+   | fresh install, nothing in storage | `"local"` | **local** |
+   | old save with no `aiProvider` set | `"local"` | **local** |
+   | `aiProvider:'anthropic'`, old schema (4) | `"local"` | local — the one-time migration |
+   | `aiProvider:'anthropic'`, current schema | `"anthropic"` | **anthropic** |
+
+   So **Gordon is the default**, and an explicit Anthropic choice sticks. Reading an
+   expression is not measuring a default; the original claim in this section was made
+   from the expression alone and was wrong.
+
+   The conclusion below still stands — points 2 and 3 are what carry it.
 2. `index.html:4869` — `throw new Error('UNSUPPORTED_BLOCK:document');`
    **Any PDF attachment throws on the local model** and falls through to
    `callClaude` when fallback is on (`index.html:4790`). These are *failed*

@@ -1,6 +1,6 @@
 # AI-STATE — the one true picture of the AI stack
 
-**Last updated:** 2026-08-25 · **Status:** current, shipped to all three apps.
+**Last updated:** 2026-09-03 · **Status:** current, shipped to all three apps.
 
 This is the single source of truth for how AI runs across the universe
 (MealWeek / recipe app, FlyerSnap, Admin Console). If any other doc disagrees
@@ -71,7 +71,7 @@ q4_K_M automatically.
   `qwen2.5:14b-instruct`, bare `qwen3-vl:8b`, or `qwen3-vl:8b-instruct-q8_0`
   onto q4_K_M. The inlined copy inside `index.html` matches `js/migrate.js`
   exactly (guarded by the inline-copy test).
-- Shipped: `APP_VERSION = 'v9.38'`, `sw.js` CACHE `flyersnap-v121`.
+- Shipped: `APP_VERSION = 'v10.0'`, `sw.js` CACHE `flyersnap-v184` (3 Sep 2026).
 
 ### Admin Console
 - No model of its own. It manages the allowlist (`allowedUsers/{email}`) that

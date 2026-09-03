@@ -1,20 +1,33 @@
 # FlyerSnap — Handoff Notes
 
-> ## ✅ UPDATE — 2026-08-25: current state (this brief is from Aug 23)
-> Since this Aug-23 handoff, the app moved forward a lot. Current facts:
-> - **Live version is `v9.38`** (`sw.js` CACHE `flyersnap-v121`), not v9.31.
+> ## ✅ UPDATE — 2026-09-03: current state (this brief is from Aug 23)
+> Everything below is the Aug-23 handoff and is kept as the historical record.
+> Current facts, measured today:
+> - **Live version is `v10.0`** (`sw.js` CACHE `flyersnap-v184`), not v9.31 or v9.38.
+>   Versions now iterate v10.0 → v10.1 → v10.2 (v9.99 was followed by v9.100,
+>   which was renamed because "9.100" reads as older than "9.99").
+> - **Tests: 896 passing** (`node tests.js`), plus **22** in `tools/browser-check.js`
+>   (a real Chromium, real keystrokes, real inline-onclick clicks — it sees what the
+>   vm sandbox structurally cannot) and an a11y audit across **48 screens**.
+> - **An async test body must use `atest`, never `test`** — see CLAUDE.md. Four of
+>   them were interleaving over one shared `S` and inventing failures.
 > - **AI model settled on `qwen3-vl:8b-instruct-q4_K_M`.** Everywhere below that
 >   names `qwen3-vl:8b` (the Thinking edition — the failures logged in this file)
 >   or `qwen3-vl:8b-instruct-q8_0` (measured here), read **q4_K_M**. The journey:
 >   `qwen2.5:14b-instruct` (text-only) → bare `qwen3-vl:8b` (Thinking, no answer) →
 >   q8_0 (largest/slowest) → **q4_K_M** (vision + Instruct, fastest). The measured
 >   numbers below were taken on q8_0 and are kept as the historical record.
-> - **Gordon is live behind the auth proxy;** sign-in gates AI (Firebase ID token +
->   verified email + `allowedUsers` allowlist), Anthropic fallback kept ON.
+> - **Gordon is live behind the auth proxy** and IS the default provider — measured,
+>   not inferred; `aiProvider()`'s expression misleads, see CLAUDE.md. Sign-in gates
+>   AI (Firebase ID token + verified email + `allowedUsers` allowlist), Anthropic
+>   fallback kept ON.
 > - **EA assistant shipped** (conversational EA + Professional/Casual tone setting).
 > - **Canonical AI reference: `AI-STATE.md`** (repo root) — it wins on any AI detail.
+> - Recent work is documented in its own plan file rather than here:
+>   `DELETE-HONESTY-PLAN.md` (sections 10-18), `ERROR-REPORTING-PLAN.md`,
+>   `SECURITY-PLAN.md`, `KEY-EXPOSURE-PLAN.md`, `EMAIL-AUTOREAD-PLAN.md`.
 
-**Updated:** August 23, 2026 · **Live version:** v9.31 · **Tests:** 562 passing
+**Updated:** August 23, 2026 (see the banner above for current state) · **Live version at the time:** v9.31 · **Tests at the time:** 562 passing
 **Repo:** `lfaley/FlyerScannerAndScheduler` · **Live:** `https://lfaley.github.io/FlyerScannerAndScheduler/`
 **Local repo:** `C:\Users\Logan\Desktop\Repos\FlyerSnap`
 

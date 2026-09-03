@@ -470,3 +470,48 @@ checks its shape (`saveKey` does, but that is the other door). A
 Backup files already written to disk by versions before v9.90 **still contain
 the API key**. Nothing in the app can reach them. The key should be rotated at
 the Anthropic console, and old exports deleted.
+
+### Sweeping the class, not just the instance
+
+Having fixed one path, every other route that puts data into a file, the
+clipboard or a share sheet was checked — because fixing one instance and not
+sweeping the class is the habit failure that produced this defect in the first
+place.
+
+| Path | Carries the save file? | Redacted? |
+|---|---|---|
+| `exportBackup` | yes | `redactSaved` — **but see below** |
+| `snapshot()` | yes | `redactSaved` at write (v9.90) |
+| `downloadQuarantine` | yes | `quarantineDump()` (v10.0) |
+| diagnostics — share, copy, download | no | `redact()` at WRITE time on every `aiLog` entry and every problem; the file records `hasApiKey` as a boolean, "whether, never what" |
+| router benchmark export | no | `redact(r.transportError)`; the rest is fixed corpus data |
+| `downloadICS` ×3 | no | event fields only |
+
+`redact()` (`js/ailog.js`) strips Anthropic keys, OpenAI-style keys,
+`Bearer` tokens and email addresses. It runs when an entry is CREATED, so
+anything already in `aiLog` is clean before it can reach a file.
+
+### The one it found: exportBackup's fallback
+
+```js
+const body = redactSaved(JSON.stringify(S)) || JSON.stringify(S, null, 1);
+```
+
+On the one path where redaction fails, that wrote the **unredacted** blob — the
+single thing the line exists to prevent. It is very hard to reach (the input is
+`JSON.stringify`'s own output, so the parse cannot fail), but a fallback whose
+failure mode is "leak the credential" is not a fallback worth having. It now
+refuses, tells the user nothing was downloaded and their data is untouched, and
+logs the problem.
+
+### A guard for the NEXT one
+
+`tests-modules.js` now walks every `new Blob([…])`, `writeText(…)` and
+`navigator.share({…})` in `index.html` and fails if any of them reaches
+`JSON.stringify(S)` or `localStorage.getItem` without a redactor in the same
+expression. A companion test asserts the patterns actually match at least four
+Blob sinks and one clipboard sink — a pattern that matches nothing passes
+forever, and rule 29 exists because that has shipped here before.
+
+Mutation-proved by adding a fresh raw-dump path to `downloadQuarantine`: two
+guards went red and both named it.

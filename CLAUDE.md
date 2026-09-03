@@ -15,6 +15,17 @@ paths stay — a scan must never simply fail because a machine at home went to
 sleep — but **the default direction of travel is local, and new work should not
 add Anthropic-first assumptions.**
 
+**`aiProvider()` LOOKS LIKE IT SAYS THE OPPOSITE. IT DOES NOT.** The expression
+reads `S.settings.aiProvider === 'local' ? 'local' : 'anthropic'`, and it is
+easy to read that as Anthropic-by-default. The stored value is `'local'` by
+default — `blank()` sets it, and the one-time `from < 5` migration moved every
+existing install onto it. Measured 3 Sep 2026 in a real browser: a fresh install
+and an old save with no setting both come up **local**; an explicit
+`aiProvider:'anthropic'` on a current-schema save **sticks**. This trap has
+already cost one wrong statement to Logan and one wrong "correction" written
+into EMAIL-AUTOREAD-PLAN section 0. **Reading an expression is not measuring a
+default** — boot the app and print the value.
+
 Two things this does NOT mean, both easy to get wrong:
 
 - **"Gordon" is not a provider.** `aiName()` returns `ASSISTANT_NAME`; it is
