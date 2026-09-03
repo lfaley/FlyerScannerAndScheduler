@@ -328,6 +328,34 @@ const AUDIT = () => {
     add(`page scrolls horizontally (${document.documentElement.scrollWidth}px wide)`);
   }
 
+  // COVERED CONTROLS (v10.1). Size and horizontal position were checked; what
+  // was on TOP was not. The nav is position:fixed at z-index 30, and every
+  // sheet in the app sat below it -- the last button of each one could not be
+  // tapped, and the tap that missed switched tabs instead. Nothing caught that:
+  // the buttons are the right size and inside the viewport, they were simply
+  // underneath something.
+  //
+  // elementFromPoint at the control's own centre is what a finger does. A hit
+  // that is the element, its child or its parent is fine; anything else is
+  // sitting on top of it.
+  document.querySelectorAll(OPERABLE).forEach(el => {
+    if(el.type === 'hidden' || el.disabled) return;
+    if(el.closest('[aria-hidden="true"]')) return;
+    const r = el.getBoundingClientRect();
+    if(r.width < 1 || r.height < 1) return;
+    // Only judge what is actually on screen; a control below the fold is a
+    // scrolling question, not an occlusion one.
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    if(cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return;
+    const hit = document.elementFromPoint(Math.round(cx), Math.round(cy));
+    if(!hit) return;
+    if(hit === el || el.contains(hit) || hit.contains(el)) return;
+    const who = hit.id ? '#' + hit.id
+      : (typeof hit.className === 'string' && hit.className ? '.' + hit.className.split(' ')[0]
+      : hit.tagName.toLowerCase());
+    add(`covered by ${who}: ${label(el)}`);
+  });
+
   // An input needs a visible label or an aria-label; a placeholder alone
   // disappears the moment someone types (NN/g form usability #4).
   document.querySelectorAll('input:not([type=hidden]):not([type=file]), textarea').forEach(el => {

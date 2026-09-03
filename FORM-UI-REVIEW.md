@@ -234,3 +234,47 @@ long pasted URL is the last thing you want to fetch again. Cancel now discards
 it. Also measured while checking: this sheet lives outside `#main`, so it
 already survived a `render()` on its own — the draft mirror's only real job was
 this reopen.
+
+### And a second one, found by sweeping the same class
+
+A sheet was `position:fixed; bottom:0` with `max-height:none` and
+`overflow-y:visible`, so a long one grew **upward past the top of the screen**
+with nothing to scroll. Measured with 16 people in the bulk-tag sheet
+(19 buttons):
+
+| viewport | sheet top | options lost |
+|---|---|---|
+| 393×852 | **y −242** | 3 |
+| 360×640 | **y −454** | 7 |
+
+Ten people already put the top edge at y 67, so this was not far off in
+ordinary use, and `showSheet` is generic — eight sheets share it.
+
+Fixed with `max-height:calc(100vh - 32px); overflow-y:auto;
+overscroll-behavior:contain`. `100vh` rather than `100dvh` on purpose: the app
+already relies on `100vh`, and the iOS 26 bug documented in the same file makes
+the layout viewport come up **short** of the screen, which errs toward a smaller
+cap and never a taller sheet.
+
+**A mutation caught the test measuring the wrong thing.** Setting
+`overflow-y:hidden` — capped, but unscrollable by a finger — left the check
+GREEN, because a hidden-overflow container still reports
+`scrollHeight > clientHeight` and still responds to `scrollIntoView`. Both of
+those are programmatic; neither is a thumb. The check now asserts the computed
+`overflow-y` is `auto` or `scroll`, and the mutation goes red.
+
+The check also pins the other direction: a three-button sheet must **not**
+become a scroller, so the fix cannot damage the common case to serve the rare
+one.
+
+### The audit gained the missing check
+
+`tools/a11y-audit.js` measured size and horizontal position but never asked
+what was ON TOP. It now runs `elementFromPoint` at each control's own centre
+across all 48 screens and reports anything covering it. **No findings** — and
+proved live rather than assumed: with `nav{height:320px}` injected it named five
+real coverings across three screens, then went quiet when reverted.
+
+Between the two harnesses the class is now covered: the audit walks the 48
+screens, the browser check walks the sheets (which are not screens and never
+were in the audit's scope).

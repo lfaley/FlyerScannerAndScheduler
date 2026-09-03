@@ -71,7 +71,7 @@ q4_K_M automatically.
   `qwen2.5:14b-instruct`, bare `qwen3-vl:8b`, or `qwen3-vl:8b-instruct-q8_0`
   onto q4_K_M. The inlined copy inside `index.html` matches `js/migrate.js`
   exactly (guarded by the inline-copy test).
-- Shipped: `APP_VERSION = 'v10.0'`, `sw.js` CACHE `flyersnap-v184` (3 Sep 2026).
+- Shipped: `APP_VERSION = 'v10.2'`, `sw.js` CACHE `flyersnap-v186` (3 Sep 2026).
 
 ### Admin Console
 - No model of its own. It manages the allowlist (`allowedUsers/{email}`) that

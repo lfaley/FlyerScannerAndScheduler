@@ -318,6 +318,24 @@
      nav by 54px on purpose and never overlaps it. */
   .sheet{z-index:40}
   .overlay{z-index:35}
+  /* A SHEET MUST NOT GROW OFF THE TOP OF THE SCREEN (v10.1). It was
+     position:fixed;bottom:0 with max-height:none and overflow-y:visible, so a
+     long one simply extended upward past the viewport and the options at the
+     top became unreachable -- there was nothing to scroll.
+
+     MEASURED with 16 people in bulkTagSheet (19 buttons): at 393x852 the sheet
+     started at y -242 and lost three "Tag as ..." options; at 360x640 it
+     started at -454 and lost seven. Ten people already put the top edge at
+     y 67, so this was not far off in normal use.
+
+     100vh, not 100dvh: the app already relies on 100vh at line 23, and the iOS
+     26 bug documented above makes the LAYOUT viewport come up SHORT of the
+     screen -- which errs toward a smaller cap, never a taller sheet. The 32px
+     keeps a strip of the screen behind visible, so a tall sheet still reads as
+     a sheet rather than a takeover. overscroll-behavior stops a flick at the
+     end of the list scrolling the page underneath. */
+  .sheet{max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch}
   /* min-height wins over the inline paddings scattered through the markup, so
      every one of these clears the 44px target without touching 26 call sites. */
   .linkbtn{background:none;border:none;color:var(--accent);font-weight:700;
@@ -4890,7 +4908,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.1';
+const APP_VERSION = 'v10.2';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**

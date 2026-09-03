@@ -412,6 +412,69 @@ const eq = (got, want, what) => {
       selectMode = false; selectedEvents = new Set(); render(); });
   });
 
+  await check('a long sheet scrolls instead of running off the top (v10.1)', async () => {
+    // MEASURED before the fix, with 16 people in the bulk sheet (19 buttons):
+    // the sheet was position:fixed;bottom:0 with max-height:none, so it grew
+    // UPWARD past the viewport. At 393x852 its top edge was at y -242 and the
+    // first three "Tag as ..." options could not be reached; at 360x640 it was
+    // -454 and seven were lost. There was nothing to scroll. Ten people already
+    // put the top edge at y 67, so this was not far off in ordinary use.
+    await pg.evaluate(() => {
+      S.kids = [];
+      for(let i = 0; i < 16; i++) S.kids.push({ id:'p'+i, name:'Person '+i, color:'#7C3AED', type:'kid', deleted:false });
+      save();
+      selectMode = true; selectedEvents = new Set([S.events[0].id]);
+      bulkTagSheet();
+    });
+    await pg.waitForTimeout(250);
+    const r = await pg.evaluate(async () => {
+      const sh = document.querySelector('.sheet');
+      const btns = [...sh.querySelectorAll('button')];
+      const bad = [];
+      // Scroll each one into view the way a thumb would, THEN ask what a tap
+      // at its centre actually hits. Checking without scrolling would report
+      // every below-the-fold row as broken and prove nothing.
+      for(const el of btns){
+        el.scrollIntoView({ block:'center' });
+        await new Promise(res => setTimeout(res, 10));
+        const b = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(Math.round(b.left + b.width / 2), Math.round(b.top + b.height / 2));
+        if(!(hit && hit.closest && hit.closest('.sheet'))) bad.push(el.textContent.trim().slice(0, 22));
+      }
+      const box = sh.getBoundingClientRect();
+      return { count: btns.length, top: Math.round(box.top),
+        overflows: sh.scrollHeight > sh.clientHeight + 1,
+        // The property that decides whether a FINGER can scroll it. MEASURED:
+        // with overflow-y:hidden the container still overflows AND
+        // scrollIntoView still moves it, so both checks above pass on a sheet
+        // no user could scroll. Only the computed value separates them.
+        overflowY: getComputedStyle(sh).overflowY, bad };
+    });
+    if(r.count < 18) throw new Error('expected a long sheet, got ' + r.count + ' buttons');
+    if(r.top < 0) throw new Error('the sheet runs off the top of the screen: y ' + r.top);
+    if(!r.overflows) throw new Error('the fixture did not produce an overflowing sheet');
+    if(!['auto', 'scroll'].includes(r.overflowY))
+      throw new Error('the sheet is capped but overflow-y is "' + r.overflowY +
+        '" -- programmatic scrolling still works, a finger does not');
+    if(r.bad.length) throw new Error('options a finger cannot reach even after scrolling: ' + JSON.stringify(r.bad));
+    // A SHORT sheet must not become a scroller -- that would be a fix that
+    // damages the common case to serve the rare one.
+    await pg.evaluate(() => {
+      if(typeof closeSheet === 'function') closeSheet();
+      S.kids = [{ id:'p0', name:'Olivia', color:'#7C3AED', type:'kid', deleted:false }];
+      save(); bulkTagSheet();
+    });
+    await pg.waitForTimeout(250);
+    const short = await pg.evaluate(() => {
+      const sh = document.querySelector('.sheet');
+      return { scrolls: sh.scrollHeight > sh.clientHeight + 1, top: Math.round(sh.getBoundingClientRect().top) };
+    });
+    if(short.scrolls) throw new Error('a three-button sheet now scrolls');
+    if(short.top < 100) throw new Error('a short sheet is being stretched: top y ' + short.top);
+    await pg.evaluate(() => { if(typeof closeSheet === 'function') closeSheet();
+      selectMode = false; selectedEvents = new Set(); render(); });
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;
