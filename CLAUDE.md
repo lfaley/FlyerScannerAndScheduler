@@ -375,7 +375,7 @@ gets `Cannot find module 'playwright'` from those two tools and nothing else.
 `npm test`, `npm run audit` and `npm run preview` are aliases for the three
 commands below.
 
-- `node tests.js` — 800 tests: data safety, migrations, inline-handler
+- `node tests.js` — 873 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
@@ -398,6 +398,11 @@ commands below.
   also SEVEN TIMES FASTER than the vm suite (8s vs 60s), so there is no reason
   not to run it. Not wired into `deploy.ps1`: it needs Playwright, and the
   deploy gate must work on a machine that has not run `npm install`.
+  22 checks as of v9.98. Two of them exist because the vm harness structurally
+  cannot reach the code: `saveEventEdit` opens with `syncEventForm()`, which
+  re-reads the live inputs (every stub reports `value:''`), and the assistant's
+  second "which one did you mean?" is pushed from inside `confirmPendingAction`
+  and only wired to an id when `pendingAction` is set.
 - `node tools/preview.js [outDir]` — Playwright-Chromium screenshots of every
   tab, light AND dark, seeded demo data. Review design changes here first;
   it would have caught the v8.6 button bug. NOT a Safari substitute — Logan
@@ -506,6 +511,19 @@ WHEN A GUARD TEST READS PROSE IT IS NOT READING CODE. Twice in one session a
 test split on a token that also appeared in a nearby COMMENT -- `e.waitUntil(`
 in sw.js, `AbortError` in shareDiagnostics -- so deleting the real code still
 passed. **Strip comments before analysing a function's source in a test.**
+
+AN ASYNC TEST BODY USES `atest`, NEVER `test` (v9.98). `test()` calls `fn()`
+the instant it is declared, so an `async` body runs only as far as its first
+`await`; the remainder is a continuation that resumes at the END of the file,
+alongside every other async continuation, over one shared `S` / `pendingAction`
+/ `askState`. Measured with a controlled pair: a probe that clears `S.lists`
+from its continuation, declared beside `P5-C2`, turns P5-C2 red
+("Cannot read properties of undefined") with both on `test()` and green with
+both on `atest()` — same probe, same victim, same order. `atest` defers the
+whole body until the previous one has finished. A guard in `tests-modules.js`
+fails the build on any `test('...', async` in `tests-cases.js`.
+`return p.then(...)` inside a plain `test()` is fine: everything that touches
+state there happens synchronously, before the promise is returned.
 Mutation-test every new guard; that is what caught both.
 
 AI CALL LOGGING (v9.13, `js/ailog.js`): every AI call is recorded in

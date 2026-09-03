@@ -5144,4 +5144,31 @@ module.exports = async function runModuleTests(test){
       'icon-only controls that silence something permanently: ' + bad.join(' | '));
   });
 
+  console.log('\nThe test harness itself (v9.98)');
+
+  test('an async test body is queued, never left to interleave (v9.98)', () => {
+    // test() runs fn() immediately. An `async` body therefore runs only to its
+    // first await; the rest resumes at the end of the file, at the same time as
+    // every other async continuation, over one shared S / pendingAction /
+    // askState. MEASURED: a new async test's continuation replaced the fixture
+    // P5-C2 was working through, and P5-C2 reported a bug that did not exist.
+    // atest defers the whole body instead, so each owns the state it boots.
+    const src = fs.readFileSync(__dirname + '/tests-cases.js', 'utf8');
+    const racy = (src.match(/^\s*test\((['"]).*?\1,\s*async\b/gm) || [])
+      .map(m => (m.match(/(['"])(.*?)\1/) || [])[2]);
+    assert.deepStrictEqual(racy, [],
+      'async test bodies registered with test() instead of atest(): ' + racy.join(' | '));
+    // ...and atest must actually chain. A version that just collected promises
+    // would pass the line above while changing nothing.
+    const fn = src.split('function atest(name, fn){')[1].split('\n}')[0];
+    assert.ok(/atestChain\s*=\s*atestChain\s*\n?\s*\.then\(\(\) => fn\(\)\)/.test(fn),
+      'atest does not wait for the previous one before calling fn');
+    assert.ok(/pendingTests\.push\(atestChain\)/.test(fn),
+      'the chain is never handed to tests.js, so a failure lands after the count');
+    assert.ok((src.match(/^\s*atest\(/gm) || []).length >= 4,
+      'atest exists but nothing uses it -- the guard would pass on an empty file');
+  });
+
+
+
 };

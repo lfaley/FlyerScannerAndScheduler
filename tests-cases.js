@@ -32,6 +32,35 @@ function test(name, fn){
   catch(e){ results.failed++; console.error('  FAIL  ' + name + '\n        ' + e.message); }
 }
 
+// A test whose BODY awaits must use atest, not test.
+//
+// test() calls fn() the moment it is declared. For a synchronous body that is
+// the whole test, and it finishes before the next one starts. For an `async`
+// body it runs only as far as the first await -- the rest is a continuation
+// that resumes at the END of the file, alongside the continuations of every
+// other async test. They then interleave over the SAME S, pendingAction and
+// askState.
+//
+// MEASURED, v9.98: a new async test that ticked a list item off in its
+// continuation replaced the fixture P5-C2 was midway through, and P5-C2 failed
+// with "answering which list? ticked nothing off" -- a true-looking report of a
+// bug that did not exist. The instrument must not be the thing that is wrong
+// (CLAUDE.md rule 28).
+//
+// atest defers fn ENTIRELY: nothing of the body runs until the previous atest
+// has finished, so each one owns the app's state for its whole duration.
+// `return p.then(...)` inside a plain test() stays fine -- everything that
+// touches state there happens synchronously, before the promise is returned.
+let atestChain = Promise.resolve();
+function atest(name, fn){
+  atestChain = atestChain
+    .then(() => fn())
+    .then(
+      () => { results.passed++; console.log('  ok    ' + name); },
+      (e) => { results.failed++; console.error('  FAIL  ' + name + '\n        ' + (e && e.message)); });
+  pendingTests.push(atestChain);
+}
+
 const GOOD = JSON.stringify({
   events: [{ id:'e1', title:'Recital', date:'2026-12-01', kind:'event', deleted:false }],
   kids: [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false }],
@@ -2243,7 +2272,7 @@ function autoFixture(opts){
 // log entries for two emails. The trap is written up in DELETE-HONESTY-PLAN.md
 // section 15 -- found in v9.88, and walked into again here. Sequential awaits
 // inside one test are the fix; every assertion names its own scenario.
-test('the automatic email pass, end to end (v9.92)', async () => {
+atest('the automatic email pass, end to end (v9.92)', async () => {
 
   // --- it reads them without being asked ---------------------------------
   autoFixture();
@@ -2915,7 +2944,7 @@ test('extraction problems are recorded for the user, not swallowed', () => {
 
 console.log('\nSelf-test and comparison');
 
-test('the comparison leaves the saved provider alone, even when a side fails', async () => {
+atest('the comparison leaves the saved provider alone, even when a side fails', async () => {
   // This test used to assert that compareProviders RESTORED S.settings after
   // mutating them. Since v9.63 it never mutates them, so there is nothing to
   // restore -- the guarantee got stronger, and the assertion has to say so.
@@ -5563,7 +5592,7 @@ test('P5-B: probeLocalContext reads its inputs BEFORE it awaits', () => {
     'the cache answers again without checking which settings it was measured on');
 });
 
-test('P5-C: "which one did you mean?" is never asked with nothing to offer', async () => {
+atest('P5-C: "which one did you mean?" is never asked with nothing to offer', async () => {
   // Measured: a user with no lists asked to tick something off got the question,
   // ZERO buttons and a "Neither" link -- because [] is truthy.
   boot(null);
@@ -5866,7 +5895,7 @@ test('A7: an absent word survives a question and is still reported (v9.98)', () 
   return p.then(() => {});
 });
 
-test('P5-C2: choosing the list from the prompt actually ticks the items off', async () => {
+atest('P5-C2: choosing the list from the prompt actually ticks the items off', async () => {
   // askWhich stored { route, target, collection } and nothing else, while
   // confirmPendingAction read pa.itemIds -- so answering the question did
   // nothing at all, silently.
