@@ -13,7 +13,7 @@
 // way to skip it.
 //
 // BUMP THIS EVERY RELEASE or installed phones keep serving the old app.
-const CACHE = 'flyersnap-v184';
+const CACHE = 'flyersnap-v185';
 
 // index.html is fully self-contained -- it fetches nothing to boot (guarded by
 // tests; see the v8.1-v8.5 blank-screen incident). So the shell is only the

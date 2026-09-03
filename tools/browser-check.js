@@ -336,6 +336,82 @@ const eq = (got, want, what) => {
       throw new Error('wrong rows ticked and saved: ' + JSON.stringify(saved));
   });
 
+  await check('#linkUrl: an overlay misfire keeps the URL, Cancel discards it (v10.1)', async () => {
+    // The one draft box the earlier sweep never exercised in a browser. Two
+    // things MEASURED here that reading the source does not tell you:
+    //   1. this sheet is appended to <body>, not into #main, so it survives a
+    //      render() on its own -- the draft mirror is not what saves it;
+    //   2. the mirror's real job is the reopen, and until v10.1 the overlay and
+    //      the Cancel button called the SAME function, so a deliberate "no" and
+    //      a fat-fingered tap beside the sheet did the same thing.
+    const URL_ = 'https://school.example/very-long-newsletter-flyer.pdf';
+    await pg.evaluate(() => { drafts = {}; openLinkSheet(); });
+    await pg.waitForTimeout(200);
+    await pg.locator('#linkUrl').click();
+    await pg.keyboard.type(URL_, { delay: 4 });
+    // (1) a re-render nobody asked for
+    await pg.evaluate(() => render());
+    await pg.waitForTimeout(150);
+    if(!(await pg.locator('#linkUrl').count())) throw new Error('render() removed the sheet');
+    eq(await pg.locator('#linkUrl').inputValue(), URL_, 'value after an unrelated render()');
+    // (2) the overlay misfire: tap the dark area, reopen, it is still there
+    await pg.evaluate(() => window._linkSheet.overlay.click());
+    await pg.waitForTimeout(150);
+    await pg.evaluate(() => openLinkSheet());
+    await pg.waitForTimeout(200);
+    eq(await pg.locator('#linkUrl').inputValue(), URL_, 'value after tapping beside the sheet');
+    // (3) a real Cancel tap -- a deliberate no
+    await pg.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await pg.waitForTimeout(150);
+    await pg.evaluate(() => openLinkSheet());
+    await pg.waitForTimeout(200);
+    eq(await pg.locator('#linkUrl').inputValue(), '', 'value after tapping Cancel');
+    await pg.evaluate(() => closeLinkSheet());
+  });
+
+  await check('every sheet button is reachable, and the nav cannot be tapped through it (v10.1)', async () => {
+    // FOUND BY THIS HARNESS, not by reading. The sheet was z-index 20 and its
+    // overlay 15, against nav's 30 -- so the nav sat ON TOP of every sheet in
+    // the app, undimmed and still clickable, and the LAST button of each one
+    // was unreachable. Those buttons are "Cancel", "Remove event" and
+    // "Delete N events". A tap there did not do nothing: it switched tabs and
+    // left the sheet floating over a different screen.
+    //
+    // elementFromPoint at each button's own centre, which is what a finger hits.
+    // Source-reading cannot see this and the a11y audit does not either -- it
+    // renders screens, and a sheet is not a screen.
+    const openers = [
+      ['the link sheet', () => openLinkSheet()],
+      ['an event\u2019s actions', () => eventActions(S.events[0].id)],
+      ['bulk tag / delete', () => { selectMode = true; selectedEvents = new Set([S.events[0].id]); bulkTagSheet(); }],
+    ];
+    for(const [label, open] of openers){
+      await pg.evaluate(() => { if(window._linkSheet) closeLinkSheet(); if(typeof closeSheet === 'function') closeSheet(); });
+      await pg.evaluate(open);
+      await pg.waitForTimeout(220);
+      const r = await pg.evaluate(() => {
+        const btns = [...document.querySelectorAll('.sheet button')];
+        const unreachable = btns.filter(el => {
+          const b = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(Math.round(b.left + b.width / 2), Math.round(b.top + b.height / 2));
+          return !(hit && hit.closest && hit.closest('.sheet'));
+        }).map(el => el.textContent.trim().slice(0, 24));
+        const nav = document.getElementById('nav');
+        const nb = nav.getBoundingClientRect();
+        const overNav = document.elementFromPoint(Math.round(nb.left + nb.width / 2), Math.round(nb.top + nb.height / 2));
+        return { count: btns.length, unreachable,
+          navClickable: !!(overNav && overNav.closest && overNav.closest('nav')) };
+      });
+      if(r.count < 2) throw new Error(label + ': only ' + r.count + ' buttons found -- the sheet did not open');
+      if(r.unreachable.length)
+        throw new Error(label + ': a real tap cannot reach ' + JSON.stringify(r.unreachable));
+      if(r.navClickable)
+        throw new Error(label + ': the nav is still tappable through the modal');
+    }
+    await pg.evaluate(() => { if(window._linkSheet) closeLinkSheet(); if(typeof closeSheet === 'function') closeSheet();
+      selectMode = false; selectedEvents = new Set(); render(); });
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;

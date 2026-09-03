@@ -302,6 +302,22 @@
     padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom));z-index:20;
     box-shadow:var(--shadow-sheet)}
   .overlay{position:fixed;inset:0;background:var(--overlay);z-index:15}
+  /* A SHEET MUST OUTRANK THE NAV (v10.1). The sheet was z-index 20 and the
+     overlay 15, against nav's 30 -- so the nav sat on top of every sheet in the
+     app, undimmed and still clickable.
+
+     MEASURED at 393x852, 390x664 and 360x640, with elementFromPoint at each
+     button's centre: the LAST button of every sheet was unreachable, because a
+     tap there landed on the nav instead. That button is "Cancel" on the link
+     sheet, "Remove event" on an event's actions and "Delete N events" on the
+     bulk sheet -- and the tap did not do nothing, it switched tabs and left the
+     sheet floating over a different screen.
+
+     40/35 keeps the toast (99) above both, which is right: an Undo has to be
+     reachable over a sheet. The composer stays at 20 -- it is offset above the
+     nav by 54px on purpose and never overlaps it. */
+  .sheet{z-index:40}
+  .overlay{z-index:35}
   /* min-height wins over the inline paddings scattered through the markup, so
      every one of these clears the 44px target without touching 26 call sites. */
   .linkbtn{background:none;border:none;color:var(--accent);font-weight:700;
@@ -4874,7 +4890,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.0';
+const APP_VERSION = 'v10.1';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -9434,7 +9450,15 @@ function openLinkSheet(){
       value="${esc(draft('linkUrl'))}" oninput="setDraft('linkUrl', this.value)">
     <div style="height:10px"></div>
     <button class="sheetbtn" style="background:var(--green);color:var(--on-accent)" onclick="submitLink()">Read this link</button>
-    <button class="sheetbtn cancel" onclick="closeLinkSheet()">Cancel</button>`;
+    <button class="sheetbtn cancel" onclick="cancelLinkSheet()">Cancel</button>`;
+  // The OVERLAY keeps the draft; CANCEL throws it away. They were the same
+  // function, so both did the same thing -- and they are not the same intent.
+  // MEASURED (v10.1): this sheet is appended to <body>, not into #main, so it
+  // already survives a render() on its own; the draft mirror's only real job is
+  // this reopen. Tapping the dark area beside a sheet is the classic misfire on
+  // a phone, and a long pasted URL is exactly what you do not want to fetch
+  // again -- so that keeps it. Cancel is a deliberate "no", and answering it by
+  // handing the URL back next time is the app arguing with you.
   overlay.onclick = closeLinkSheet;
   document.body.append(overlay, sh);
   window._linkSheet = {overlay, sh};
@@ -9442,6 +9466,11 @@ function openLinkSheet(){
 }
 function closeLinkSheet(){
   if(window._linkSheet){ window._linkSheet.overlay.remove(); window._linkSheet.sh.remove(); window._linkSheet=null; }
+}
+/** Cancel means cancel: the typed URL does not come back on the next open. */
+function cancelLinkSheet(){
+  clearDraft('linkUrl');
+  closeLinkSheet();
 }
 function submitLink(){
   const url = (document.getElementById('linkUrl').value||'').trim();
@@ -13197,6 +13226,7 @@ Object.assign(window, {
   calendarOptions,
   cancelEventEdit,
   cancelExportQueue,
+  cancelLinkSheet,
   clearChecked,
   clearCompare,
   clearEventSearch,

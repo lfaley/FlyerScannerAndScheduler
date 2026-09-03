@@ -157,3 +157,80 @@ Nielsen Norman Group, *Website Forms Usability: Top 10 Recommendations* ·
 Nielsen Norman Group, *Few Guesses, More Success: 4 Principles to Reduce
 Cognitive Load in Forms* · UK Parliament Design System, *Designing forms*
 (GOV.UK Design System lineage).
+
+---
+
+## The nav sat on top of every sheet in the app (v10.1)
+
+**Found by `tools/browser-check.js`, by accident, while closing an unrelated
+gap** — the `#linkUrl` draft box was the one input the v9.94 sweep never
+exercised in a browser. Playwright refused to click the sheet's Cancel button:
+*"`<svg class="ico">` from `<nav id="nav">` subtree intercepts pointer events."*
+
+### Measured
+
+`elementFromPoint` at each button's own centre — which is what a finger hits —
+at three viewport sizes:
+
+```
+iPhone 15 Pro 393x852   Cancel  y 785-828   nav starts at 798   tap lands on: nav
+small          390x664  Cancel  y 597-640   nav starts at 610   tap lands on: nav
+small Android  360x640  Cancel  y 573-616   nav starts at 586   tap lands on: nav
+```
+
+And across three different sheets:
+
+| sheet | buttons | unreachable | nav clickable through the modal |
+|---|---|---|---|
+| the link sheet | 2 | **1** (`Cancel`) | **yes** |
+| an event's actions | 4 | **1** (`Remove event`) | **yes** |
+| bulk tag / delete | 4 | **1** (`Delete N events`) | **yes** |
+
+Two defects, and the second is the worse one:
+
+1. **The last button of every sheet was unreachable.** In two of the three that
+   button is the destructive one.
+2. **The nav was still clickable through the "modal".** The tap did not do
+   nothing — it switched tabs, leaving the sheet floating over a different
+   screen, because a sheet is appended to `<body>` and `render()` only replaces
+   `#main`.
+
+### Cause
+
+```css
+nav      { z-index:30 }
+.sheet   { z-index:20 }
+.overlay { z-index:15 }
+```
+
+The nav outranked both. The overlay never dimmed it, so it did not even *look*
+disabled.
+
+### Fix
+
+`.sheet` → 40, `.overlay` → 35. The toast stays at 99, which is right: an Undo
+has to be reachable over a sheet. The composer stays at 20 — it is offset 54px
+above the nav on purpose and never overlaps it.
+
+### Why nothing caught this
+
+- **Source reading cannot see it.** Three separate rules, in three places, and
+  the bug is the relationship between them.
+- **The a11y audit does not cover it.** It renders the 48 *screens*; a sheet is
+  not a screen. Its tap-target check would not have found this either — the
+  buttons are the right size, they are simply covered.
+- **The vm test harness cannot see it.** There is no layout in a Node sandbox.
+
+A browser check now asserts, for every sheet: no button is unreachable at its
+own centre, and the nav is not tappable through the overlay. Mutation-proved by
+putting the z-indexes back — two checks went red, one naming `Cancel`.
+
+### While in there: Cancel now means cancel
+
+`overlay.onclick` and the Cancel button were the same function, so a deliberate
+"no" and a fat-fingered tap beside the sheet did the same thing. Tapping beside
+the sheet still keeps the typed URL — that is the classic phone misfire, and a
+long pasted URL is the last thing you want to fetch again. Cancel now discards
+it. Also measured while checking: this sheet lives outside `#main`, so it
+already survived a `render()` on its own — the draft mirror's only real job was
+this reopen.

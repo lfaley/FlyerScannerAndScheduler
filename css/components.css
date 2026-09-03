@@ -229,6 +229,22 @@
     padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom));z-index:20;
     box-shadow:var(--shadow-sheet)}
   .overlay{position:fixed;inset:0;background:var(--overlay);z-index:15}
+  /* A SHEET MUST OUTRANK THE NAV (v10.1). The sheet was z-index 20 and the
+     overlay 15, against nav's 30 -- so the nav sat on top of every sheet in the
+     app, undimmed and still clickable.
+
+     MEASURED at 393x852, 390x664 and 360x640, with elementFromPoint at each
+     button's centre: the LAST button of every sheet was unreachable, because a
+     tap there landed on the nav instead. That button is "Cancel" on the link
+     sheet, "Remove event" on an event's actions and "Delete N events" on the
+     bulk sheet -- and the tap did not do nothing, it switched tabs and left the
+     sheet floating over a different screen.
+
+     40/35 keeps the toast (99) above both, which is right: an Undo has to be
+     reachable over a sheet. The composer stays at 20 -- it is offset above the
+     nav by 54px on purpose and never overlaps it. */
+  .sheet{z-index:40}
+  .overlay{z-index:35}
   /* min-height wins over the inline paddings scattered through the markup, so
      every one of these clears the 44px target without touching 26 call sites. */
   .linkbtn{background:none;border:none;color:var(--accent);font-weight:700;

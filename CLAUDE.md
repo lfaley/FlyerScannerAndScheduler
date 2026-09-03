@@ -409,7 +409,16 @@ commands below.
   also SEVEN TIMES FASTER than the vm suite (8s vs 60s), so there is no reason
   not to run it. Not wired into `deploy.ps1`: it needs Playwright, and the
   deploy gate must work on a machine that has not run `npm install`.
-  22 checks as of v9.98. Two of them exist because the vm harness structurally
+  **v10.1: this harness found a bug three other checks could not.** The nav was
+  `z-index:30` against the sheet's 20 and its overlay's 15, so the nav sat ON TOP
+  of every sheet in the app — the last button of each one (`Cancel`,
+  `Remove event`, `Delete N events`) was unreachable, and a tap there switched
+  tabs and left the sheet floating over another screen. Source reading cannot see
+  it (three rules in three places; the bug is the relationship). The a11y audit
+  does not cover it — **it renders the 48 SCREENS, and a sheet is not a screen.**
+  The vm harness has no layout at all. If a control's problem is *where it is*,
+  only this harness can tell you.
+  24 checks as of v10.1. Two of them exist because the vm harness structurally
   cannot reach the code: `saveEventEdit` opens with `syncEventForm()`, which
   re-reads the live inputs (every stub reports `value:''`), and the assistant's
   second "which one did you mean?" is pushed from inside `confirmPendingAction`
