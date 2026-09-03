@@ -1311,15 +1311,15 @@ const AI_ACTIONS = [
     label: 'Do things you ask for',
     risk: RISK.CONFIRM,
     can: 'Adds items to a list, starts a new list, ticks things off, marks a chore done or a deadline handled, moves an event, and deletes an event or chore — from a sentence typed into the chat box.',
-    cannot: 'It never acts on its own. It shows you exactly what it is about to do and waits for you to say yes, it refuses to guess when two things could be meant, and every change it makes can be undone.',
+    cannot: 'Nothing here happens without your say-so. It shows you exactly what it is about to do and waits for you to say yes, it refuses to guess when two things could be meant, and every change it makes can be undone.',
     fallback: 'Every one of these is a tap on the screen it belongs to.',
   },
   {
     id: 'emailbrief',
-    label: 'Read emails that would not import',
+    label: 'Read emails that would not import, unasked',
     risk: RISK.READ,
-    can: 'When an email arrives that no dates could be pulled out of, reads it — body text and any photo attachment — and says who it is from, what it is about in a line, any date it names, and what to do about it. This one starts on its own, without being asked, so the answer is already there when you open the review screen.',
-    cannot: 'It reads and reports; it saves nothing and changes nothing until you tap Add as event. It only ever reads the emails your watcher already fetched and that failed to import — never the rest of your mail. It runs by itself only while your own local model is answering: the moment reading one would fall to Anthropic and cost you money — a PDF attachment, or Gordon being offline — it stops and waits for you to tap.',
+    can: 'Reads an email your watcher fetched but could not pull any dates out of — the body text and any photo — and tells you who it is from, what it is about in one line, any date it names, and what to do about it. It starts on its own, so the answer is waiting when you open the review screen.',
+    cannot: 'It reads and reports: nothing is saved until you tap Add as event. It only ever reads emails your watcher already fetched and could not import, never the rest of your mail. And it runs by itself only while Gordon is answering — if reading one would fall to Anthropic and use your key, which a PDF or Gordon being offline both do, it stops there and hands the rest back to you.',
     fallback: 'Open the email in your mail app, or add the event by hand.',
   },
   {
@@ -4713,7 +4713,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.92';
+const APP_VERSION = 'v9.93';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -8319,6 +8319,12 @@ function eaCatMeta(cat){
 }
 
 // One email's EA brief as HTML (used inside the trouble box once Gordon has reviewed).
+// The trouble card names this button in its own prose, so the label has one
+// definition rather than two that can drift apart.
+function reviewRestLabel(){
+  return Object.keys(emailReviews).length ? 'Review the rest' : 'Ask ' + aiName() + ' to review';
+}
+
 function emailBriefHtml(b){
   const m = eaCatMeta(b.category);
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
@@ -9221,11 +9227,13 @@ function renderReview(m){
         <button class="linkbtn" aria-label="Dismiss" onclick="dismissEmailTrouble()">${ico('x')}</button>
       </div>
       ${emailAutoStop ? `<div class="meta" style="font-size:var(--t-cap);margin-top:4px;color:var(--amber)">${
+          // One name for the model throughout (Gordon, never "your local
+          // model"), and every line names the button rather than pointing at it.
           emailAutoStop === 'pdf'
-            ? `${esc(aiName())} stopped at a PDF — your local model can’t read those, and Anthropic would. Tap below to read the rest with your key.`
+            ? `Stopped at a PDF — ${esc(aiName())} can’t read those, so reading it would use your Anthropic key. Tap ${esc(reviewRestLabel())} to go on.`
           : emailAutoStop === 'paid'
-            ? `${esc(aiName())} couldn’t take the rest — reading them fell to Anthropic, which uses your key. Tap below to carry on.`
-            : `${esc(aiName())} stopped partway. Tap below to try the rest.`}</div>` : ''}
+            ? `Stopped — reading the rest fell to Anthropic, which uses your key. Tap ${esc(reviewRestLabel())} to go on.`
+            : `Stopped partway — that one didn’t come back. Tap ${esc(reviewRestLabel())} to try again.`}</div>` : ''}
       ${(() => {
         // Distinct emails (one email can log several problems). If Gordon has reviewed
         // an email, show his brief; otherwise the plain subject + reason.
@@ -9247,7 +9255,7 @@ function renderReview(m){
       })()}
       <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
         ${(aiEnabled() && probs.some(p => p && p.msgId && !emailReviews[p.msgId]))
-          ? `<button class="btn sm" ${emailReviewBusy?'disabled':''} onclick="reviewEmailTrouble()">${emailReviewBusy ? 'Reviewing…' : (Object.keys(emailReviews).length ? 'Review the rest' : `${ico('sparkles')}Ask ${esc(aiName())} to review`)}</button>`
+          ? `<button class="btn sm" ${emailReviewBusy?'disabled':''} onclick="reviewEmailTrouble()">${emailReviewBusy ? 'Reviewing…' : (Object.keys(emailReviews).length ? esc(reviewRestLabel()) : `${ico('sparkles')}${esc(reviewRestLabel())}`)}</button>`
           : ''}
         ${nRetry ? `<button class="btn sm" onclick="retryEmailTrouble()">Try ${nRetry===probs.length?'':nRetry+' '}again</button>` : ''}
         <button class="btn alt sm" style="width:auto" onclick="dismissEmailTrouble()">Dismiss</button>

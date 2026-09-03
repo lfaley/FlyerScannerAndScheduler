@@ -1703,6 +1703,36 @@ module.exports = async function runModuleTests(test){
       'nothing triggers the automatic pass any more');
   });
 
+  test('no capability claims a promise another one breaks (v9.93)', () => {
+    // 'act' used to open "It never acts on its own." -- an absolute, rendered
+    // four cards above one that says it starts on its own. Scoped to the chat
+    // box it was not literally false, but the sentence did not say so, and this
+    // list exists precisely so a user's reading of it cannot drift from what
+    // the app does. The promise worth keeping is "no change without your yes";
+    // the overreach was "nothing here is ever unprompted".
+    const absolutes = /never (acts|does anything|runs) on its own|only ever runs when you|nothing happens unless you/i;
+    const unprompted = reg.AI_ACTIONS.filter(a =>
+      /on its own|by itself|without being asked|unasked/i.test(a.can + ' ' + a.label));
+    assert.ok(unprompted.length >= 1,
+      'nothing in the list starts by itself -- this guard has nothing to protect');
+    const offenders = reg.AI_ACTIONS.filter(a => absolutes.test(a.cannot)).map(a => a.id);
+    assert.deepStrictEqual(offenders, [],
+      'these claim nothing ever runs unprompted, while ' +
+      unprompted.map(a => a.id).join('/') + ' does: ' + offenders.join(', '));
+  });
+
+  test('one name for the model, and buttons are named not pointed at (v9.93)', () => {
+    // "your local model" and "Gordon" are the same thing; using both in one
+    // card asks the reader to work that out. And "tap below" survives exactly
+    // as long as nothing moves.
+    const card = codeOf(script.split('function renderReview(')[1].split('\nfunction ')[0]);
+    assert.ok(!/your local model/i.test(card),
+      'the trouble card calls Gordon "your local model" somewhere');
+    assert.ok(!/[Tt]ap below/.test(card), 'the trouble card still says "tap below"');
+    assert.ok(/reviewRestLabel\(\)/.test(card),
+      'the card no longer names the button through its single definition');
+  });
+
   test('the automatic email pass is declared to the user (v9.92)', () => {
     // CLAUDE.md: js/ai-actions.js "exists so the promise a user reads cannot
     // drift from what the code does, and it HAS drifted before." A capability
