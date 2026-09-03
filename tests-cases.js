@@ -5924,6 +5924,161 @@ function withToast(fn){
   return seen;
 }
 
+// ---------------------------------------------------------------------------
+// The error-report outbox (v9.100). flushErrorReports had NO tests at all, and
+// its retry rule treated every non-2xx except 403 and 409 as transient.
+//
+// MEASURED against the shipped code, outbox = [400-er, good-one]:
+//   pass 1 tried: ["bad-1"]      pass 2: ["bad-1","bad-1"]   pass 3: +"bad-1"
+//   outbox after three passes: BOTH still there
+// The good report was never attempted on any pass, and the malformed one was
+// re-sent on every flush and every boot. Error reporting died at the first
+// malformed document and stayed dead -- the reporter you would rely on to
+// notice a problem, quietly broken (CLAUDE.md rule 28).
+//
+// Status meanings follow Firestore's own table and its "Recommended action"
+// column: https://cloud.google.com/firestore/native/docs/use-rest-api
+// ---------------------------------------------------------------------------
+const OUTBOX_LS = 'flyersnap-error-outbox';
+const TRIES_LS = 'flyersnap-error-tries';
+
+/** Queue these reports, answer every POST with `reply(id)`, record the order. */
+function withFetch(docs, reply){
+  boot(GOOD);
+  S.settings.errorReportsOff = false;
+  localStorage.setItem(OUTBOX_LS, JSON.stringify(docs));
+  localStorage.removeItem(TRIES_LS);
+  const tried = [];
+  const real = fetch;
+  fetch = (url) => {
+    const id = (/documentId=([^&]+)/.exec(String(url)) || [])[1];
+    tried.push(id);
+    return Promise.resolve(reply(id));
+  };
+  return {
+    tried,
+    outbox: () => JSON.parse(localStorage.getItem(OUTBOX_LS) || '[]').map(d => d.reportId),
+    tries: () => JSON.parse(localStorage.getItem(TRIES_LS) || '{}'),
+    done: () => { fetch = real; },
+  };
+}
+const rep = (status, body) => ({ ok: status >= 200 && status < 300, status,
+  text: () => Promise.resolve(body || '{}') });
+const doc = (id) => ({ reportId:id, app:'flyersnap', message:'m-' + id });
+
+atest('the outbox drops a report the server will never accept (v9.100)', async () => {
+  // 400, 401, 403 and 404 all carry "Do not retry without fixing the problem"
+  // in Firestore's table. Nothing a client repeats will change any of them.
+  for(const status of [400, 401, 403, 404]){
+    const h = withFetch([doc('dead'), doc('live')],
+      id => rep(id === 'dead' ? status : 200));
+    try {
+      await flushErrorReports();
+      assert.deepStrictEqual(h.tried, ['dead', 'live'],
+        status + ': the queue stopped at the dead entry instead of moving past it');
+      assert.deepStrictEqual(h.outbox(), [],
+        status + ': something stayed in the outbox: ' + JSON.stringify(h.outbox()));
+      await flushErrorReports();
+      assert.deepStrictEqual(h.tried, ['dead', 'live'],
+        status + ': it was sent again on the next flush');
+    } finally { h.done(); }
+  }
+});
+
+atest('a transient failure is kept, and does not take the queue with it (v9.100)', async () => {
+  // 503 UNAVAILABLE: "Retry using exponential backoff." Keeping it is right --
+  // and so is not hammering everything behind it in the same pass.
+  const h = withFetch([doc('flaky'), doc('later')], () => rep(503));
+  try {
+    await flushErrorReports();
+    assert.deepStrictEqual(h.tried, ['flaky'], 'it kept going after a transient failure');
+    assert.deepStrictEqual(h.outbox(), ['flaky', 'later'], 'a transient failure lost a report');
+    assert.strictEqual(h.tries()['flaky'], 1, 'the attempt was not counted');
+  } finally { h.done(); }
+});
+
+atest('a report the server keeps refusing is eventually given up on (v9.100)', async () => {
+  // The other half of "retried forever": even a legitimately transient code
+  // must not be re-sent at every boot for the life of the install.
+  const h = withFetch([doc('doomed')], () => rep(503));
+  try {
+    for(let i = 0; i < 20 && h.outbox().length; i++) await flushErrorReports();
+    assert.deepStrictEqual(h.outbox(), [], 'it is still being retried after 20 passes');
+    assert.strictEqual(h.tried.length, 6, 'gave up after ' + h.tried.length + ' tries, expected 6');
+    assert.deepStrictEqual(h.tries(), {}, 'the counter outlived the report it counted');
+  } finally { h.done(); }
+});
+
+atest('a 500 is retried once, not six times (v9.100)', async () => {
+  // Firestore is explicit about INTERNAL: "Do not retry this request more than
+  // once." A shared cap would have quietly ignored that.
+  const h = withFetch([doc('boom')], () => rep(500));
+  try {
+    for(let i = 0; i < 10 && h.outbox().length; i++) await flushErrorReports();
+    assert.strictEqual(h.tried.length, 2, 'a 500 was sent ' + h.tried.length + ' times, expected 2');
+    assert.deepStrictEqual(h.outbox(), [], 'it is still queued');
+  } finally { h.done(); }
+});
+
+atest('the two meanings of 409 are told apart by the body (v9.100)', async () => {
+  // ALREADY_EXISTS and ABORTED share the status number; only error.status in
+  // the body separates them (AIP-193). ALREADY_EXISTS means an earlier launch
+  // delivered this id -- dropping it is correct. ABORTED means try again.
+  const gone = withFetch([doc('dupe')], () => rep(409, '{"error":{"status":"ALREADY_EXISTS"}}'));
+  try {
+    await flushErrorReports();
+    assert.deepStrictEqual(gone.outbox(), [], 'a duplicate id is being retried');
+  } finally { gone.done(); }
+
+  const again = withFetch([doc('clash')], () => rep(409, '{"error":{"status":"ABORTED"}}'));
+  try {
+    await flushErrorReports();
+    assert.deepStrictEqual(again.outbox(), ['clash'], 'a retryable 409 was thrown away');
+    assert.strictEqual(again.tries()['clash'], 1, 'the retry was not counted');
+  } finally { again.done(); }
+
+  // An unreadable body must not become "retry" by accident.
+  const junk = withFetch([doc('junk')], () => rep(409, 'not json'));
+  try {
+    await flushErrorReports();
+    assert.deepStrictEqual(junk.outbox(), [], 'an unparseable 409 body was read as retryable');
+  } finally { junk.done(); }
+});
+
+atest('a counter cannot outlive the report it was counting (v9.100)', async () => {
+  // drop() clears the counter for a report it removes, so the sweep at the end
+  // of the flush looks redundant -- and MEASURED, removing it turned nothing
+  // red. It is not redundant: the outbox is capped at ERROR_OUTBOX_MAX and
+  // keeps the LAST N, so an old entry can leave by being EVICTED rather than
+  // dropped, and drop() never runs for it. Without the sweep its counter sits
+  // in localStorage for the life of the install, and so does every other one.
+  const h = withFetch([doc('doomed')], () => rep(503));
+  try {
+    await flushErrorReports();
+    assert.strictEqual(h.tries()['doomed'], 1, 'the fixture did not produce a counter');
+    // Overflow the cap so 'doomed' falls off the front without being dropped.
+    const many = [];
+    for(let i = 0; i < ERROR_OUTBOX_MAX + 2; i++) many.push(doc('n' + i));
+    errorOutboxWrite(JSON.parse(localStorage.getItem(OUTBOX_LS) || '[]').concat(many));
+    assert.ok(h.outbox().indexOf('doomed') < 0, 'the cap did not evict it -- this test proves nothing');
+    fetch = () => Promise.resolve(rep(503));
+    await flushErrorReports();
+    assert.ok(!('doomed' in h.tries()),
+      'the evicted report left its counter behind: ' + JSON.stringify(h.tries()));
+  } finally { h.done(); }
+});
+
+atest('being offline loses nothing (v9.100)', async () => {
+  const h = withFetch([doc('a'), doc('b')], () => { throw new Error('network down'); });
+  fetch = () => Promise.reject(new Error('network down'));
+  try {
+    await flushErrorReports();
+    assert.deepStrictEqual(h.outbox(), ['a', 'b'], 'a dropped connection lost reports');
+    assert.deepStrictEqual(h.tries(), {},
+      'an unreachable network burned a retry -- being offline is not the server refusing');
+  } finally { h.done(); }
+});
+
 test('P4: bulkTag can be undone, and a two-person tag comes back whole (v9.99)', () => {
   // MEASURED before: bulkTag overwrote personIds with a one-element array and
   // offered nothing. The sheet warns that tagging replaces -- so the behaviour

@@ -4831,7 +4831,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.99';
+const APP_VERSION = 'v9.100';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -7799,6 +7799,47 @@ function queueErrorReport(problem){
     setTimeout(() => { flushErrorReports(); }, 0);
   }catch(e){ /* reporting must never break the app */ }
 }
+// Which failures are worth trying again (v9.100). Firestore's own error table
+// carries a "Recommended action" column, and this follows it:
+//   https://cloud.google.com/firestore/native/docs/use-rest-api
+//   400 INVALID_ARGUMENT / FAILED_PRECONDITION  do not retry without fixing
+//   401 UNAUTHENTICATED                         do not retry without fixing
+//   403 PERMISSION_DENIED                       do not retry without fixing
+//   404 NOT_FOUND                               do not retry without fixing
+//   409 ALREADY_EXISTS                          do not retry without fixing
+//   409 ABORTED                                 retry
+//   429 RESOURCE_EXHAUSTED                      backoff
+//   500 INTERNAL                                "do not retry more than once"
+//   503 UNAVAILABLE / 504 DEADLINE_EXCEEDED     retry with exponential backoff
+//
+// Both 409s share a status number and are told apart only by `error.status` in
+// the body (AIP-193), which is why reportAborted reads it. For a create with an
+// explicit documentId, ALREADY_EXISTS is the far likelier of the two.
+//
+// The policy lives here rather than in js/errorReport.js because it is about
+// this I/O half; the module holds the pure builders.
+const REPORT_DEAD_STATUS = [400, 401, 403, 404];
+const REPORT_TRIES_MAX = 6;
+const REPORT_TRIES_500 = 2;   // Firestore: do not retry INTERNAL more than once
+const ERROR_TRIES_LS = 'flyersnap-error-tries';
+function errorTriesRead(){
+  try{
+    const o = JSON.parse(localStorage.getItem(ERROR_TRIES_LS) || '{}');
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  }catch(e){ return {}; }
+}
+function errorTriesWrite(o){
+  try{ localStorage.setItem(ERROR_TRIES_LS, JSON.stringify(o)); }catch(e){ /* THE ERROR REPORTER MUST NOT THROW (rule 28) */ }
+}
+/** Is this 409 the retryable one? Never throws; an unreadable body means no. */
+async function reportAborted(res){
+  try{
+    if(!res || typeof res.text !== 'function') return false;
+    const body = JSON.parse(await res.text());
+    return !!(body && body.error && body.error.status === 'ABORTED');
+  }catch(e){ return false; }
+}
+
 let errorFlushBusy = false;
 async function flushErrorReports(){
   if(errorFlushBusy) return;
@@ -7806,6 +7847,11 @@ async function flushErrorReports(){
   try{
     if(S && S.settings && S.settings.errorReportsOff) return;
     if(navigator.onLine === false) return;
+    const tries = errorTriesRead();
+    const drop = (id) => {
+      delete tries[id];
+      errorOutboxWrite(errorOutboxRead().filter(d => d.reportId !== id));
+    };
     for(const docOut of errorOutboxRead()){
       let res;
       try{
@@ -7814,15 +7860,34 @@ async function flushErrorReports(){
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fields: toRestFields(docOut) })
         });
-      }catch(e){ return; } // offline/blocked -- the outbox keeps it for next time
-      if(res && (res.ok || res.status === 409 || res.status === 403)){
-        // ok = delivered; 409 = an earlier launch already delivered this id;
-        // 403 = rules rejected the shape -- retrying forever would not help.
-        errorOutboxWrite(errorOutboxRead().filter(d => d.reportId !== docOut.reportId));
-      } else {
-        return; // transient (5xx, no status) -- keep for the next flush
-      }
+      }catch(e){ break; } // offline/blocked -- the outbox keeps everything
+      const status = res ? res.status : 0;
+      // Delivered, or never deliverable. Either way it leaves the queue, and
+      // the loop CONTINUES -- until v9.100 a permanent failure returned, so one
+      // malformed report blocked every report behind it for the life of the
+      // install. Measured: with a 400 at the head, the entry after it was never
+      // attempted on any pass, and the 400 was re-sent on every flush and every
+      // boot, forever.
+      const settled = res && (res.ok || REPORT_DEAD_STATUS.indexOf(status) >= 0 ||
+        (status === 409 && !(await reportAborted(res))));
+      if(settled){ drop(docOut.reportId); continue; }
+      // Transient: 409 ABORTED, 429, 5xx, or no status at all. Worth trying
+      // again -- but not without end. A server that has refused the same
+      // document six times is not going to accept it on the seventh, and the
+      // outbox is the only thing standing between that and a report that is
+      // retried at every boot for years.
+      const n = (tries[docOut.reportId] || 0) + 1;
+      const cap = status === 500 ? REPORT_TRIES_500 : REPORT_TRIES_MAX;
+      if(n >= cap){ drop(docOut.reportId); continue; }
+      tries[docOut.reportId] = n;
+      errorTriesWrite(tries);
+      break; // still worth retrying -- do not hammer the rest of the queue now
     }
+    // Counters for documents that have left the queue would otherwise
+    // accumulate in localStorage forever.
+    const live = errorOutboxRead().map(d => d.reportId);
+    Object.keys(tries).forEach(id => { if(live.indexOf(id) < 0) delete tries[id]; });
+    errorTriesWrite(tries);
   }catch(e){ /* never throw out of the reporter */
   } finally { errorFlushBusy = false; }
 }
