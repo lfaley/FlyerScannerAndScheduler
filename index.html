@@ -4713,7 +4713,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.93';
+const APP_VERSION = 'v9.94';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -7742,7 +7742,8 @@ function renderSenders(m){
   const list = watchedSenders || [];
   let html = `<div class="help">FlyerSnap scans email from these senders for dates. Add a full address (jane@school.org) or a whole domain (school.org). Tag a sender with a person and events from them arrive pre-tagged — you can still adjust before saving.</div>
     <div class="formrow">
-      <input type="text" id="newSender" aria-label="Sender address or domain to watch" placeholder="domain.com or name@domain.com" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <input type="text" id="newSender" aria-label="Sender address or domain to watch" placeholder="domain.com or name@domain.com" autocapitalize="none" autocorrect="off" spellcheck="false"
+      value="${esc(draft('newSender'))}" oninput="setDraft('newSender', this.value)">
       <button class="btn sm" onclick="addSender()">Add</button>
     </div>`;
   if(!list.length){
@@ -7786,6 +7787,7 @@ function addSender(){
   watchedSenders = watchedSenders || [];
   if(watchedSenders.some(s=>s.toLowerCase()===v)){ toast('Already in the list'); return; }
   watchedSenders.push(v);
+  clearDraft('newSender');
   persistSenders();
 }
 function removeSender(i){
@@ -9082,7 +9084,8 @@ function openLinkSheet(){
   const sh = document.createElement('div'); sh.className='sheet';
   sh.innerHTML = `<div style="font-weight:800">Paste a flyer link</div>
     <div class="meta" style="margin-bottom:12px">Direct PDF links work best. Login-protected pages (e.g. some ParentSquare posts) won't work — save the PDF and use Import instead.</div>
-    <input type="text" id="linkUrl" aria-label="Flyer web address" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <input type="text" id="linkUrl" aria-label="Flyer web address" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false"
+      value="${esc(draft('linkUrl'))}" oninput="setDraft('linkUrl', this.value)">
     <div style="height:10px"></div>
     <button class="sheetbtn" style="background:var(--green);color:var(--on-accent)" onclick="submitLink()">Read this link</button>
     <button class="sheetbtn cancel" onclick="closeLinkSheet()">Cancel</button>`;
@@ -9097,6 +9100,7 @@ function closeLinkSheet(){
 function submitLink(){
   const url = (document.getElementById('linkUrl').value||'').trim();
   if(!/^https?:\/\//i.test(url)){ alert('Paste a full URL that starts with http:// or https://'); return; }
+  clearDraft('linkUrl');
   closeLinkSheet();
   handleLinkCapture(url);
 }
@@ -9826,8 +9830,10 @@ function renderRewards(m){
     </div>`).join('');
   }
   html += `<div class="card"><div class="formrow" style="margin:0">
-    <input type="text" id="rwTitle" aria-label="Reward name" placeholder="New reward (e.g. Movie night)">
-    <input type="number" id="rwCost" aria-label="Cost in stars" placeholder="⭐" value="10" style="width:70px;text-align:center">
+    <input type="text" id="rwTitle" aria-label="Reward name" placeholder="New reward (e.g. Movie night)"
+      value="${esc(draft('rwTitle'))}" oninput="setDraft('rwTitle', this.value)">
+    <input type="number" id="rwCost" aria-label="Cost in stars" placeholder="⭐" style="width:70px;text-align:center"
+      value="${esc(drafts.rwCost === undefined ? '10' : drafts.rwCost)}" oninput="setDraft('rwCost', this.value)">
     <button class="btn sm" onclick="addReward()">Add</button></div></div>`;
   m.innerHTML = html;
 }
@@ -9836,6 +9842,7 @@ function addReward(){
   const c = parseInt(document.getElementById('rwCost').value,10);
   if(!t || !c || c<1){ alert('Give the reward a name and a star cost of at least 1.'); return; }
   S.rewards.push({id:uid(), title:t, cost:c, deleted:false});
+  clearDraft('rwTitle'); clearDraft('rwCost');   // cost falls back to the default 10
   save(); render();
 }
 function delReward(id){
@@ -9939,7 +9946,8 @@ function renderLists(m){
     }).join('');
   }
   html += `<div class="card"><div class="formrow" style="margin:0">
-    <input type="text" id="newList" aria-label="New list name" placeholder="New list (e.g. Groceries)" onkeydown="if(event.key==='Enter')addList()">
+    <input type="text" id="newList" aria-label="New list name" placeholder="New list (e.g. Groceries)" onkeydown="if(event.key==='Enter')addList()"
+      value="${esc(draft('newList'))}" oninput="setDraft('newList', this.value)">
     <button class="btn sm" onclick="addList()">Add</button></div></div>`;
   m.innerHTML = html;
 }
@@ -9947,6 +9955,7 @@ function addList(){
   const t = document.getElementById('newList').value.trim();
   if(!t) return;
   S.lists.push({id:uid(), name:t, deleted:false});
+  clearDraft('newList');
   save(); render();
 }
 function delList(id){
@@ -9984,7 +9993,8 @@ function renderListDetail(m){
     : `<div class="empty"><div class="eb">Nothing here yet — add the first item below.</div></div>`;
   if(anyChecked) html += `<div style="text-align:center"><button class="linkbtn red" onclick="clearChecked('${list.id}')">Clear checked items</button></div>`;
   html += `<div class="card"><div class="formrow" style="margin:0">
-    <input type="text" id="newItem" aria-label="New item" placeholder="Add item" onkeydown="if(event.key==='Enter')addItem('${list.id}')">
+    <input type="text" id="newItem" aria-label="New item" placeholder="Add item" onkeydown="if(event.key==='Enter')addItem('${list.id}')"
+      value="${esc(draft('newItem'))}" oninput="setDraft('newItem', this.value)">
     <button class="btn sm" onclick="addItem('${list.id}')">Add</button></div></div>`;
   m.innerHTML = html;
 }
@@ -9993,9 +10003,35 @@ function addItem(listId){
   const t = inp.value.trim();
   if(!t) return;
   S.listItems.push({id:uid(), listId, text:t, checked:false, deleted:false});
+  // Cleared BEFORE the render, or the render re-emits the item just added.
+  clearDraft('newItem');
   save(); render();
   const again = document.getElementById('newItem'); if(again) again.focus();
 }
+/**
+ * Text a person has typed but not yet submitted.
+ *
+ * render() replaces #main wholesale -- every render function ends
+ * `m.innerHTML = html` -- so an input whose value lives ONLY in the real DOM is
+ * rebuilt empty and the typing is gone. Anything that re-renders does it:
+ * ticking an item off, tagging a person, a save-failure banner appearing, the
+ * quiet email check finishing.
+ *
+ * Found by tools/browser-check.js on its first run: typing an item and then
+ * tapping another item to tick it off discarded the half-typed one. The vm
+ * suite reported 851 passed on that same build, because its getElementById
+ * hands back a fresh stub per call and can never see an input's value.
+ *
+ * Keyed by element id so there is one mechanism rather than nine variables.
+ * Deliberately NOT on S: a half-finished edit is not the user's data and must
+ * never be saved or ride along in a backup. #apiKey and #gordonPassword are
+ * excluded on purpose -- echoing a secret back into the markup is not a fix.
+ */
+let drafts = {};
+function draft(id){ return drafts[id] || ''; }
+function setDraft(id, v){ drafts[id] = v; }
+function clearDraft(id){ delete drafts[id]; }
+
 // View state only. A half-finished edit is not the user's data and must never
 // be written by save() or ride along in a backup -- so it lives here, not on S.
 let listEditId = null;
@@ -10459,6 +10495,7 @@ function renderNotesBoard(m){
 
   let html = `<div class="card"><div class="formrow" style="margin:0">
     <input type="text" id="newNote" aria-label="Take a note" placeholder="Take a note…"
+      value="${esc(draft('newNote'))}" oninput="setDraft('newNote', this.value)"
       onkeydown="if(event.key==='Enter')newNote()">
     <button class="btn sm" onclick="newNote()">Add</button></div></div>`;
 
@@ -10560,6 +10597,7 @@ function newNote(){
     created:now, updated:now, deleted:false };
   if(!S.notes) S.notes = [];
   S.notes.unshift(n);
+  clearDraft('newNote');
   save();
   sub('noteDetail', {id:n.id});
 }
@@ -11335,7 +11373,8 @@ function renderSetPeople(m){
   m.innerHTML = `<div class="sect">People</div>
     <div class="help">Add the people you tag events to. Kids also appear in chores and star rewards; adults are for events only.</div>
     <div class="formrow">
-      <input type="text" id="kidName" aria-label="Person name" placeholder="Name" onkeydown="if(event.key==='Enter')addKid()">
+      <input type="text" id="kidName" aria-label="Person name" placeholder="Name" onkeydown="if(event.key==='Enter')addKid()"
+        value="${esc(draft('kidName'))}" oninput="setDraft('kidName', this.value)">
       <button class="btn sm" onclick="addKid()">Add</button>
     </div>
     <div style="margin:2px 0 10px">
@@ -11367,7 +11406,8 @@ function gordonAuthCard(){
     <div class="help" style="margin:4px 0 8px">The local model is per-person now. Sign in with an allow-listed email and password. The app and manual features work without signing in; the Anthropic fallback uses your own key.</div>
     <input type="email" id="gordonEmail" aria-label="Email" placeholder="you@example.com"
       autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username"
-      inputmode="email" style="margin-bottom:6px">
+      inputmode="email" style="margin-bottom:6px"
+      value="${esc(draft('gordonEmail'))}" oninput="setDraft('gordonEmail', this.value)">
     <input type="password" id="gordonPassword" aria-label="Password" placeholder="Password"
       autocomplete="current-password"
       onkeydown="if(event.key==='Enter')gordonSignInUI()">
@@ -11388,6 +11428,9 @@ async function gordonSignInUI(){
   if(msg) msg.textContent = 'Signing in…';
   try{
     await gordonSignIn(email, password);
+    // Only on success: a failed sign-in keeps the address so the user retypes
+    // the password and not both.
+    clearDraft('gordonEmail');
     toast('Signed in — Gordon is ready');
     sub('setAI');   // re-render with the signed-in state
   }catch(err){
@@ -12347,6 +12390,7 @@ function addKid(){
   if(S.kids.some(k=>!k.deleted && k.name.toLowerCase()===name.toLowerCase())){
     alert(name+' is already on the list.'); return;
   }
+  clearDraft('kidName');
   // Pick the first colour NOBODY IS USING, not the one at the live-count index.
   // Indexing by count collided as soon as a person in the middle was deleted:
   // add Ana/Ben/Cy, delete Ben, add Dee -> the live count is 2, so Dee got

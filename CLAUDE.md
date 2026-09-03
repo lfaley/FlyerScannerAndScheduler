@@ -387,6 +387,17 @@ commands below.
   `--only=<key>` for one screen. **Adding a sub-screen means adding it to the
   `SCREENS` table in that file** — a test fails the build otherwise, because
   a screen nobody audits is how the v9.12 defects survived v9.1.
+- `node tools/browser-check.js` — BEHAVIOUR in a real browser: real keystrokes,
+  real clicks on inline `onclick` handlers, real localStorage read back after
+  the tap. **This is the only harness that can see what `tests.js` cannot.** The
+  vm sandbox's `getElementById` returns a fresh stub per call, so an input's
+  value is unreadable there and an inline handler is never dispatched. Proved on
+  31 Aug: a build with the events-search `value=` attribute deleted reported
+  **851 passed, 0 failed** from `tests.js` and three failures here — and this
+  harness found the live `#newItem` draft-wipe on its first honest run. It is
+  also SEVEN TIMES FASTER than the vm suite (8s vs 60s), so there is no reason
+  not to run it. Not wired into `deploy.ps1`: it needs Playwright, and the
+  deploy gate must work on a machine that has not run `npm install`.
 - `node tools/preview.js [outDir]` — Playwright-Chromium screenshots of every
   tab, light AND dark, seeded demo data. Review design changes here first;
   it would have caught the v8.6 button bug. NOT a Safari substitute — Logan
