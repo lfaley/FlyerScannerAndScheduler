@@ -4705,7 +4705,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.90';
+const APP_VERSION = 'v9.91';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -9010,12 +9010,25 @@ async function handleLinkCapture(url){
 // EA on the review screen: ask Gordon to enrich the whole batch in place.
 // Mirrors the chat flow but scoped to pendingEvents, with an inline preview +
 // Apply/Cancel. Same computeBatchEnrichment + undo as the chat path.
-let reviewAsk = { busy:false, reply:'', preview:null };
+// `draft` mirrors the textarea on every keystroke, and the textarea is re-emitted
+// from it. Without that, render() -- which replaces #main wholesale
+// (renderReview ends `m.innerHTML = html`) -- rebuilt the box EMPTY and threw
+// away a half-typed question. Anything that re-renders the review screen did it:
+// toggling an entry, tagging a person, a save-failure banner appearing. The Ask
+// screen has always done this correctly (askState.draft); this box did not.
+let reviewAsk = { busy:false, reply:'', preview:null, draft:'' };
 
 async function runReviewAsk(){
   const el = document.getElementById('reviewAskQ');
-  const q = String((el && el.value) || '').trim();
+  // The live node first, the mirror second: the node is the truth while it
+  // exists, and the mirror is what survives a re-render that happened between
+  // the keystroke and the tap.
+  const q = String((el && el.value) || reviewAsk.draft || '').trim();
   if(!q || reviewAsk.busy || !pendingEvents.length) return;
+  // Cleared BEFORE the busy render, exactly as runAsk does it -- the render on
+  // the next line re-emits the box from `draft`, so clearing afterwards would
+  // put the submitted question straight back into it.
+  reviewAsk.draft = '';
   reviewAsk.busy = true; reviewAsk.reply = ''; reviewAsk.preview = null; render();
   try{
     const titles = pendingEvents.slice(0,8).map(e=>e.title||'untitled').join('; ');
@@ -9116,8 +9129,8 @@ function renderReview(m){
         placeholder="Ask Gordon… e.g. add band to the title of all these"
         autocapitalize="sentences" autocorrect="on" ${reviewAsk.busy?'disabled':''}
         style="min-height:44px;max-height:160px;resize:none;line-height:1.4;padding-top:11px"
-        oninput="autogrow(this)"
-        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();runReviewAsk()}"></textarea>
+        oninput="reviewAsk.draft=this.value;autogrow(this)"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();runReviewAsk()}">${esc(reviewAsk.draft)}</textarea>
       <button class="btn sm" ${reviewAsk.busy?'disabled':''} onclick="runReviewAsk()" style="align-self:flex-end">${reviewAsk.busy?'…':'Ask'}</button>
     </div>
     ${reviewAsk.reply ? `<div class="help" style="margin-top:6px">${esc(reviewAsk.reply)}</div>` : ''}

@@ -1653,6 +1653,37 @@ module.exports = async function runModuleTests(test){
       'the retention window is hardcoded again -- it will go stale like the 90 did');
   });
 
+  test('the review Ask box mirrors on every keystroke, not just on submit (v9.91)', () => {
+    // The behavioural test in tests-cases.js can only see the RESULT of the
+    // mirror, not that the mirror is wired to oninput. Without the oninput half,
+    // draft is only ever set by code and real typing is still lost.
+    assert.ok(/oninput="reviewAsk\.draft=this\.value;autogrow\(this\)"/.test(html),
+      'the review Ask box no longer mirrors its value into reviewAsk.draft');
+    assert.ok(/\$\{esc\(reviewAsk\.draft\)\}<\/textarea>/.test(html),
+      'the review Ask box no longer re-emits the draft it stored');
+  });
+
+  test('submitting clears the box instead of putting the question back (v9.91)', () => {
+    // The mirror creates a NEW way to get this wrong: clear `draft` after the
+    // busy render and the submitted question is re-emitted straight back into
+    // the box the user just emptied. runAsk clears before; so must this.
+    const fn = codeOf(script.split('async function runReviewAsk(')[1].split('\nfunction ')[0]);
+    const clearAt = fn.indexOf("reviewAsk.draft = ''");
+    const renderAt = fn.indexOf('render();');
+    assert.ok(clearAt > -1, 'runReviewAsk never clears the draft');
+    assert.ok(renderAt > -1, 'runReviewAsk no longer renders');
+    assert.ok(clearAt < renderAt,
+      'the draft is cleared AFTER the first render, so the submitted question comes back');
+  });
+
+  test('the submitted question is read from the mirror, not only the node (v9.91)', () => {
+    // After a re-render the node the user typed into is detached; its value is
+    // gone. The mirror is the only thing still holding the question.
+    const fn = codeOf(script.split('async function runReviewAsk(')[1].split('\nfunction ')[0]);
+    assert.ok(/\(el && el\.value\) \|\| reviewAsk\.draft/.test(fn),
+      'runReviewAsk still reads only the DOM node, so a re-render loses the question');
+  });
+
   test('every Settings screen is inside the reachability corpus (v9.83)', () => {
     // settingsFamily is a HAND-KEPT list, so a new settings screen can ship and
     // fall silently OUTSIDE the guard that stops controls vanishing -- which is

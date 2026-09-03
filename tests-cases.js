@@ -2162,6 +2162,50 @@ test('a photo scan cannot mark unreviewed emails as handled (v9.87)', () => {
     'a photo scan marked an unreviewed email as handled, permanently');
 });
 
+test('a half-typed question to Gordon survives a re-render (v9.91)', () => {
+  // THE BUG. render() replaces #main wholesale -- renderReview ends
+  // `m.innerHTML = html` -- so the textarea was rebuilt EMPTY and the question
+  // was gone. Anything that re-renders the review screen did it: toggling an
+  // entry, tagging a person, the save-failure banner appearing.
+  //
+  // The first version of this test used 'add band to the title of all these'
+  // as the fixture -- which is the textarea's own PLACEHOLDER. innerHTML
+  // matched the placeholder, so it passed with the mirror removed entirely.
+  // Hence both defences below: a string that appears nowhere else in the app,
+  // and a check that it landed INSIDE the textarea rather than merely somewhere
+  // on the page.
+  boot(GOOD);
+  pendingSource = 'Photo';
+  pendingEvents = [{ title:'Bake sale', date:dayAhead(3), selected:true, personIds:[] }];
+  const TYPED = 'zucchini rehearsal on the 14th';
+  reviewAsk = { busy:false, reply:'', preview:null, draft:'' };
+
+  const before = { innerHTML:'' };
+  renderReview(before);
+  assert.ok(!before.innerHTML.includes(TYPED),
+    'the fixture string is already on the page -- this test cannot fail');
+
+  reviewAsk.draft = TYPED;                       // what oninput does on each keystroke
+  const m = { innerHTML:'' };
+  renderReview(m);
+  const open = m.innerHTML.indexOf('<textarea id="reviewAskQ"');
+  assert.ok(open > -1, 'the Ask box is gone from the review screen');
+  const inside = m.innerHTML.slice(open, m.innerHTML.indexOf('</textarea>', open));
+  assert.ok(inside.includes('>' + TYPED),
+    'the re-rendered box came back empty -- the question was thrown away');
+});
+
+test('an empty box does not render a stray draft (v9.91)', () => {
+  boot(GOOD);
+  pendingEvents = [{ title:'Bake sale', date:dayAhead(3), selected:true, personIds:[] }];
+  reviewAsk = { busy:false, reply:'', preview:null, draft:'' };
+  const m = { innerHTML:'' };
+  renderReview(m);
+  const open = m.innerHTML.indexOf('<textarea id="reviewAskQ"');
+  const inside = m.innerHTML.slice(open, m.innerHTML.indexOf('</textarea>', open));
+  assert.ok(/>\s*$/.test(inside), 'the empty box is not empty: ' + JSON.stringify(inside.slice(-60)));
+});
+
 test('the "Skip all from this email" control only shows for a real email batch (v9.87)', () => {
   // The same leak, on screen: the review screen offered to skip a batch that was
   // not there, because it asked the parallel global rather than the rows.
