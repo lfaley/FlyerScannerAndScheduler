@@ -2206,6 +2206,243 @@ test('an empty box does not render a stray draft (v9.91)', () => {
   assert.ok(/>\s*$/.test(inside), 'the empty box is not empty: ' + JSON.stringify(inside.slice(-60)));
 });
 
+// ---------------------------------------------------------------------------
+// Reading the unreadable emails without being asked (v9.92).
+// Researched before it was written: see EMAIL-AUTOREAD-PLAN.md.
+// ---------------------------------------------------------------------------
+function autoFixture(opts){
+  boot(GOOD);
+  S.settings.aiProvider = 'local';
+  S.settings.aiFallback = true;
+  S.settings.apiKey = 'sk-ant-real';
+  S.aiLog = [];
+  view = { tab:'events', sub:'review', data:null };
+  pendingSource = 'Email';
+  pendingEvents = [{ title:'Bake sale', date:dayAhead(3), selected:true, personIds:[], msgId:'m1' }];
+  lastEmailProblems = [{ subject:'Field trip', reason:'no dates', msgId:'m1', retriable:false },
+                       { subject:'Picture day', reason:'no dates', msgId:'m2', retriable:false }];
+  emailReviews = {};
+  emailReviewBusy = false; emailAutoStop = null; emailAutoAt = 0;
+  gordonSignedInEmail = () => 'logan@example.com';
+  fetchMessage = async (id) => ({ from:'school@x.org', subject:'s-'+id,
+    attachments: (opts && opts.pdfFor === id) ? [{ name:'f.pdf', mediaType:'application/pdf', data:'x' }] : [] });
+  reviewOneEmail = async (payload, msgId) => {
+    // op:'email.review' because that is what reviewOneEmail's real callAI tags
+    // its entries with, and the detector filters on it.
+    if(opts && opts.paidFor === msgId) S.aiLog = (S.aiLog||[]).concat([{ op:'email.review', provider:'anthropic', ok:true }]);
+    else S.aiLog = (S.aiLog||[]).concat([{ op:'email.review', provider:'local', ok:true }]);
+    return { msgId, from:payload.from, gist:'gist-'+msgId, category:'fyi',
+             deadline:null, missedDate:false, suggestedAction:'' };
+  };
+}
+
+// ONE async test, not seven. This harness registers an async test's promise and
+// settles them all at the END (tests.js), so seven async tests would run
+// CONCURRENTLY and share emailReviews, S.aiLog, emailReviewBusy and
+// emailAutoStop. The first draft of this file did exactly that and produced 16
+// log entries for two emails. The trap is written up in DELETE-HONESTY-PLAN.md
+// section 15 -- found in v9.88, and walked into again here. Sequential awaits
+// inside one test are the fix; every assertion names its own scenario.
+test('the automatic email pass, end to end (v9.92)', async () => {
+
+  // --- it reads them without being asked ---------------------------------
+  autoFixture();
+  await reviewEmailTrouble({ auto:true });
+  assert.deepStrictEqual(Object.keys(emailReviews).sort(), ['m1','m2'],
+    'reads-unasked: the emails were not read');
+  assert.strictEqual(emailAutoStop, null, 'reads-unasked: it stopped with no reason to');
+
+  // --- it never alerts and never hijacks the screen ------------------------
+  // Both are fine when the user TAPPED. Neither is acceptable unasked: render()
+  // resets scroll and moves focus on every screen change.
+  autoFixture();
+  {
+    const realAlert = alert, realSub = sub;
+    let alerted = 0; const subs = [];
+    alert = () => { alerted++; };
+    sub = (n) => { subs.push(n); };
+    try { await reviewEmailTrouble({ auto:true }); }
+    finally { alert = realAlert; sub = realSub; }
+    assert.strictEqual(alerted, 0, 'quiet: the automatic pass opened a modal');
+    assert.deepStrictEqual(subs.filter(n => n === 'busy'), [],
+      'quiet: the automatic pass took over the screen: ' + JSON.stringify(subs));
+  }
+
+  // --- an unconfigured automatic pass is silent; a tapped one explains -----
+  // autoReviewEmailTrouble() gates on aiSetupError() so production never
+  // reaches this branch with auto:true -- but the branch guards the FUNCTION's
+  // contract, not one caller's habits, and a direct call is how it gets tested.
+  autoFixture();
+  S.settings.aiEnabled = false;
+  {
+    const realAlert = alert;
+    let alerted = null;
+    alert = (m) => { alerted = m; };
+    try { await reviewEmailTrouble({ auto:true }); }
+    finally { alert = realAlert; }
+    assert.strictEqual(alerted, null, 'unconfigured-auto: it opened a modal nobody asked for');
+    assert.deepStrictEqual(emailReviews, {}, 'unconfigured-auto: it read something anyway');
+  }
+  autoFixture();
+  S.settings.aiEnabled = false;
+  {
+    const realAlert = alert;
+    let alerted = null;
+    alert = (m) => { alerted = m; };
+    try { await reviewEmailTrouble(); }
+    finally { alert = realAlert; }
+    assert.ok(alerted && /Turn AI back on/.test(alerted),
+      'unconfigured-tapped: a tap now fails silently instead of saying why: ' + JSON.stringify(alerted));
+  }
+
+  // --- but a TAPPED pass still shows it is working -------------------------
+  autoFixture();
+  {
+    const realSub = sub; const subs = [];
+    sub = (n) => { subs.push(n); };
+    try { await reviewEmailTrouble(); }
+    finally { sub = realSub; }
+    assert.ok(subs.includes('busy'), 'tapped: a tapped review no longer shows progress');
+  }
+
+  // --- a second trigger while one is running does nothing ------------------
+  // Until v9.92 re-entry was stopped only by the button's disabled attribute,
+  // which a programmatic caller walks straight past.
+  autoFixture();
+  {
+    let calls = 0;
+    const realReview = reviewOneEmail;
+    reviewOneEmail = async (p, id) => { calls++; return realReview(p, id); };
+    const first = reviewEmailTrouble({ auto:true });
+    await reviewEmailTrouble({ auto:true });        // must be a no-op
+    await first;
+    reviewOneEmail = realReview;
+    assert.strictEqual(calls, 2,
+      're-entry: the second pass re-read the same emails (' + calls + ' calls for 2 emails)');
+  }
+
+  // --- it stops at a PDF before spending anything on it --------------------
+  // blocksToOpenAI throws UNSUPPORTED_BLOCK:document on the local model and
+  // callAI hands it to Anthropic. Knowable after fetchMessage, before the call.
+  autoFixture({ pdfFor:'m2' });
+  {
+    let read = 0;
+    const realReview = reviewOneEmail;
+    reviewOneEmail = async (p, id) => { read++; return realReview(p, id); };
+    await reviewEmailTrouble({ auto:true });
+    reviewOneEmail = realReview;
+    assert.strictEqual(emailAutoStop, 'pdf', 'pdf: it did not stop at the PDF');
+    assert.strictEqual(read, 1, 'pdf: it paid for the PDF email anyway');
+    assert.ok(emailReviews['m1'], 'pdf: it threw away the one it had already read');
+  }
+
+  // --- it stops the moment a call falls to paid Anthropic ------------------
+  autoFixture({ paidFor:'m1' });
+  await reviewEmailTrouble({ auto:true });
+  assert.strictEqual(emailAutoStop, 'paid', 'paid: it kept going after a paid call');
+  assert.ok(emailReviews['m1'], 'paid: it discarded the brief it had already paid for');
+  assert.ok(!emailReviews['m2'], 'paid: it read another one after the paid fallback');
+
+  // --- and it catches the fallback whose NEWEST log entry says "local" -----
+  // The trap: one callAI appends TWO entries, and on a fallback the last is the
+  // local failure carrying fellBackTo, not the Anthropic success.
+  autoFixture();
+  reviewOneEmail = async (payload, msgId) => {
+    S.aiLog = (S.aiLog||[]).concat([
+      { op:'email.review', provider:'anthropic', ok:true, fellBackTo:null },
+      { op:'email.review', provider:'local', ok:false, fellBackTo:'anthropic' }
+    ]);
+    return { msgId, from:payload.from, gist:'g', category:'fyi', deadline:null,
+             missedDate:false, suggestedAction:'' };
+  };
+  await reviewEmailTrouble({ auto:true });
+  assert.strictEqual(emailAutoStop, 'paid',
+    'newest-entry: the fallback was missed because the newest entry says provider:local');
+
+  // --- a paid attempt that was never billed says so ------------------------
+  // A fallback with no API key saved logs provider:'anthropic', ok:false and
+  // costs nothing. Stopping is still right; claiming it used the key is not.
+  autoFixture();
+  reviewOneEmail = async (payload, msgId) => {
+    S.aiLog = (S.aiLog||[]).concat([{ op:'email.review', provider:'anthropic', ok:false }]);
+    return { msgId, from:payload.from, gist:'g', category:'fyi', deadline:null,
+             missedDate:false, suggestedAction:'' };
+  };
+  await reviewEmailTrouble({ auto:true });
+  assert.strictEqual(emailAutoStop, 'error',
+    'unbilled: a failed Anthropic attempt was reported as having used the key');
+  {
+    const m = { innerHTML:'' };
+    renderReview(m);
+    assert.ok(!/uses your key/.test(m.innerHTML),
+      'unbilled: the card claims the key was used when nothing was billed');
+  }
+
+  // --- the gates, and the control that proves they can open ----------------
+  // These were five standalone tests. They are scenarios now because every one
+  // of them calls autoFixture(), which resets S.aiLog, emailReviews and the
+  // stubs -- and a SYNCHRONOUS test does that while this async one is parked on
+  // an await, rewriting the state mid-pass. Sharing mutable module state means
+  // sharing one test.
+  autoFixture();
+  S.settings.aiProvider = 'anthropic';
+  autoReviewEmailTrouble();
+  assert.strictEqual(emailReviewBusy, false, 'gate-anthropic: it started a paid pass unasked');
+
+  autoFixture();
+  gordonSignedInEmail = () => null;
+  autoReviewEmailTrouble();
+  assert.strictEqual(emailReviewBusy, false,
+    'gate-signedout: it started while every call would fall to Anthropic');
+
+  autoFixture();
+  S.settings.aiEnabled = false;
+  autoReviewEmailTrouble();
+  assert.strictEqual(emailReviewBusy, false, 'gate-off: the global off switch did not stop it');
+
+  // The positive control. Without it the three gates above pass for a fixture
+  // that could never have started in the first place.
+  autoFixture();
+  {
+    const running = autoReviewEmailTrouble();
+    assert.strictEqual(emailReviewBusy, true,
+      'gate-control: it did not start even on local and signed in');
+    await running;
+    assert.deepStrictEqual(Object.keys(emailReviews).sort(), ['m1','m2'],
+      'gate-control: it started but read nothing');
+  }
+
+  // --- the card stops claiming they could not be read ----------------------
+  autoFixture();
+  {
+    const before = { innerHTML:'' };
+    renderReview(before);
+    assert.ok(/couldn’t be read/.test(before.innerHTML),
+      'copy: fixture wrong, the unread heading is missing');
+    emailReviews = { m1:{ msgId:'m1', from:'a', gist:'g', category:'fyi' },
+                     m2:{ msgId:'m2', from:'b', gist:'g', category:'fyi' } };
+    const after = { innerHTML:'' };
+    renderReview(after);
+    assert.ok(!/couldn’t be read/.test(after.innerHTML),
+      'copy: it still claims they could not be read after reading them');
+    assert.ok(/here’s what they say/.test(after.innerHTML),
+      'copy: the heading does not say what it now has');
+  }
+
+  // --- a stopped pass says why, and leaves the way to carry on -------------
+  autoFixture();
+  {
+    emailReviews = { m1:{ msgId:'m1', from:'a', gist:'g', category:'fyi' } };
+    emailAutoStop = 'paid';
+    const m = { innerHTML:'' };
+    renderReview(m);
+    assert.ok(/uses your key/.test(m.innerHTML),
+      'stopped: it went quiet instead of saying why it stopped');
+    assert.ok(/reviewEmailTrouble\(\)/.test(m.innerHTML),
+      'stopped: the manual way to carry on is gone -- the recovery path must survive');
+  }
+});
+
 test('the "Skip all from this email" control only shows for a real email batch (v9.87)', () => {
   // The same leak, on screen: the review screen offered to skip a batch that was
   // not there, because it asked the parallel global rather than the rows.

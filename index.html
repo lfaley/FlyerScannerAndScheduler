@@ -1315,6 +1315,14 @@ const AI_ACTIONS = [
     fallback: 'Every one of these is a tap on the screen it belongs to.',
   },
   {
+    id: 'emailbrief',
+    label: 'Read emails that would not import',
+    risk: RISK.READ,
+    can: 'When an email arrives that no dates could be pulled out of, reads it — body text and any photo attachment — and says who it is from, what it is about in a line, any date it names, and what to do about it. This one starts on its own, without being asked, so the answer is already there when you open the review screen.',
+    cannot: 'It reads and reports; it saves nothing and changes nothing until you tap Add as event. It only ever reads the emails your watcher already fetched and that failed to import — never the rest of your mail. It runs by itself only while your own local model is answering: the moment reading one would fall to Anthropic and cost you money — a PDF attachment, or Gordon being offline — it stops and waits for you to tap.',
+    fallback: 'Open the email in your mail app, or add the event by hand.',
+  },
+  {
     id: 'clashes',
     label: 'Clash and deadline warnings',
     risk: RISK.DERIVE,
@@ -4705,7 +4713,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.91';
+const APP_VERSION = 'v9.92';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -7269,6 +7277,10 @@ let lastEmailProblems = [];
 // for reference, or trash — instead of a bare "no dates to import".
 let emailReviews = {};
 let emailReviewBusy = false;
+// Why an automatic pass stopped early, so the card can say so instead of just
+// going quiet: null | 'paid' | 'pdf' | 'error'. Set only by the auto pass.
+let emailAutoStop = null;
+let emailAutoAt = 0;          // how many it has read so far, for the heading
 
 // --- inlined from js/errorReport.js (drift-checked; edit the source file, then re-inline) ---
 // errorReport.js — remote error reporting, the PURE half (v9.24).
@@ -8044,6 +8056,7 @@ async function openEmailReview(fresh){
   S.settings.pendingEmailCount = 0;
   save();
   sub('review');
+  autoReviewEmailTrouble();
 }
 
 // The "couldn't be read" box is a notification the user must be able to clear.
@@ -8095,9 +8108,27 @@ function addEventFromEmail(msgId){
 // actually was, and whether it's worth your time." Fields follow standard EA triage
 // (sender, one-line gist, a Do/Delegate/Defer/Delete-style disposition, any deadline,
 // whether a date was likely MISSED, and a recommended next step). One batched AI call.
-async function reviewEmailTrouble(){
+/**
+ * Read the emails that could not be imported, and say what they are.
+ *
+ * `opts.auto` is the unprompted pass. It differs from the tapped one in every
+ * way that matters when nobody asked for it:
+ *   - it never alert()s, because a modal on screen entry is an ambush;
+ *   - it never sub('busy')s, because render() resets scroll and moves focus on
+ *     a screen change, and doing that N times to a user who is reading their
+ *     extracted events is unacceptable;
+ *   - it stops the moment a call would cost money (see autoPaidStop).
+ *
+ * The busy flag is CHECKED here now, not merely set. Until v9.92 re-entry was
+ * prevented only by the button's `disabled` attribute -- which a programmatic
+ * caller walks straight past, and which never covered the double-tap on
+ * "Review" either.
+ */
+async function reviewEmailTrouble(opts){
+  const auto = !!(opts && opts.auto);
+  if(emailReviewBusy) return;
   const setupErr = aiSetupError();
-  if(setupErr){ alert(setupErr); return; }
+  if(setupErr){ if(!auto) alert(setupErr); return; }
   // One entry per distinct email (a single email can log several problems).
   const seen = new Set();
   const items = [];
@@ -8106,8 +8137,10 @@ async function reviewEmailTrouble(){
     seen.add(p.msgId);
     items.push(p);
   }
-  if(!items.length){ toast('Nothing to review'); return; }
-  emailReviewBusy = true; render();
+  if(!items.length){ if(!auto) toast('Nothing to review'); return; }
+  emailReviewBusy = true;
+  if(auto){ emailAutoStop = null; emailAutoAt = 0; }
+  render();
   const map = Object.assign({}, emailReviews); // keep any already-reviewed ("Review the rest")
   let done = 0;
   try{
@@ -8116,12 +8149,54 @@ async function reviewEmailTrouble(){
     // blocks the date-extractor uses. Batching couldn't carry images cleanly.
     for(let i=0;i<items.length;i++){
       if(map[items[i].msgId]) continue; // already reviewed
-      sub('busy', { msg:'Gordon is reviewing email ' + (i+1) + ' of ' + items.length + '…',
-                    hint: items[i].subject || '' });
+      if(auto){
+        emailAutoAt = done;
+        if(view.sub === 'review') render();     // the card shows its own progress
+      } else {
+        sub('busy', { msg:'Gordon is reviewing email ' + (i+1) + ' of ' + items.length + '…',
+                      hint: items[i].subject || '' });
+      }
       let brief;
       try{
         const payload = await fetchMessage(items[i].msgId);
+        // A PDF attachment is the one paid fallback that is knowable BEFORE
+        // spending anything: blocksToOpenAI throws UNSUPPORTED_BLOCK:document on
+        // the local model and callAI hands it to Anthropic. Stop here, having
+        // spent nothing on it, and let the user decide.
+        if(auto && (payload.attachments || []).some(a => a && a.mediaType === 'application/pdf')){
+          emailAutoStop = 'pdf';
+          break;
+        }
+        // Everything else is only knowable afterwards. Mark the log, make the
+        // call, then look at EVERY entry the call appended -- one callAI can
+        // append two, and on a fallback the newest is the local failure, not the
+        // Anthropic success. Checking only the last entry misses every fallback.
+        const mark = (S.aiLog || []).length;
         brief = await reviewOneEmail(payload, items[i].msgId);
+        // Filtered by op, not just by position. This pass does not block the
+        // screen -- that is the point of it -- so the user can ask Gordon
+        // something in the box below while it runs, and THAT call's log entries
+        // would otherwise be read as this one falling back to Anthropic and stop
+        // the pass for no reason. reviewOneEmail tags its calls 'email.review'.
+        const touched = (S.aiLog || []).slice(mark)
+          .filter(e => e && e.op === 'email.review' && e.provider === 'anthropic');
+        // Deliberately NOT `|| e.fellBackTo`: every path through callClaude
+        // records a provider:'anthropic' entry first -- the no-key throw, the
+        // fetch throw, the non-OK response and the success -- so fellBackTo can
+        // never be set without one of these already present. A condition that
+        // cannot change the outcome is decoration, not a safety net.
+        //
+        // `ok` decides the WORDING, and it is not cosmetic: a fallback with no
+        // API key saved logs provider:'anthropic', ok:false and bills nothing.
+        // Saying "this used your key" there would be a lie.
+        if(auto && touched.length){
+          emailAutoStop = touched.some(e => e.ok) ? 'paid' : 'error';
+          // Keep this brief -- it is already paid for, and throwing it away
+          // would waste the call as well as the money -- but go no further.
+          map[items[i].msgId] = brief;
+          done++;
+          break;
+        }
         brief.subject = payload.subject || items[i].subject || ''; // for "Add as event" prefill
       }catch(err){
         brief = { msgId: items[i].msgId, from: items[i].from || 'unknown', subject: items[i].subject || '',
@@ -8131,17 +8206,59 @@ async function reviewEmailTrouble(){
       }
       map[items[i].msgId] = brief;
       done++;
+      if(auto){
+        emailReviews = map;                      // progressive: the card fills in
+        emailAutoAt = done;
+        if(view.sub === 'review') render();
+      }
     }
     emailReviews = map;
-    toast(done ? ('Gordon reviewed ' + done + ' email' + (done===1?'':'s')) : 'Already reviewed');
+    if(!auto) toast(done ? ('Gordon reviewed ' + done + ' email' + (done===1?'':'s')) : 'Already reviewed');
   }catch(err){
     emailReviews = map; // keep whatever completed
     logProblem('Gordon', 'Email review failed: ' + (err && err.message || 'unknown'), aiModelName());
-    toast('Could not review those: ' + (err && err.message || 'unknown'));
+    if(auto) emailAutoStop = 'error'; else toast('Could not review those: ' + (err && err.message || 'unknown'));
   }finally{
     emailReviewBusy = false;
-    sub('review');
+    // An automatic pass never MOVES the user. sub('review') would be a screen
+    // change even from the review screen itself if they had navigated away.
+    if(auto){ if(view.sub === 'review') render(); }
+    else sub('review');
   }
+}
+
+/**
+ * Start the unprompted pass, if and only if it is free.
+ *
+ * Logan: "I'll always want to know what it says." The honest reading of that is
+ * "read them without me asking" -- not "spend my Anthropic balance without me
+ * asking". So this runs only in the one configuration where a paid call is
+ * impossible at the outset: the local model selected AND signed in. Every other
+ * state leaves the card's button exactly where it was.
+ *
+ * Deliberately NOT called from any render function: renderReview is invoked
+ * directly by tests, and a fire-and-forget async call started there would settle
+ * after the test that triggered it and mutate state under later ones.
+ */
+function autoReviewEmailTrouble(){
+  if(emailReviewBusy) return;
+  // aiSetupError() already returns a message when AI is switched off -- it is
+  // its own first line -- so a separate !aiEnabled() check could never change
+  // the outcome. Proved by reverting it: no test moved.
+  if(aiSetupError()) return;
+  if(aiProvider() !== 'local' || !gordonSignedInEmail()) return;
+  if(!lastEmailProblems.some(p => p && p.msgId && !emailReviews[p.msgId])) return;
+  // Fire and forget: no caller awaits this, because awaiting would hold up the
+  // screen it is decorating. reviewEmailTrouble has its own try/catch/finally so
+  // it cannot reject -- the catch is here because an unhandled rejection is
+  // invisible on a phone.
+  //
+  // The promise is RETURNED even though nothing in the app uses it: a
+  // fire-and-forget that hands back its promise is testable without changing
+  // what it does, and a test that cannot await this leaves a pass running under
+  // every test after it.
+  return Promise.resolve(reviewEmailTrouble({ auto:true }))
+    .catch(e => { /* already logged inside; nothing further to do or say here */ });
 }
 
 // Build ONE email's EA brief from its full content — body text plus any flyer image
@@ -8251,6 +8368,7 @@ async function retryEmailTrouble(){
     toast('Could not retry: ' + (err && err.message || 'unknown'));
   }
   sub('review');
+  autoReviewEmailTrouble();
 }
 
 // ---------- Share selected events ----------
@@ -9089,9 +9207,25 @@ function renderReview(m){
     html += `<div class="card" style="border-left:5px solid var(--amber)">
       <div class="row">
         <div class="grow" style="font-weight:800;font-size:var(--t-sm)">
-          ${ico('alert')}${probs.length} email${probs.length===1?'':'s'} couldn’t be read</div>
+          ${(() => {
+            // The heading follows what is actually true right now. "couldn't be
+            // read" stops being true the moment Gordon has read them, which is
+            // the whole point of reading them without being asked.
+            const nAll = probs.length;
+            const nRead = probs.filter(p => p && p.msgId && emailReviews[p.msgId]).length;
+            if(emailReviewBusy) return `${ico('sparkles')}${esc(aiName())} is reading ${nAll} email${nAll===1?'':'s'}…`;
+            if(nRead >= nAll && nAll) return `${ico('mail')}${nAll} email${nAll===1?'':'s'} that didn’t import — here’s what they say`;
+            if(nRead) return `${ico('mail')}${nRead} of ${nAll} read — here’s what they say`;
+            return `${ico('alert')}${nAll} email${nAll===1?'':'s'} couldn’t be read`;
+          })()}</div>
         <button class="linkbtn" aria-label="Dismiss" onclick="dismissEmailTrouble()">${ico('x')}</button>
       </div>
+      ${emailAutoStop ? `<div class="meta" style="font-size:var(--t-cap);margin-top:4px;color:var(--amber)">${
+          emailAutoStop === 'pdf'
+            ? `${esc(aiName())} stopped at a PDF — your local model can’t read those, and Anthropic would. Tap below to read the rest with your key.`
+          : emailAutoStop === 'paid'
+            ? `${esc(aiName())} couldn’t take the rest — reading them fell to Anthropic, which uses your key. Tap below to carry on.`
+            : `${esc(aiName())} stopped partway. Tap below to try the rest.`}</div>` : ''}
       ${(() => {
         // Distinct emails (one email can log several problems). If Gordon has reviewed
         // an email, show his brief; otherwise the plain subject + reason.

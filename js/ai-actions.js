@@ -76,6 +76,14 @@ export const AI_ACTIONS = [
     fallback: 'Every one of these is a tap on the screen it belongs to.',
   },
   {
+    id: 'emailbrief',
+    label: 'Read emails that would not import',
+    risk: RISK.READ,
+    can: 'When an email arrives that no dates could be pulled out of, reads it — body text and any photo attachment — and says who it is from, what it is about in a line, any date it names, and what to do about it. This one starts on its own, without being asked, so the answer is already there when you open the review screen.',
+    cannot: 'It reads and reports; it saves nothing and changes nothing until you tap Add as event. It only ever reads the emails your watcher already fetched and that failed to import — never the rest of your mail. It runs by itself only while your own local model is answering: the moment reading one would fall to Anthropic and cost you money — a PDF attachment, or Gordon being offline — it stops and waits for you to tap.',
+    fallback: 'Open the email in your mail app, or add the event by hand.',
+  },
+  {
     id: 'clashes',
     label: 'Clash and deadline warnings',
     risk: RISK.DERIVE,

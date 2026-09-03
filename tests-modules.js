@@ -1684,6 +1684,39 @@ module.exports = async function runModuleTests(test){
       'runReviewAsk still reads only the DOM node, so a re-render loses the question');
   });
 
+  test('the automatic email pass is never triggered from a render function (v9.92)', () => {
+    // renderReview is called DIRECTLY by tests, and a fire-and-forget async call
+    // started from a render would settle after the test that triggered it and
+    // mutate emailReviews / S.aiLog / emailReviewBusy under every later one.
+    // It also has no business firing on every repaint. The two legitimate
+    // triggers are openEmailReview and the end of retryEmailTrouble.
+    const code = codeOf(script);
+    const renders = [...code.matchAll(/function (render[A-Z]\w*)\(/g)].map(m => m[1]);
+    assert.ok(renders.length > 20, 'expected many render functions, found ' + renders.length);
+    const offenders = renders.filter(fn => {
+      const body = (code.split('function ' + fn + '(')[1] || '').split('\nfunction ')[0];
+      return body.includes('autoReviewEmailTrouble(');
+    });
+    assert.deepStrictEqual(offenders, [],
+      'render functions that start the automatic pass: ' + offenders.join(', '));
+    assert.ok(/sub\('review'\);\s*\n\s*autoReviewEmailTrouble\(\);/.test(code),
+      'nothing triggers the automatic pass any more');
+  });
+
+  test('the automatic email pass is declared to the user (v9.92)', () => {
+    // CLAUDE.md: js/ai-actions.js "exists so the promise a user reads cannot
+    // drift from what the code does, and it HAS drifted before." A capability
+    // that starts on its own with no entry here is that drift, larger.
+    const entry = reg.aiAction('emailbrief');
+    assert.ok(entry, 'the automatic email reading is not in the capability list at all');
+    assert.strictEqual(entry.risk, reg.RISK.READ,
+      'it reads and reports; any other class would overstate what it does');
+    assert.ok(/on its own|without being asked|by itself/i.test(entry.can + ' ' + entry.cannot),
+      'the entry does not tell the user it starts by itself');
+    assert.ok(/Anthropic|cost|key/i.test(entry.cannot),
+      'the entry does not say when it stops and hands back to you');
+  });
+
   test('every Settings screen is inside the reachability corpus (v9.83)', () => {
     // settingsFamily is a HAND-KEPT list, so a new settings screen can ship and
     // fall silently OUTSIDE the guard that stops controls vanishing -- which is
