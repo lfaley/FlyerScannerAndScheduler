@@ -5895,6 +5895,213 @@ test('A7: an absent word survives a question and is still reported (v9.98)', () 
   return p.then(() => {});
 });
 
+// ---------------------------------------------------------------------------
+// Delete-honesty Phases 4 and 5 (v9.99). Four silent or one-way changes get a
+// count and a route back; redemptions get one that outlives the toast.
+// DELETE-HONESTY-PLAN sections 5.2, 5.4 and 5.5.
+// ---------------------------------------------------------------------------
+function twoTagged(){
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false },
+            { id:'k2', name:'Milo',   color:'#B45309', deleted:false }];
+  S.events = [
+    { id:'t1', title:'Swim meet', date:'2026-12-01', kind:'event', deleted:false,
+      personIds:['k1','k2'], kidId:'k1' },
+    { id:'t2', title:'Bake sale', date:'2026-12-02', kind:'event', deleted:false,
+      personIds:[], kidId:null },
+  ];
+  selectedEvents = new Set(['t1','t2']);
+  selectMode = true;
+}
+
+// toast() writes into a DOM node the harness cannot read back, so the message
+// and its Undo are captured by standing in front of it. Always restored.
+function withToast(fn){
+  const real = toast;
+  const seen = [];
+  toast = (msg, action) => { seen.push({ msg:String(msg), action: action || null }); };
+  try { fn(); } finally { toast = real; }
+  return seen;
+}
+
+test('P4: bulkTag can be undone, and a two-person tag comes back whole (v9.99)', () => {
+  // MEASURED before: bulkTag overwrote personIds with a one-element array and
+  // offered nothing. The sheet warns that tagging replaces -- so the behaviour
+  // is intended and only the way back was missing (plan section 5.4).
+  twoTagged();
+  const seen = withToast(() => bulkTag('k2'));
+  assert.deepStrictEqual(S.events.find(e => e.id === 't1').personIds, ['k2'], 'the tag was not applied');
+  assert.ok(seen.length && seen[0].action, 'no Undo was offered: ' + JSON.stringify(seen));
+  withToast(() => seen[0].action.fn());
+  const t1 = S.events.find(e => e.id === 't1');
+  assert.deepStrictEqual(t1.personIds, ['k1','k2'], 'the second person did not come back');
+  assert.strictEqual(t1.kidId, 'k1', 'kidId was not restored');
+  // A row that never carried personIds must come back without the key, not
+  // with an empty array -- the same rule unmarkDeleted follows for deletedAt.
+  const t2 = S.events.find(e => e.id === 't2');
+  assert.deepStrictEqual(t2.personIds, [], 'the untagged row was changed by the undo');
+});
+
+test('P4: bulkDelete offers an Undo and puts every row back (v9.99)', () => {
+  twoTagged();
+  const seen = withToast(() => bulkDelete());
+  assert.strictEqual(S.events.filter(e => e.deleted).length, 2, 'they were not deleted');
+  assert.ok(seen.length && seen[0].action, 'no Undo was offered');
+  assert.ok(/Deleted 2 event/.test(seen[0].msg), 'the count is wrong: ' + seen[0].msg);
+  withToast(() => seen[0].action.fn());
+  assert.strictEqual(S.events.filter(e => e.deleted).length, 0, 'they did not come back');
+  assert.ok(S.events.every(e => !('deletedAt' in e)), 'a restored row kept its deletedAt');
+});
+
+test('P4: clearChecked says what it cleared and can put it back (v9.99)', () => {
+  // MEASURED before: markDeleted in a loop, save, render -- no count, no toast,
+  // no undo. A finished shopping list simply vanished.
+  boot(GOOD);
+  S.lists = [{ id:'L1', name:'Groceries', deleted:false }];
+  S.listItems = [
+    { id:'c1', listId:'L1', text:'Milk',  checked:true,  deleted:false },
+    { id:'c2', listId:'L1', text:'Bread', checked:true,  deleted:false },
+    { id:'c3', listId:'L1', text:'Eggs',  checked:false, deleted:false },
+  ];
+  const seen = withToast(() => clearChecked('L1'));
+  assert.ok(/Cleared 2 ticked items/.test(seen[0].msg), 'wrong message: ' + seen[0].msg);
+  assert.deepStrictEqual(S.listItems.filter(i => i.deleted).map(i => i.id), ['c1','c2'],
+    'it cleared the wrong rows');
+  withToast(() => seen[0].action.fn());
+  assert.strictEqual(S.listItems.filter(i => i.deleted).length, 0, 'they did not come back');
+  // Nothing ticked is not nothing to say.
+  S.listItems.forEach(i => { i.checked = false; });
+  const none = withToast(() => clearChecked('L1'));
+  assert.ok(/Nothing was ticked/.test(none[0].msg), 'a no-op tap said nothing: ' + JSON.stringify(none));
+  assert.ok(!none[0].action, 'an Undo was offered for a tap that changed nothing');
+});
+
+test('P4: removing an event from its sheet says so, and can be undone (v9.99)', () => {
+  // MEASURED before: markDeleted + save + render, and nothing else. It was the
+  // one delete in the app that produced no toast at all -- three quarters of
+  // softDelete, open-coded, with the useful quarter missing (plan section 5.5).
+  boot(GOOD);
+  S.events = [{ id:'z1', title:'Swim meet', date:'2026-12-01', kind:'event', deleted:false }];
+  const realSheet = showSheet;
+  let buttons = [];
+  showSheet = (t, sub, btns) => { buttons = btns || []; };
+  try { eventActions('z1'); } finally { showSheet = realSheet; }
+  const remove = buttons.find(b => /Remove event/.test(b.label || ''));
+  assert.ok(remove, 'the sheet has no Remove control: ' + JSON.stringify(buttons.map(b => b.label)));
+  // box.confirm always answers yes, which is the path being tested; the confirm
+  // itself was there before v9.99 and stays.
+  const seen = withToast(() => remove.fn());
+  assert.strictEqual(S.events.find(e => e.id === 'z1').deleted, true, 'it did not delete');
+  assert.ok(seen.length, 'it deleted an event and said nothing');
+  assert.ok(/Deleted "Swim meet"/.test(seen[0].msg), 'wrong message: ' + seen[0].msg);
+  assert.ok(seen[0].action, 'no Undo was offered');
+  withToast(() => seen[0].action.fn());
+  const back = S.events.find(e => e.id === 'z1');
+  assert.strictEqual(back.deleted, false, 'the undo did not restore it');
+  assert.ok(!('deletedAt' in back), 'the restored row kept its deletedAt');
+});
+
+test('P5: a redemption can be undone from Star History for a day (v9.99)', () => {
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false }];
+  S.rewards = [{ id:'w1', title:'Movie night', cost:10, deleted:false }];
+  const now = Date.now();
+  S.redemptions = [
+    { id:'r1', rewardId:'w1', kidId:'k1', stars:10, date: todayISO(),
+      at: new Date(now - 2 * 3600 * 1000).toISOString() },
+    { id:'r2', rewardId:'w1', kidId:'k1', stars:10, date: todayISO(),
+      at: new Date(now - 30 * 3600 * 1000).toISOString() },
+  ];
+  S.completions = [];
+  // Two hours ago is inside the window; thirty is not -- and the DATE is the
+  // same for both, which is exactly why `at` had to be added.
+  assert.strictEqual(canUndoRedemption(S.redemptions[0]), true, 'a two-hour-old redemption is not undoable');
+  assert.strictEqual(canUndoRedemption(S.redemptions[1]), false, 'a thirty-hour-old redemption is still undoable');
+  assert.strictEqual(starBalances()['k1'], -20, 'the fixture is not what this test thinks it is');
+  const seen = withToast(() => undoRedemption('r1'));
+  assert.deepStrictEqual(S.redemptions.map(r => r.id), ['r2'], 'the wrong row was removed');
+  assert.ok(/Refunded 10/.test(seen[0].msg), 'wrong message: ' + seen[0].msg);
+  assert.strictEqual(starBalances()['k1'], -10, 'the stars did not come back into the balance');
+  // ...and the refund is itself undoable.
+  withToast(() => seen[0].action.fn());
+  assert.deepStrictEqual(S.redemptions.map(r => r.id).sort(), ['r1','r2'], 'the refund could not be reversed');
+});
+
+test('P5: Star History shows the Undo only where it is honest, and names it (v9.99)', () => {
+  // The a11y audit does NOT cover this: it checks that a control HAS an
+  // accessible name, and a bare "Undo" is a name -- measured, by stripping the
+  // aria-label and watching it stay green. A row of identical "Undo" buttons is
+  // exactly what a screen reader cannot work with, so the label is asserted here.
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false }];
+  S.rewards = [{ id:'w1', title:'Movie night', cost:10, deleted:false }];
+  S.completions = [{ id:'x1', choreId:'c1', kidId:'k1', date: todayISO(), stars:5 }];
+  S.redemptions = [
+    { id:'fresh', rewardId:'w1', kidId:'k1', stars:10, date: todayISO(),
+      at: new Date(Date.now() - 3600 * 1000).toISOString() },
+    { id:'stale', rewardId:'w1', kidId:'k1', stars:10, date:'2020-01-01',
+      at:'2020-01-01T10:00:00.000Z' },
+  ];
+  ledgerKid = null;
+  const m = { innerHTML:'' };
+  renderLedger(m);
+  const html = m.innerHTML;
+  assert.ok(/undoRedemption\('fresh'\)/.test(html), 'the recent redemption has no Undo');
+  assert.ok(!/undoRedemption\('stale'\)/.test(html),
+    'a redemption from 2020 is offering an Undo it will refuse');
+  assert.ok(/aria-label="Undo redeeming Movie night for Olivia"/.test(html),
+    'the Undo does not say what it undoes: ' + (html.match(/aria-label="[^"]*"/g) || []).join(' | '));
+  // A chore completion is not a redemption and must not grow a button.
+  assert.strictEqual((html.match(/undoRedemption\(/g) || []).length, 1,
+    'something other than the one undoable redemption got an Undo');
+});
+
+test('P5: an expired redemption is refused out loud, not silently (v9.99)', () => {
+  // The screen can be open across the boundary, so this branch is reachable by
+  // a real tap. Doing nothing looks like a broken button; doing it anyway
+  // breaks the promise the greyed-out row makes.
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false }];
+  S.rewards = [{ id:'w1', title:'Movie night', cost:10, deleted:false }];
+  S.redemptions = [{ id:'r9', rewardId:'w1', kidId:'k1', stars:10, date:'2020-01-01',
+    at:'2020-01-01T10:00:00.000Z' }];
+  const seen = withToast(() => undoRedemption('r9'));
+  assert.deepStrictEqual(S.redemptions.map(r => r.id), ['r9'], 'an expired redemption was undone anyway');
+  assert.ok(/more than a day ago/.test(seen[0].msg), 'it said nothing useful: ' + JSON.stringify(seen));
+});
+
+test('P5: a redemption written before v9.99 falls back to "redeemed today" (v9.99)', () => {
+  // Old rows have no `at`. A 24-hour claim cannot be made from a date, so the
+  // fallback is the narrower thing the stored data can actually support.
+  boot(GOOD);
+  assert.strictEqual(canUndoRedemption({ id:'o1', stars:5, kidId:'k1', date: todayISO() }), true,
+    'an old row redeemed today is not undoable');
+  assert.strictEqual(canUndoRedemption({ id:'o2', stars:5, kidId:'k1', date:'2020-01-01' }), false,
+    'an old row from 2020 is undoable');
+  assert.strictEqual(canUndoRedemption({ id:'o3', stars:5, kidId:'k1' }), false,
+    'a row with no date at all is undoable');
+  // A junk timestamp must not read as "now"...
+  assert.strictEqual(canUndoRedemption({ id:'o4', stars:5, date:'2020-01-01', at:'not a date' }), false,
+    'an unparseable timestamp fell through to undoable');
+  // ...and must not be trusted either. MEASURED: the line above passes with the
+  // isNaN guard removed, because (Date.now() - NaN) < X is false anyway -- so it
+  // proves nothing about the guard. What the guard actually decides is whether
+  // a row whose `at` is junk gets READ AS UNTIMESTAMPED and falls back to the
+  // date, which is the only case where the two differ.
+  assert.strictEqual(canUndoRedemption({ id:'o5', stars:5, date: todayISO(), at:'not a date' }), true,
+    'a junk timestamp threw away a usable date instead of falling back to it');
+});
+
+test('P5: redeem stamps the row with a real timestamp (v9.99)', () => {
+  // Without this every NEW redemption would take the date-only fallback, and
+  // the 24-hour window would silently be "until midnight".
+  const code = String(redeem);
+  assert.ok(/at:\s*new Date\(\)\.toISOString\(\)/.test(code),
+    'redeem no longer stamps `at`, so the ledger undo cannot measure how long ago');
+  assert.ok(/date:\s*todayISO\(\)/.test(code),
+    '`date` was dropped -- pruneData, starBalances and the ledger sort all read it');
+});
+
 atest('P5-C2: choosing the list from the prompt actually ticks the items off', async () => {
   // askWhich stored { route, target, collection } and nothing else, while
   // confirmPendingAction read pa.itemIds -- so answering the question did

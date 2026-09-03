@@ -942,3 +942,102 @@ version or CACHE bump. 834/0 on Logan's machine, `inline.js --check` in sync.
 that "must be updated too — it exists so the promise a user reads cannot drift
 from what the code does, and it HAS drifted before." Whether anything enforces
 that has not been checked.
+
+---
+
+## 18. Phases 4 and 5 as built (v9.99)
+
+Phase 4 is §5.4 + §5.5; Phase 5 is §5.2, which §6 listed as "only if you want it,
+after costing". Logan approved it. Both shipped together because both are the same
+sentence — *a change that costs the user something must leave a way back* — and
+splitting them would have meant two version bumps for four small edits.
+
+### Phase 4 — the four silent or one-way changes
+
+| Was | Now |
+|---|---|
+| `bulkTag` overwrote `personIds` with a one-element array, toast with no Undo | snapshots `{e, personIds, kidId}` for every selected row first, Undo restores the multi-person tag exactly |
+| `bulkDelete` reported a count, no Undo | Undo puts every row back, `deletedAt` removed not nulled |
+| `clearChecked` deleted a finished list **silently** — no count, no toast, no undo | `Cleared 2 ticked items` + Undo; `Nothing was ticked off` when the tap changes nothing |
+| `eventActions`' Remove open-coded `markDeleted` + `save` + `render` — the one delete in the app with no toast at all | calls `softDelete('events', …)`, which is where the toast and the undo already lived. The `confirm` stays; losing it was not this fix |
+
+The `bulkTag` snapshot is the `delKid` pattern verbatim (live object refs plus prior
+values), which is what §5.4 said to copy.
+
+### Phase 5 — the redemption undo, §5.2
+
+`redeem`'s toast Undo is fine for a mis-tap noticed at once and no use at all for one
+noticed over dinner (§3.2). Star History now carries the same undo for a day.
+
+**`date` alone could not support the claim.** A redemption stores `date: todayISO()`,
+and "today" is five minutes at 00:05 and twenty-three hours at 23:00 — a 24-hour
+window built on it would be a 24-hour window in name only. New redemptions are now
+stamped `at: new Date().toISOString()` alongside `date`, which is untouched because
+`pruneData`, `starBalances` and the ledger's sort all read it.
+
+Rows written before v9.99 have no `at` and fall back to `date === todayISO()` — the
+most the stored data can honestly support, stated as such rather than dressed up.
+
+`canUndoRedemption` gates the button; `undoRedemption` re-checks it, because the
+screen can sit open across the boundary. Past the boundary it says
+*"That was more than a day ago — it stays on the record"* rather than doing nothing
+(a broken-looking button) or doing it anyway (breaking the promise the greyed row makes).
+
+### Tests: 882 total, from 873
+
+Nine new. `withToast()` stands in front of `toast` so the message AND its action are
+readable — the harness's `getElementById` returns a fresh stub, so a toast is otherwise
+invisible to a test. Always restored in a `finally`.
+
+### Mutation tests — twelve reverts, one at a time
+
+| # | Revert | Result |
+|---|---|---|
+| P1 | `bulkTag` Undo removed | **RED** |
+| P2 | `personIds.slice()` → alias | **GREEN** — see below |
+| P3 | `bulkDelete` Undo removed | **RED** |
+| P4 | `clearChecked` silent again | **RED** |
+| P5 | `clearChecked` toasts an Undo for a no-op tap | **RED** |
+| P6 | 24-hour window → any time | **RED** ×2 |
+| P7 | `isNaN` guard removed | **GREEN first time** — see below |
+| P8 | expired branch returns silently | **RED** |
+| P9 | expired branch stops refusing | **RED** |
+| P10 | `redeem` stops stamping `at` | **RED** |
+| P11 | old-row date fallback removed | **RED** |
+| P12 | `eventActions` back to open-coded delete | **GREEN first time** — see below |
+
+**P2 is genuinely redundant, and the comment says so.** `bulkTag` REASSIGNS
+`e.personIds`, so the snapshot's alias would still point at the old array. The
+`.slice()` is defence against a future edit that mutates in place instead. Kept,
+with the comment stating it is defensive rather than load-bearing — a dead clause
+with a comment claiming otherwise is what M44 was.
+
+**P7 exposed a weak test of mine.** `canUndoRedemption({at:'not a date', date:'2020-01-01'})`
+returns false either way, because `(Date.now() - NaN) < X` is false. The line proved
+nothing about the guard. What the guard actually decides is whether a junk `at` makes
+the row read as *untimestamped* and fall back to the date — so the case that separates
+them is `{at:'not a date', date: todayISO()}`. Added; P7 then went red.
+
+**P12 exposed a change with no test at all.** I rewired `eventActions` and wrote nothing
+that touched it. The new test stands in front of `showSheet`, takes the "Remove event"
+button's `fn`, and asserts the toast, the Undo and the restored row.
+
+### The a11y audit was green about a control it never rendered
+
+Its seed held one redemption dated `2026-08-19`, so `canUndoRedemption` was false and
+the new button never appeared on the ledger screen. Its pass said nothing about this
+work. The seed now carries two rows — one old, one an hour ago — so both states render.
+
+Fixed in the same seed: it wrote `cost:10` where `redeem` writes `stars`, so the ledger
+had been rendering `-undefined` for that row and nothing had ever looked.
+
+And the audit is **not** a guard on the label. It checks that a control HAS an
+accessible name; a bare "Undo" is a name. Measured by stripping the `aria-label` and
+watching it stay green. A row of identical "Undo" buttons is precisely what a screen
+reader cannot work with, so `aria-label="Undo redeeming Movie night for Olivia"` is
+asserted in `tests-cases.js` instead, and mutation-proved there.
+
+### Status
+
+§5.1–§5.6 are now all built. 882/0, 22/0 in the browser, a11y clean across 48 screens,
+`inline.js` in sync. v9.99 / `flyersnap-v182`.

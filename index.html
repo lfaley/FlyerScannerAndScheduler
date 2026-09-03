@@ -4831,7 +4831,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.98';
+const APP_VERSION = 'v9.99';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -9048,27 +9048,55 @@ function bulkDelete(){
   const n = selectedEvents.size;
   if(!n) return;
   if(!confirm('Delete ' + n + ' event' + (n===1?'':'s') + '?\n\nThey are removed from your list. Anything already added to your calendar stays there -- delete those in the Calendar app.')) return;
-  let removed = 0;
-  S.events.forEach(e => {
-    if(selectedEvents.has(e.id) && !e.deleted){ markDeleted(e); e.dirty = 1; removed++; }
-  });
+  // Snapshot the live rows, exactly as delKid does. Recently Deleted is the
+  // long way back; a toast Undo is the one that costs nothing (rule 26 -- a
+  // recoverable delete still needs a route back that is right here).
+  const hit = S.events.filter(e => selectedEvents.has(e.id) && !e.deleted);
+  const before = hit.map(e => ({ e, dirty: e.dirty }));
+  hit.forEach(e => { markDeleted(e); e.dirty = 1; });
+  const removed = hit.length;
   save();
-  toast('Deleted ' + removed + ' event' + (removed===1?'':'s'));
+  toast('Deleted ' + removed + ' event' + (removed===1?'':'s'), removed ? {
+    label:'Undo',
+    fn: () => {
+      before.forEach(b => { unmarkDeleted(b.e); b.e.dirty = 1; });
+      save(); render();
+      toast('Put ' + removed + ' event' + (removed===1?'':'s') + ' back');
+    }
+  } : null);
   selectMode = false;
   selectedEvents = new Set();
   render();
 }
 function bulkTag(personId){
-  let n = 0;
-  S.events.forEach(e => {
-    if(!selectedEvents.has(e.id)) return;
+  // Tagging REPLACES, which the sheet says -- so an event tagged with two
+  // people loses one of them, and until v9.99 there was no way back. delKid
+  // solved the same problem the same way: snapshot the live rows and their
+  // prior values before touching anything. personIds is copied, not aliased;
+  // the array is reassigned below, but a slice costs nothing and survives a
+  // future edit that mutates it in place instead.
+  const hit = S.events.filter(e => selectedEvents.has(e.id));
+  const before = hit.map(e => ({ e,
+    personIds: Array.isArray(e.personIds) ? e.personIds.slice() : undefined,
+    kidId: e.kidId }));
+  hit.forEach(e => {
     e.personIds = personId ? [personId] : [];
     e.kidId = personId || null;
-    n++;
   });
+  const n = hit.length;
   save();
   const who = personId ? (personById(personId)||{}).name : 'no one';
-  toast('Tagged ' + n + ' event' + (n===1?'':'s') + ' as ' + who);
+  toast('Tagged ' + n + ' event' + (n===1?'':'s') + ' as ' + who, n ? {
+    label:'Undo',
+    fn: () => {
+      before.forEach(b => {
+        if(b.personIds === undefined) delete b.e.personIds; else b.e.personIds = b.personIds;
+        b.e.kidId = b.kidId;
+      });
+      save(); render();
+      toast('Tags put back');
+    }
+  } : null);
   selectMode = false;
   selectedEvents = new Set();
   render();
@@ -9081,8 +9109,12 @@ function eventActions(id){
   showSheet(e.title, friendly(e.date) + (e.time?' · '+fmt12(e.time):''), [
     {label: e.exported ? '📆 Calendar file again' : '📆 Add to calendar (with alerts)', fn:()=>downloadICS(e)},
     {label:'Edit event', icon:'edit', fn:()=>openEventEdit(e.id)},
+    // softDelete, not markDeleted+save+render: this open-coded three of its four
+    // steps and left out the fourth, so removing an event from here was the one
+    // delete in the app that said nothing and offered nothing (v9.99).
+    // The confirm stays -- it was here before, and losing it is not this fix.
     {label:'Remove event', icon:'trash', style:'danger', fn:()=>{
-      if(confirm(`Remove "${e.title}"?`)){ markDeleted(e); save(); render(); }
+      if(confirm(`Remove "${e.title}"?`)) softDelete('events', e.id, `"${e.title}"`);
     }},
   ]);
 }
@@ -10073,7 +10105,12 @@ function redeem(id){
       const has = bal[k.id]||0;
       if(has < r.cost){ alert(`${k.name} has ${has} of ${r.cost} stars needed. Keep going!`); return; }
       const rid = uid();
-      S.redemptions.push({id:rid, rewardId:r.id, kidId:k.id, stars:r.cost, date:todayISO()});
+      // `at` alongside `date` (v9.99): the ledger's Undo needs to know HOW LONG
+      // AGO, and a date alone cannot say -- the same "today" is 5 minutes at
+      // 00:05 and 23 hours at 23:00. `date` is untouched because pruneData,
+      // starBalances and the ledger's sort all read it.
+      S.redemptions.push({id:rid, rewardId:r.id, kidId:k.id, stars:r.cost,
+        date:todayISO(), at:new Date().toISOString()});
       save(); render();
       // Spending a kid's hard-earned stars is exactly the mis-tap that needs an
       // Undo — every other data change in the app is reversible, this one wasn't.
@@ -10089,6 +10126,53 @@ function redeem(id){
 }
 
 // ---------- Star ledger ----------
+/**
+ * Is this redemption still undoable from Star History?
+ *
+ * The toast Undo lasts seven seconds, which is fine for a mis-tap noticed at
+ * once and no use at all for one noticed over dinner. A value-bearing action
+ * needs a route back that does not expire while you are looking away
+ * (DELETE-HONESTY-PLAN section 3.2), so the ledger carries the same undo for a
+ * day.
+ *
+ * Rows written before v9.99 have no `at`. They fall back to "redeemed today",
+ * which is the most the stored data can honestly support -- not a 24-hour
+ * window dressed up from a date.
+ */
+const REDEEM_UNDO_HOURS = 24;
+function canUndoRedemption(r){
+  if(!r) return false;
+  if(r.at){
+    const t = Date.parse(r.at);
+    if(!isNaN(t)) return (Date.now() - t) < REDEEM_UNDO_HOURS * 3600 * 1000;
+  }
+  return !!r.date && r.date === todayISO();
+}
+
+/**
+ * Give the stars back. The row is removed rather than flagged, because that is
+ * what redeem's own toast Undo has always done and two shapes of undone
+ * redemption would be two things starBalances has to agree about.
+ */
+function undoRedemption(id){
+  const r = S.redemptions.find(x => x.id === id);
+  if(!r) return;
+  if(!canUndoRedemption(r)){
+    // Reachable: the screen can be open past the boundary. Say why rather than
+    // doing nothing, and rather than quietly doing it anyway.
+    toast('That was more than a day ago — it stays on the record');
+    render();
+    return;
+  }
+  const kid = kidById(r.kidId);
+  S.redemptions = S.redemptions.filter(x => x.id !== r.id);
+  save(); render();
+  toast(`Refunded ${r.stars||0} ⭐${kid ? ' to ' + kid.name : ''}`, {
+    label:'Undo',
+    fn: () => { S.redemptions.push(r); save(); render(); toast('Redeemed again'); }
+  });
+}
+
 let ledgerKid = null;
 function renderLedger(m){
   setHeader('Star History', true);
@@ -10101,7 +10185,8 @@ function renderLedger(m){
       entries.push({date:c.date, kidId:c.kidId, label:(choreById[c.choreId]||{}).title||'Chore', delta:c.stars});
   }
   for(const r of S.redemptions){
-    entries.push({date:r.date||'', kidId:r.kidId, label:(rewardById[r.rewardId]||{}).title||'Reward', delta:-r.stars});
+    entries.push({date:r.date||'', kidId:r.kidId, label:(rewardById[r.rewardId]||{}).title||'Reward',
+      delta:-r.stars, rid:r.id, undoable:canUndoRedemption(r)});
   }
   if(ledgerKid) entries = entries.filter(e=>e.kidId===ledgerKid);
   entries.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
@@ -10117,10 +10202,18 @@ function renderLedger(m){
   } else {
     html += entries.slice(0,200).map(e=>{
       const kid = kidById(e.kidId);
+      // The label names WHAT is being undone. A row of identical "Undo" buttons
+      // is unusable with a screen reader, and the audit checks the name that
+      // actually computes, not the markup.
+      const undo = e.undoable
+        ? `<button class="btn sm alt" onclick="undoRedemption('${esc(e.rid)}')"
+             aria-label="Undo redeeming ${esc(e.label)}${kid?' for '+esc(kid.name):''}">Undo</button>`
+        : '';
       return `<div class="card row" style="padding:12px">
         <div class="grow"><div style="font-weight:600;font-size:14px">${esc(e.label)}</div>
           <div class="meta" style="font-size:12px">${kid?esc(kid.name)+' · ':''}${e.date?friendly(e.date):'—'}</div></div>
         <span style="font-weight:800;color:${e.delta>0?'var(--accent)':'var(--red-accent)'}">${e.delta>0?'+':''}${e.delta} ⭐</span>
+        ${undo}
       </div>`;
     }).join('');
   }
@@ -10302,8 +10395,20 @@ function toggleItem(id){
   i.checked = !i.checked; save(); render();
 }
 function clearChecked(listId){
-  S.listItems.forEach(i=>{ if(i.listId===listId && i.checked) markDeleted(i); });
+  // Was silent: a finished shopping list vanished with no count and no undo,
+  // while delItem right above it has offered both since softDelete existed.
+  const hit = S.listItems.filter(i => i.listId === listId && i.checked && !i.deleted);
+  hit.forEach(i => markDeleted(i));
   save(); render();
+  if(!hit.length){ toast('Nothing was ticked off'); return; }
+  toast('Cleared ' + hit.length + ' ticked item' + (hit.length===1?'':'s'), {
+    label:'Undo',
+    fn: () => {
+      hit.forEach(i => unmarkDeleted(i));
+      save(); render();
+      toast('Put them back');
+    }
+  });
 }
 
 // ---------- Notes (v9.60) ----------

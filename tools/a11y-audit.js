@@ -71,7 +71,18 @@ const SEED = {
   ],
   completions: [{ id:'x1', choreId:'c1', kidId:'k1', date:'2026-08-20', stars:2 }],
   rewards: [{ id:'r1', title:'Movie night', cost:10, deleted:false }],
-  redemptions: [{ id:'d1', kidId:'k1', rewardId:'r1', date:'2026-08-19', cost:10 }],
+  // `stars`, not `cost` -- that is the field redeem() actually writes and the
+  // one starBalances and the ledger read. The old seed said `cost`, so the
+  // ledger rendered "-undefined" and nobody noticed, because nothing looked.
+  // Two rows on purpose: one old, one from an hour ago, so Star History renders
+  // BOTH states of the v9.99 Undo control and the audit sees the button at all.
+  redemptions: [
+    { id:'d1', kidId:'k1', rewardId:'r1', date:'2026-08-19', stars:10,
+      at:'2026-08-19T18:00:00.000Z' },
+    { id:'d2', kidId:'k1', rewardId:'r1', stars:10,
+      date: new Date().toISOString().slice(0, 10),
+      at: new Date(Date.now() - 3600 * 1000).toISOString() },
+  ],
   problems: [
     { id:'p1', where:'Local model', message:'Fell back to Anthropic: timed out',
       detail:'qwen2.5', first:'2026-08-19T10:00:00Z', last:'2026-08-20T10:00:00Z', count:2, done:false },
