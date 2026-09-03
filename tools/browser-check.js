@@ -293,6 +293,49 @@ const eq = (got, want, what) => {
     if(!ok2) throw new Error('a real date was refused too');
   });
 
+  await check('two "which one?" questions are two real taps, no guess between (v9.98)', async () => {
+    // The second question is pushed from inside confirmPendingAction rather
+    // than returned, and the choice buttons are only wired to an ID when
+    // pendingAction is set. Both are renderer facts the vm harness cannot see
+    // (its getElementById hands back a fresh stub every call), so this taps the
+    // real buttons on the real Ask screen.
+    await pg.evaluate(async () => {
+      S.lists = [{ id:'L9', name:'Market', deleted:false }];
+      S.listItems = [
+        { id:'p1', listId:'L9', text:'Whole milk',     checked:false, deleted:false },
+        { id:'p2', listId:'L9', text:'Almond milk',    checked:false, deleted:false },
+        { id:'p3', listId:'L9', text:'Grape jam',      checked:false, deleted:false },
+        { id:'p4', listId:'L9', text:'Strawberry jam', checked:false, deleted:false },
+      ];
+      askState.turns = [];
+      pendingAction = null;
+      save();
+      sub('ask');
+      const r = await performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+        params:{ list:'Market', items:['milk', 'jam'] } });
+      askState.turns.push({ q:'tick off milk and jam', a:r.answer, domain:r.domain,
+        cited:[], day: todayISO(), sourceNote:'', choices: r.choices || null });
+      render();
+    });
+    await pg.waitForTimeout(250);
+    const q1 = await pg.evaluate(() => document.body.innerText);
+    if(!/Which "milk"/.test(q1)) throw new Error('the first question was not asked: ' + q1.slice(0, 300));
+    await pg.getByRole('button', { name: 'Almond milk', exact: true }).click();
+    await pg.waitForTimeout(250);
+    const q2 = await pg.evaluate(() => document.body.innerText);
+    if(!/Which "jam"/.test(q2)) throw new Error('the second question was not asked: ' + q2.slice(0, 300));
+    const midway = await pg.evaluate(() => S.listItems.filter(i => i.checked).map(i => i.id));
+    if(midway.length) throw new Error('something was ticked while a question was open: ' + JSON.stringify(midway));
+    await pg.getByRole('button', { name: 'Grape jam', exact: true }).click();
+    await pg.waitForTimeout(300);
+    // Read it back out of REAL localStorage, not memory -- a tick nobody saved
+    // is a tick that is gone next time the app opens.
+    const saved = await pg.evaluate(() => JSON.parse(localStorage.getItem('flyersnap'))
+      .listItems.filter(i => i.checked).map(i => i.id).sort());
+    if(JSON.stringify(saved) !== JSON.stringify(['p2', 'p3']))
+      throw new Error('wrong rows ticked and saved: ' + JSON.stringify(saved));
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;

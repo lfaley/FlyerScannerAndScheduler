@@ -3129,26 +3129,85 @@ function describeEdit(changes, event){
 /**
  * Match spoken item texts against the items actually on a list.
  *
- * Returns the matched rows and the words that matched nothing, so the caller
- * can say "ticked off milk; there is no bread on that list" instead of
- * silently doing half the job.
+ * Returns:
+ *   matched    the rows to tick
+ *   missing    words that match nothing on that list
+ *   ambiguous  {word, matches} -- the FIRST word that could mean more than one
+ *              row, or null. Deliberately not resolved here.
+ *   rest       the words after that one, still unresolved
+ *
+ * The old version picked a match by array position and called the result done.
+ * Measured against a list reading "Whole milk | Almond milk | Bread | Eggs"
+ * (tools/a7-repro.js):
+ *   "milk"           -> ticked Whole milk, because it was added first
+ *   "milk", "milk"   -> ticked Whole milk AND Almond milk: one word, two rows
+ *   "bread", "Bread" -> ticked Bread, then reported "Bread" as NOT on the list
+ * All three are the same mistake -- resolving a question by guessing -- and the
+ * rest of the app already refuses to do it (resolveEntity never returns a best
+ * guess). This stops at the first real question so the caller can ask it.
  */
-function matchListItems(spoken, items){
+function matchListItems(spoken, items, alreadyIds){
   const live = (items || []).filter(i => i && !i.deleted);
-  const matched = [];
+  const chosen = new Set(alreadyIds || []);
+  // Rows settled by an earlier round of asking come back first, so a second
+  // word that means one of them reads as already found rather than missing.
+  const matched = live.filter(i => chosen.has(i.id));
   const missing = [];
-  for(const word of (Array.isArray(spoken) ? spoken : [])){
-    const res = resolveEntity(word, live, 'text');
-    if(res.status === 'ok' && !matched.some(m => m.id === res.match.id)) matched.push(res.match);
-    else if(res.status === 'ambiguous'){
-      // Two items reading the same thing: ticking either satisfies the
-      // request, and refusing here would be pedantic rather than safe.
-      const first = res.matches.find(m => !matched.some(x => x.id === m.id));
-      if(first) matched.push(first); else missing.push(String(word));
-    }
-    else missing.push(String(word));
+
+  // SAYING A THING TWICE IS SAYING IT ONCE. The old loop deliberately skipped
+  // the row a previous pass had taken, so "milk, milk" walked on to the NEXT
+  // milk and ticked something nobody named.
+  const words = [];
+  const seen = new Set();
+  for(const w of (Array.isArray(spoken) ? spoken : [])){
+    const k = String(w == null ? '' : w).toLowerCase().trim();
+    if(!k || seen.has(k)) continue;
+    seen.add(k); words.push(w);
   }
-  return { matched, missing };
+
+  for(let n = 0; n < words.length; n++){
+    const word = words[n];
+    const res = resolveEntity(word, live, 'text');
+    if(res.status === 'ok'){
+      if(!matched.some(m => m.id === res.match.id)) matched.push(res.match);
+      continue;
+    }
+    if(res.status === 'ambiguous'){
+      const left = res.matches.filter(m => !matched.some(x => x.id === m.id));
+      // Every candidate is already ticked: the word is satisfied, not a
+      // question, and certainly not missing.
+      if(!left.length) continue;
+      // Only one candidate left standing is deduction, not a guess -- say
+      // "whole milk" then "milk" and the second can only mean the almond one.
+      if(left.length === 1){ matched.push(left[0]); continue; }
+      return { matched, missing, ambiguous:{ word:String(word), matches:left },
+        rest: words.slice(n + 1) };
+    }
+    missing.push(String(word));
+  }
+  return { matched, missing, ambiguous:null, rest:[] };
+}
+
+/**
+ * One round of "which items are we ticking off?".
+ *
+ * Pure, and returns what the caller should DO rather than what it should say,
+ * because two very different callers need the same decision: performRoute on
+ * the first pass, and confirmPendingAction on every answer that comes back from
+ * a "which one?" prompt. `carry` is the state that has to survive a question --
+ * the rows already settled and the words already known to be absent.
+ */
+function tickRound(openItems, spoken, carry){
+  const c = carry || {};
+  const doneIds = c.doneIds || [];
+  const r = matchListItems(spoken, openItems, doneIds);
+  const missing = (c.missing || []).concat(r.missing);
+  if(r.ambiguous){
+    return { kind:'ask', word:r.ambiguous.word, matches:r.ambiguous.matches,
+      doneIds: r.matched.map(m => m.id), rest: r.rest, missing };
+  }
+  if(!r.matched.length) return { kind:'none', items:[], missing };
+  return { kind:'go', items: r.matched, missing };
 }
 
 /**
@@ -4772,7 +4831,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v9.97';
+const APP_VERSION = 'v9.98';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -6776,6 +6835,36 @@ let pendingAction = null;
 // lives in js/assistant-actions.js where it is testable.
 function assistantCapabilityChips(){ return capabilityChips(4); }
 
+/**
+ * "Tick off "Milk", "Bread" on Groceries." -- said once, by both the first
+ * proposal and any later one, so the two cannot drift apart.
+ */
+function tickSentence(list, items, missing){
+  return `Tick off ${items.map(m => '"' + m.text + '"').join(', ')} on "${list.name}".`
+    + (missing && missing.length ? `\n\nNot on that list: ${missing.join(', ')}.` : '');
+}
+
+/**
+ * Ask "which <word> did you mean?" again, from inside a confirm.
+ *
+ * Two ambiguous words are two questions. The first is asked by performRoute,
+ * which returns a turn; by the time the second is due we are inside
+ * confirmPendingAction, which renders rather than returns -- so this pushes the
+ * turn itself. The renderer only offers buttons on the LAST turn, which is what
+ * this becomes, and it deliberately reads pendingAction to decide that a choice
+ * is an id rather than text, so that is set here too.
+ */
+function askAnotherItem(route, list, round){
+  pendingAction = { route, target:null, collection:'listItems',
+    listId: list.id, doneIds: round.doneIds, restItems: round.rest,
+    missingItems: round.missing };
+  askState.turns.push({ q:'', a:`Which "${round.word}" did you mean?`,
+    domain:'lists', cited:[], day: todayISO(), sourceNote:'',
+    choices: round.matches.map(m => ({ id:m.id, name:m.text })) });
+  saveConversation();
+  render();
+}
+
 /** Turn a validated route into something that happened. */
 async function performRoute(route, question){
   const intent = intentById(route.intent);
@@ -6883,7 +6972,7 @@ async function performRoute(route, question){
   };
   // "Which one did you mean?" -- the app asks instead of picking. `collection`
   // tells confirmPendingAction where to look the chosen id back up.
-  const askWhich = (domain, matches, collection, nameKey, extra) => {
+  const askWhich = (domain, matches, collection, nameKey, extra, question) => {
     // AN EMPTY LIST IS NOT A QUESTION. `[]` is truthy, so asking "which one did
     // you mean?" with nothing to offer rendered the question, zero buttons and
     // a "Neither" link -- measured 29 Aug with a user who had no lists at all
@@ -6895,7 +6984,10 @@ async function performRoute(route, question){
     // is made. check_list_item reads pa.itemIds, and until v9.73 nothing ever
     // put them there -- so picking the list from this prompt ticked nothing off.
     pendingAction = Object.assign({ route, target:null, collection }, extra || {});
-    return { answer:'Which one did you mean?', cited:[], domain, sourceNote:'',
+    // `question` names the word being asked about. With several items to tick
+    // there can be more than one question in a row, and four identical
+    // "Which one did you mean?" screens tell you nothing about which one.
+    return { answer: question || 'Which one did you mean?', cited:[], domain, sourceNote:'',
       choices: matches.map(m => ({ id:m.id, name:m[nameKey || 'name'] })) };
   };
   const nothing = (domain, answer) => ({ answer, cited:[], domain, sourceNote:'' });
@@ -6962,14 +7054,21 @@ async function performRoute(route, question){
         { pendingItems: route.params.items || [] });
     }
     const items = S.listItems.filter(i => i.listId === list.id && !i.deleted && !i.checked);
-    const { matched, missing } = matchListItems(route.params.items, items);
-    if(!matched.length){
+    const round = tickRound(items, route.params.items, null);
+    if(round.kind === 'ask'){
+      // The app asks instead of picking. Everywhere else it already does this
+      // (a list, a chore, an event); ticking off was the one place that resolved
+      // ambiguity by array position and told you the answer as if it were sure.
+      return askWhich('lists', round.matches, 'listItems', 'text',
+        { listId: list.id, doneIds: round.doneIds, restItems: round.rest,
+          missingItems: round.missing },
+        `Which "${round.word}" did you mean?`);
+    }
+    if(round.kind === 'none'){
       return nothing('lists', `Nothing on "${list.name}" matches ${route.params.items.join(', ')}.`);
     }
-    const note = missing.length ? `\n\nNot on that list: ${missing.join(', ')}.` : '';
-    return propose('lists', list,
-      `Tick off ${matched.map(m => '"' + m.text + '"').join(', ')} on "${list.name}".` + note,
-      { itemIds: matched.map(m => m.id) });
+    return propose('lists', list, tickSentence(list, round.items, round.missing),
+      { itemIds: round.items.map(m => m.id) });
   }
 
   if(route.intent === 'complete_chore'){
@@ -7116,20 +7215,41 @@ function confirmPendingAction(chosenId){
       break;
     }
     case 'check_list_item': {
-      // When the list was chosen from a "which one?" prompt there are no
-      // itemIds yet -- the ids only exist once the list does. Resolve the names
-      // the user actually said against the list they actually picked. Before
-      // v9.73 this read an itemIds nobody ever set, so answering the question
-      // ticked nothing off (code review P5, reproduced).
+      // Three ways in, and they all have to end in the same place:
+      //   1. the plain "tick these off" confirm      -- pa.itemIds is set
+      //   2. an answer to "which list?"              -- target IS the list
+      //   3. an answer to "which <word>?"            -- target is a list ITEM,
+      //      and pa.listId says which list it belongs to. This one can repeat:
+      //      two ambiguous words are two questions, not one question and a guess.
+      // Case 2 existed before v9.73 reading an itemIds nobody ever set, so
+      // answering the question ticked nothing off (code review P5, reproduced).
+      const list = pa.listId ? S.lists.find(l => l.id === pa.listId && !l.deleted) : target;
+      if(!list){ toast('That list is gone now'); render(); break; }
       let ids = pa.itemIds || [];
-      if(!ids.length && pa.pendingItems && target){
-        const open = S.listItems.filter(i => i.listId === target.id && !i.deleted && !i.checked);
-        ids = matchListItems(pa.pendingItems, open).matched.map(i => i.id);
+      let missing = pa.missingItems || [];
+      if(!ids.length){
+        const open = S.listItems.filter(i => i.listId === list.id && !i.deleted && !i.checked);
+        // On path 3 the row just chosen is settled; on path 2 nothing is yet.
+        const carry = { doneIds: (pa.doneIds || []).concat(pa.listId && target ? [target.id] : []),
+          missing };
+        const round = tickRound(open, pa.listId ? (pa.restItems || []) : (pa.pendingItems || []), carry);
+        if(round.kind === 'ask'){
+          // Still not sure. Ask again rather than settle it by position -- the
+          // whole point of asking the first time.
+          askAnotherItem(route, list, round);
+          return;
+        }
+        ids = round.items.map(i => i.id);
+        missing = round.missing;
       }
       const changed = S.listItems.filter(i => ids.includes(i.id) && !i.checked);
       changed.forEach(i => { i.checked = true; });
       save();
-      toast(`Ticked off ${changed.length} item${changed.length===1?'':'s'}`,
+      // The words that matched nothing are said here as well as in the
+      // proposal, because paths 2 and 3 never show a proposal -- tapping the
+      // answer ticks straight away, so this toast is the only place they appear.
+      toast(`Ticked off ${changed.length} item${changed.length===1?'':'s'}`
+        + (missing.length ? ` — not on that list: ${missing.join(', ')}` : ''),
         { label:'Undo', fn:() => {
           changed.forEach(i => { i.checked = false; });
           save(); render(); toast('Undone');

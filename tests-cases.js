@@ -5694,6 +5694,178 @@ test('the person you named survives an ambiguous chore (v9.95)', () => {
   return p.then(() => {});
 });
 
+// ---------------------------------------------------------------------------
+// A7 (v9.98): ticking off no longer resolves ambiguity by array position.
+// All three defects below were measured against a list reading
+// "Whole milk | Almond milk | Bread | Eggs" (tools/a7-repro.js) BEFORE the fix.
+// SYNCHRONOUS assertions on shared state, for the reason given at A4 above.
+// ---------------------------------------------------------------------------
+function milkList(){
+  boot(GOOD);
+  S.lists = [{ id:'L1', name:'Groceries', deleted:false }];
+  S.listItems = [
+    { id:'m1', listId:'L1', text:'Whole milk',  checked:false, deleted:false },
+    { id:'m2', listId:'L1', text:'Almond milk', checked:false, deleted:false },
+    { id:'b1', listId:'L1', text:'Bread',       checked:false, deleted:false },
+    { id:'e1', listId:'L1', text:'Eggs',        checked:false, deleted:false },
+  ];
+  pendingAction = null;
+  askState.turns = [];
+}
+
+test('A7: "milk" with two milks ASKS instead of ticking the first one (v9.98)', () => {
+  // MEASURED before the fix: it ticked "Whole milk" and said so as if it were
+  // sure. The basis for that choice was that m1 comes before m2 in the array.
+  // EVERY assertion that touches S or pendingAction is synchronous. performRoute
+  // is async, so anything in a .then() runs at the END of the file, interleaved
+  // with the continuations of every other async test -- which is exactly how an
+  // earlier draft of this test clobbered P5-C2's fixture mid-run.
+  milkList();
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+    params:{ list:'Groceries', items:['milk'] } });
+  assert.ok(pendingAction, 'it did not ask');
+  assert.strictEqual((pendingAction.route || {}).intent, 'check_list_item', 'wrong route carried');
+  assert.strictEqual(pendingAction.collection, 'listItems',
+    'the choice cannot be looked back up as a list item');
+  assert.deepStrictEqual((pendingAction.restItems || []), [], 'nothing else was said');
+  assert.strictEqual(S.listItems.filter(i => i.checked).length, 0,
+    'something was ticked before the question was answered');
+  // ...and answering it ticks the one chosen, and only that one.
+  confirmPendingAction('m2');
+  assert.strictEqual(S.listItems.find(i => i.id === 'm2').checked, true, 'the chosen milk was not ticked');
+  assert.strictEqual(S.listItems.find(i => i.id === 'm1').checked, false, 'the other milk was ticked');
+  return p.then(() => {});
+});
+
+test('A7: the question names the word it is about, and offers both (v9.98)', () => {
+  // Read-only on the RESOLVED value, which is a captured object and cannot be
+  // clobbered. pendingAction is cleared synchronously, before the continuation,
+  // so this test leaves nothing behind for the ones that follow.
+  milkList();
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+    params:{ list:'Groceries', items:['milk'] } });
+  pendingAction = null;
+  return p.then(r => {
+    assert.deepStrictEqual((r.choices || []).map(c => c.name).sort(),
+      ['Almond milk', 'Whole milk'], 'the two milks were not offered: ' + JSON.stringify(r.choices));
+    assert.ok(/which "milk"/i.test(r.answer),
+      'the question does not name the word it is about: ' + r.answer);
+  });
+});
+
+test('A7: saying the same word twice ticks ONE thing, not two (v9.98)', () => {
+  // MEASURED before the fix: ["milk","milk"] ticked Whole milk AND Almond milk,
+  // because the second pass deliberately skipped the row the first had taken.
+  // Nobody named two milks.
+  milkList();
+  const r = matchListItems(['milk', 'milk'], S.listItems);
+  assert.strictEqual(r.matched.length, 0, 'it settled a question it should have asked');
+  assert.ok(r.ambiguous, 'the repeat was not recognised as the one question it is');
+  assert.strictEqual(r.ambiguous.matches.length, 2, 'wrong number of candidates');
+  // And with an unambiguous word, a repeat is still just the one item.
+  const r2 = matchListItems(['bread', 'bread'], S.listItems);
+  assert.deepStrictEqual(r2.matched.map(m => m.id), ['b1'], 'a repeated word ticked two rows');
+});
+
+test('A7: a repeated word does not tick a second row AFTER the question (v9.98)', () => {
+  // MEASURED: without the de-duplication the assertion above still passes,
+  // because the first "milk" returns the question before the second is ever
+  // read. The second one rides in restItems and is settled after the answer --
+  // where only one candidate is left, so it is ticked as a deduction. That is
+  // the original defect coming back through the door the fix opened, and this
+  // is the only test that walks far enough to see it.
+  milkList();
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+    params:{ list:'Groceries', items:['milk', 'milk'] } });
+  assert.ok(pendingAction, 'it did not ask');
+  assert.deepStrictEqual(pendingAction.restItems, [],
+    'the repeat was carried forward as a second thing to tick');
+  confirmPendingAction('m1');
+  assert.deepStrictEqual(S.listItems.filter(i => i.checked).map(i => i.id), ['m1'],
+    'saying one thing twice ticked two rows');
+  return p.then(() => {});
+});
+
+test('A7: a word that means an item already found is not called "missing" (v9.98)', () => {
+  // MEASURED before the fix: ["bread","Bread"] ticked Bread and then reported
+  // "Bread" as NOT on that list -- about the row it had just ticked.
+  milkList();
+  const r = matchListItems(['bread', 'Bread', 'Eggs'], S.listItems);
+  assert.deepStrictEqual(r.missing, [], 'it called a found item missing: ' + JSON.stringify(r.missing));
+  assert.deepStrictEqual(r.matched.map(m => m.id).sort(), ['b1', 'e1'], 'wrong rows matched');
+  // Two DIFFERENT words for the same row -- the same defect, without the
+  // duplicate-word shortcut covering for it.
+  const r2 = matchListItems(['whole milk', 'Whole', 'eggs'], S.listItems);
+  assert.deepStrictEqual(r2.missing, [], 'a second word for a found row was called missing');
+  assert.deepStrictEqual(r2.matched.map(m => m.id).sort(), ['e1', 'm1'], 'wrong rows matched');
+  // ...and a word that really is absent is STILL reported.
+  const r3 = matchListItems(['bread', 'cheese'], S.listItems);
+  assert.deepStrictEqual(r3.missing, ['cheese'], 'a genuinely absent word stopped being reported');
+});
+
+test('A7: naming one milk explicitly leaves "milk" with only one meaning (v9.98)', () => {
+  // Deduction, not a guess: with Whole milk already settled, "milk" can only be
+  // the almond one. Asking here would be pedantic, and the app would be asking
+  // a question it can answer.
+  milkList();
+  const r = matchListItems(['whole milk', 'milk'], S.listItems);
+  assert.strictEqual(r.ambiguous, null, 'it asked a question it could work out');
+  assert.deepStrictEqual(r.matched.map(m => m.id).sort(), ['m1', 'm2'], 'wrong rows matched');
+});
+
+test('A7: two ambiguous words are two questions, never one question and a guess (v9.98)', () => {
+  // The second question is asked from inside confirmPendingAction, which
+  // renders rather than returns -- so it pushes its own turn. Without that the
+  // remaining word would be settled by position, which is the whole defect.
+  milkList();
+  S.listItems.push({ id:'j1', listId:'L1', text:'Grape jam',      checked:false, deleted:false });
+  S.listItems.push({ id:'j2', listId:'L1', text:'Strawberry jam', checked:false, deleted:false });
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+    params:{ list:'Groceries', items:['milk', 'jam'] } });
+  assert.ok(pendingAction, 'it did not ask the first question');
+  confirmPendingAction('m1');
+  assert.ok(pendingAction, 'it settled the second word instead of asking');
+  assert.deepStrictEqual(pendingAction.doneIds, ['m1'], 'the first answer was not carried');
+  const last = askState.turns[askState.turns.length - 1];
+  assert.ok(/which "jam"/i.test(last.a), 'the second question was not asked: ' + last.a);
+  assert.deepStrictEqual((last.choices || []).map(c => c.id).sort(), ['j1', 'j2'],
+    'the second question offered the wrong things');
+  assert.strictEqual(S.listItems.filter(i => i.checked).length, 0,
+    'it ticked something while a question was still open');
+  confirmPendingAction('j2');
+  assert.deepStrictEqual(S.listItems.filter(i => i.checked).map(i => i.id).sort(), ['j2', 'm1'],
+    'the two answers did not both land');
+  return p.then(() => {});
+});
+
+test('A7: an absent word survives a question and is still reported (v9.98)', () => {
+  // The "not on that list" note is carried across every question, and said in
+  // the toast -- answering a question ticks straight away, so the proposal
+  // sentence that normally carries it is never shown on that path.
+  milkList();
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+    params:{ list:'Groceries', items:['milk', 'cheese'] } });
+  assert.ok(pendingAction, 'it did not ask');
+  // MEASURED: "cheese" is NOT in missingItems here. matchListItems stops at the
+  // first ambiguous word, so anything after it is still unread -- it rides in
+  // restItems and is judged once the question is answered. The test that
+  // matters is that it reaches the user at the end, below.
+  assert.deepStrictEqual(pendingAction.restItems, ['cheese'],
+    'the rest of what was said was dropped at the question');
+  // toast() writes into a DOM node, and every getElementById here returns a
+  // fresh stub, so the only way to read what the user was told is to stand in
+  // front of it. Put back in a finally -- a throw here would silence every
+  // later test's toast.
+  const realToast = toast;
+  let said = '';
+  toast = (m) => { said = String(m); };
+  try { confirmPendingAction('m1'); } finally { toast = realToast; }
+  assert.ok(/Ticked off 1 item/.test(said), 'it did not tick the chosen milk: ' + JSON.stringify(said));
+  assert.ok(/cheese/.test(said),
+    'the user was never told cheese is not on that list: ' + JSON.stringify(said));
+  return p.then(() => {});
+});
+
 test('P5-C2: choosing the list from the prompt actually ticks the items off', async () => {
   // askWhich stored { route, target, collection } and nothing else, while
   // confirmPendingAction read pa.itemIds -- so answering the question did

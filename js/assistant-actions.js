@@ -214,24 +214,83 @@ export function describeEdit(changes, event){
 /**
  * Match spoken item texts against the items actually on a list.
  *
- * Returns the matched rows and the words that matched nothing, so the caller
- * can say "ticked off milk; there is no bread on that list" instead of
- * silently doing half the job.
+ * Returns:
+ *   matched    the rows to tick
+ *   missing    words that match nothing on that list
+ *   ambiguous  {word, matches} -- the FIRST word that could mean more than one
+ *              row, or null. Deliberately not resolved here.
+ *   rest       the words after that one, still unresolved
+ *
+ * The old version picked a match by array position and called the result done.
+ * Measured against a list reading "Whole milk | Almond milk | Bread | Eggs"
+ * (tools/a7-repro.js):
+ *   "milk"           -> ticked Whole milk, because it was added first
+ *   "milk", "milk"   -> ticked Whole milk AND Almond milk: one word, two rows
+ *   "bread", "Bread" -> ticked Bread, then reported "Bread" as NOT on the list
+ * All three are the same mistake -- resolving a question by guessing -- and the
+ * rest of the app already refuses to do it (resolveEntity never returns a best
+ * guess). This stops at the first real question so the caller can ask it.
  */
-export function matchListItems(spoken, items){
+export function matchListItems(spoken, items, alreadyIds){
   const live = (items || []).filter(i => i && !i.deleted);
-  const matched = [];
+  const chosen = new Set(alreadyIds || []);
+  // Rows settled by an earlier round of asking come back first, so a second
+  // word that means one of them reads as already found rather than missing.
+  const matched = live.filter(i => chosen.has(i.id));
   const missing = [];
-  for(const word of (Array.isArray(spoken) ? spoken : [])){
-    const res = resolveEntity(word, live, 'text');
-    if(res.status === 'ok' && !matched.some(m => m.id === res.match.id)) matched.push(res.match);
-    else if(res.status === 'ambiguous'){
-      // Two items reading the same thing: ticking either satisfies the
-      // request, and refusing here would be pedantic rather than safe.
-      const first = res.matches.find(m => !matched.some(x => x.id === m.id));
-      if(first) matched.push(first); else missing.push(String(word));
-    }
-    else missing.push(String(word));
+
+  // SAYING A THING TWICE IS SAYING IT ONCE. The old loop deliberately skipped
+  // the row a previous pass had taken, so "milk, milk" walked on to the NEXT
+  // milk and ticked something nobody named.
+  const words = [];
+  const seen = new Set();
+  for(const w of (Array.isArray(spoken) ? spoken : [])){
+    const k = String(w == null ? '' : w).toLowerCase().trim();
+    if(!k || seen.has(k)) continue;
+    seen.add(k); words.push(w);
   }
-  return { matched, missing };
+
+  for(let n = 0; n < words.length; n++){
+    const word = words[n];
+    const res = resolveEntity(word, live, 'text');
+    if(res.status === 'ok'){
+      if(!matched.some(m => m.id === res.match.id)) matched.push(res.match);
+      continue;
+    }
+    if(res.status === 'ambiguous'){
+      const left = res.matches.filter(m => !matched.some(x => x.id === m.id));
+      // Every candidate is already ticked: the word is satisfied, not a
+      // question, and certainly not missing.
+      if(!left.length) continue;
+      // Only one candidate left standing is deduction, not a guess -- say
+      // "whole milk" then "milk" and the second can only mean the almond one.
+      if(left.length === 1){ matched.push(left[0]); continue; }
+      return { matched, missing, ambiguous:{ word:String(word), matches:left },
+        rest: words.slice(n + 1) };
+    }
+    missing.push(String(word));
+  }
+  return { matched, missing, ambiguous:null, rest:[] };
+}
+
+/**
+ * One round of "which items are we ticking off?".
+ *
+ * Pure, and returns what the caller should DO rather than what it should say,
+ * because two very different callers need the same decision: performRoute on
+ * the first pass, and confirmPendingAction on every answer that comes back from
+ * a "which one?" prompt. `carry` is the state that has to survive a question --
+ * the rows already settled and the words already known to be absent.
+ */
+export function tickRound(openItems, spoken, carry){
+  const c = carry || {};
+  const doneIds = c.doneIds || [];
+  const r = matchListItems(spoken, openItems, doneIds);
+  const missing = (c.missing || []).concat(r.missing);
+  if(r.ambiguous){
+    return { kind:'ask', word:r.ambiguous.word, matches:r.ambiguous.matches,
+      doneIds: r.matched.map(m => m.id), rest: r.rest, missing };
+  }
+  if(!r.matched.length) return { kind:'none', items:[], missing };
+  return { kind:'go', items: r.matched, missing };
 }
