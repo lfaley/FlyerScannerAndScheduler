@@ -1684,6 +1684,84 @@ module.exports = async function runModuleTests(test){
       'runReviewAsk still reads only the DOM node, so a re-render loses the question');
   });
 
+  test('a topic word only counts as a whole word (v9.96)', () => {
+    // Bare substrings sent 21 measured out-of-scope questions to the calendar
+    // prompt at 0.95 confidence with autoRun. Each pair below is the SAME topic
+    // word: once buried in an unrelated word, once standing on its own. Both
+    // halves matter -- a fix that just stopped matching would pass the first.
+    const pairs = [
+      ['What is a starling?',           'how many stars has Olivia got?'],
+      ['what is a listicle?',           'what is on my shopping list?'],
+      ['What is a gamete?',             'who won the game last night'],
+      ['What is a formality?',          'is the form due yet?'],
+      ['What is a slipknot?',           'is the slip due tomorrow?'],
+      ['What is a misspelling?',        'what have I missed?'],
+      ['What is a rewarding career?',   'what reward can Olivia get?'],
+      ['What is an itemized deduction?','what item is on the list?'],
+    ];
+    pairs.forEach(([buried, standalone]) => {
+      assert.strictEqual(rt16.mentionsAppTopic(buried.toLowerCase(), []), false,
+        'a buried substring still counts as a topic: ' + buried);
+      assert.strictEqual(rt16.mentionsAppTopic(standalone.toLowerCase(), []), true,
+        'a real topic word stopped counting: ' + standalone);
+    });
+  });
+
+  test("a person's name only counts as a whole word (v9.96)", () => {
+    // A three-letter name was the hole the length>2 floor did not cover: "Art"
+    // pulled artificial, Bart, Arthur and "state of the art" into scope.
+    // NOT "the state of the art": that really does contain the standalone word
+    // "art", so a person called Art legitimately matches it. A whole-word rule
+    // cannot tell those apart, and pretending otherwise would be a wrong test.
+    ['what is artificial intelligence', 'who is bart simpson', 'is arthur a good name']
+      .forEach(q => assert.strictEqual(rt16.mentionsAppTopic(q, ['Art']), false,
+        'a name matched inside another word: ' + q));
+    assert.strictEqual(rt16.mentionsAppTopic('what has art got on', ['Art']), true,
+      'the name stopped matching when it is genuinely used');
+    // A name is user data, so it reaches the regex as data, not as a pattern.
+    assert.doesNotThrow(() => rt16.mentionsAppTopic('anything', ['C++', '(', '[a-z]']),
+      'a name with regex characters in it throws');
+    assert.strictEqual(rt16.mentionsAppTopic('what is on the c++ list', ['C++']), true,
+      'a name with regex characters no longer matches itself');
+  });
+
+  test('a question-shaped request to CHANGE something never takes the fast path (v9.96)', () => {
+    // Every verb below was measured short-circuiting a write to a read answer
+    // at 0.95 confidence with autoRun before it was added to the guard.
+    const opts = { names: ['Costco', 'Olivia', 'Milo'] };
+    ['can you cancel the dentist appointment?',
+     'will you postpone the recital?',
+     'can you bump the appointment to Friday?',
+     'can you push back the recital?',
+     'can you swap the Tuesday and Wednesday chores?',
+     'can you assign the bins to Olivia?',
+     'can you drop the recital?',
+     'can you skip the chore tonight?',
+     'can you archive the shopping list?',
+     'can you empty the shopping list?',
+     'can you snooze the deadline?',
+     'can you shift the recital to Friday?',
+     'can you scrap the shopping list?',
+     'can you reassign the chore to Milo?',
+     'can you unassign the chore?',
+    ].forEach(q => assert.strictEqual(rt16.quickRoute(q, opts), null,
+      'a write took the read-only fast path: ' + q));
+  });
+
+  test('asking whether something WAS cancelled is still a question (v9.96)', () => {
+    // The past participle is descriptive, not imperative. "Was the recital
+    // cancelled?" is a pinned bench case (js/bench-cases.js) expecting
+    // ask_schedule, and a naive `cancel` in the verb list would have broken it.
+    const opts = { names: ['Costco', 'Olivia'] };
+    [['was the recital cancelled?', 'cancelled'],
+     ['is the recital postponed?', 'postponed'],
+     ['who is assigned to the chore?', 'assigned']].forEach(([q, word]) => {
+      const r = rt16.quickRoute(q, opts);
+      assert.ok(r && r.consequence === 'answer',
+        '"' + word + '" is being read as a change verb: ' + q + ' -> ' + JSON.stringify(r));
+    });
+  });
+
   test('the automatic email pass is never triggered from a render function (v9.92)', () => {
     // renderReview is called DIRECTLY by tests, and a fire-and-forget async call
     // started from a render would settle after the test that triggered it and

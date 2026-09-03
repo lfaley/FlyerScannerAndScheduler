@@ -215,23 +215,40 @@ export function describeIntent(route, resolved){
  */
 // What this app is actually about. A question that touches none of it is not
 // a question this app can answer, whatever shape it has.
-const TOPIC = new RegExp([
-  'event','calendar','schedule','diary','appointment','practice','rehearsal','game','recital',
-  'chore','star','routine','reward',
-  'list','lists','shopping','grocer|groceries','costco','item',
-  'due|deadline|overdue|form|slip|signup|sign.?up|permission',
-  'clash|overlap|conflict|miss(ed|ing)?|behind|needs? doing',
+// WORD-BOUNDED, and that is the whole point. Until v9.96 these were bare
+// substrings, so 'star' matched "starling", 'list' matched "listicle", 'game'
+// matched "gamete" and 'form' matched "formality" -- 21 such false positives
+// were measured. Each one sent an out-of-scope question to the calendar prompt
+// at 0.95 confidence with autoRun, instead of letting the app refuse and say so.
+// The non-capturing wrapper anchors whichever alternative matches: "starling"
+// gets \b before 'star' but not after it, so it no longer counts.
+const TOPIC = new RegExp('\\b(?:' + [
+  // The `s?` suffixes are not decoration: word boundaries mean 'star' no longer
+  // matches "stars", and "how many stars has Olivia got?" is exactly the kind of
+  // question this gate exists to let through. Caught by pairing every buried
+  // substring in the test with the same word standing on its own.
+  'events?','calendars?','schedules?','diary','diaries','appointments?','practices?',
+  'rehearsals?','games?','recitals?',
+  'chores?','stars?','routines?','rewards?',
+  'lists?','shopping','grocer|groceries','costco','items?',
+  'due|deadlines?|overdue|forms?|slips?|signups?|sign.?ups?|permissions?',
+  'clash(?:es)?|overlaps?|conflicts?|miss(?:ed|ing)?|behind|needs? doing',
   'today|tomorrow|tonight|this week|next week|this weekend|next weekend|this month|next month',
   'coming up|on my plate|going on|what.s on',
-].join('|'), 'i');
+].join('|') + ')\\b', 'i');
 
 /** Does the sentence touch anything this app holds? Names count as topics. */
 export function mentionsAppTopic(low, names){
   if(TOPIC.test(low)) return true;
   for(const n of (names || [])){
     const t = String(n || '').trim().toLowerCase();
-    // Two characters or fewer would match inside other words.
-    if(t.length > 2 && low.includes(t)) return true;
+    // Two characters or fewer would match inside other words -- and so do three,
+    // which the old substring test missed: a child called "Art" pulled
+    // "artificial", "Bart", "Arthur" and "state of the art" into scope. Word
+    // boundaries, not length, are what actually decides this. Escaped, because a
+    // list really can be called "C++" and a bare name in a regex is an injection.
+    if(t.length > 2 &&
+       new RegExp('\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(low)) return true;
   }
   return false;
 }
@@ -245,7 +262,11 @@ export function quickRoute(text, opts){
   // model, so the safety checks in validateRoute still apply to it.
   // v9.14 widened this. Anything that could change data must reach the model
   // router, so validateRoute's checks and the confirm step still apply to it.
-  if(/\b(add|put|create|make|start|remove|delete|del|get rid|clear|set|schedule|book|open|go to|take me|tick|check off|cross off|mark|done|finish|finished|did|move|reschedule|rename|change|update|edit)\b/.test(low)) return null;
+  // v9.96 added 17 more, every one measured as short-circuiting a WRITE to a
+  // read answer before it was added. The past participles are deliberately NOT
+  // here: "was the recital cancelled?" and "is the recital postponed?" are
+  // genuine questions, and one of them is a pinned bench case.
+  if(/\b(add|put|create|make|start|remove|delete|del|get rid|clear|set|schedule|book|open|go to|take me|tick|check off|cross off|mark|done|finish|finished|did|move|reschedule|rename|change|update|edit|cancel|cancels|cancelling|canceling|postpone|postpones|bump|swap|assign|reassign|unassign|drop|skip|shift|snooze|scrap|empty|archive|push)\b/.test(low)) return null;
 
   // "whats on the list" has no apostrophe and no question mark, and is still
   // obviously a question. The optional 's covers what's/whats/wheres.

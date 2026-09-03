@@ -5574,6 +5574,97 @@ test('P5-C: "which one did you mean?" is never asked with nothing to offer', asy
     'it does not say the true thing instead: ' + r.answer);
 });
 
+// ---------------------------------------------------------------------------
+// A4 (v9.95): answering "which one did you mean?" must actually do the thing.
+// askWhich carries an `extra` payload into confirmPendingAction; three paths
+// omitted it. SYNCHRONOUS assertions on shared state -- performRoute's ambiguous
+// branches return without awaiting, and an async test here would race every
+// test declared after it (see DELETE-HONESTY-PLAN section 15).
+// ---------------------------------------------------------------------------
+function twoEvents(){
+  boot(GOOD);
+  S.events = [
+    { id:'x1', title:'Spring Recital', date:dayAhead(5), kind:'event', deleted:false, time:'' },
+    { id:'x2', title:'Winter Recital', date:dayAhead(9), kind:'event', deleted:false, time:'' },
+  ];
+  pendingAction = null;
+}
+
+test('editing an ambiguous event actually edits it once you choose (v9.95)', () => {
+  // THE BUG: pa.changes was undefined on this path, so Object.assign(target,{})
+  // wrote nothing while the toast said 'Updated "Winter Recital"'.
+  twoEvents();
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'edit_event',
+    params:{ event:'recital', date: dayAhead(12) } });
+  assert.ok(pendingAction, 'no disambiguation was offered');
+  assert.deepStrictEqual(pendingAction.editParams && pendingAction.editParams.date, dayAhead(12),
+    'the edit was not carried through the question');
+  confirmPendingAction('x2');
+  assert.strictEqual(S.events.find(e => e.id === 'x2').date, dayAhead(12),
+    'the chosen event was not changed');
+  assert.strictEqual(S.events.find(e => e.id === 'x1').date, dayAhead(5),
+    'the OTHER event was changed');
+  return p.then(() => {});
+});
+
+test('choosing an event with nothing to change says so instead of "Updated" (v9.95)', () => {
+  twoEvents();
+  const same = S.events[1].date;
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'edit_event',
+    params:{ event:'recital', date: same } });
+  assert.ok(pendingAction, 'no disambiguation was offered');
+  const said = [];
+  const real = toast;
+  toast = (m) => said.push(m);
+  try { confirmPendingAction('x2'); } finally { toast = real; }
+  assert.ok(!said.some(m => /^Updated/.test(m)),
+    'it still claims it updated something: ' + JSON.stringify(said));
+  assert.ok(said.some(m => /Nothing to change/.test(m)), JSON.stringify(said));
+  return p.then(() => {});
+});
+
+test('ticking off on an ambiguous NAMED list works once you choose (v9.95)', () => {
+  // The v9.73 fix covered the no-list-named branch; this one names a list whose
+  // name matches two, and was left behind -- "Ticked off 0 items".
+  boot(GOOD);
+  S.lists = [{ id:'L1', name:'Costco Food', deleted:false },
+             { id:'L2', name:'Costco Home', deleted:false }];
+  S.listItems = [{ id:'i1', listId:'L1', text:'milk', checked:false, deleted:false },
+                 { id:'i2', listId:'L2', text:'milk', checked:false, deleted:false }];
+  pendingAction = null;
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'check_list_item',
+    params:{ list:'Costco', items:['milk'] } });
+  assert.ok(pendingAction, 'no disambiguation was offered');
+  assert.deepStrictEqual(pendingAction.pendingItems, ['milk'],
+    'the item names were not carried through the question');
+  confirmPendingAction('L2');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i2').checked, true, 'the chosen list was not ticked');
+  assert.strictEqual(S.listItems.find(i => i.id === 'i1').checked, false, 'the other list was ticked');
+  return p.then(() => {});
+});
+
+test('the person you named survives an ambiguous chore (v9.95)', () => {
+  // Not a silent no-op -- a fallback chain credits the chore's own assignee --
+  // so the defect is that the stars go to the WRONG child, confidently.
+  boot(GOOD);
+  S.kids = [{ id:'k1', name:'Olivia', color:'#7C3AED', deleted:false },
+            { id:'k2', name:'Milo', color:'#B45309', deleted:false }];
+  S.chores = [{ id:'c1', title:'Bins Monday', kidId:'k2', stars:5, deleted:false },
+              { id:'c2', title:'Bins Friday', kidId:'k2', stars:5, deleted:false }];
+  S.completions = [];
+  pendingAction = null;
+  const p = performRoute({ consequence: CONSEQUENCE.CONFIRM, intent:'complete_chore',
+    params:{ chore:'bins', person:'Olivia' } });
+  assert.ok(pendingAction, 'no disambiguation was offered');
+  assert.strictEqual(pendingAction.kidId, 'k1', 'the named person was not carried through');
+  confirmPendingAction('c1');
+  const done = S.completions.filter(c => c.choreId === 'c1');
+  assert.strictEqual(done.length, 1, 'the chore was not completed');
+  assert.strictEqual(done[0].kidId, 'k1',
+    'the stars went to the chore\'s default assignee instead of the person named');
+  return p.then(() => {});
+});
+
 test('P5-C2: choosing the list from the prompt actually ticks the items off', async () => {
   // askWhich stored { route, target, collection } and nothing else, while
   // confirmPendingAction read pa.itemIds -- so answering the question did
