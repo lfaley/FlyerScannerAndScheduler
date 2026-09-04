@@ -1196,7 +1196,7 @@ damage is not a guard*, and only mutation testing revealed the difference.
 `mealPlanDiagnostic()` now reads `MEALPLAN_KEY` instead of a raw
 `'mealplan-out'` literal (`index.html:9381`). **One word**, no behaviour change —
 applied because a guard for that class cannot exist while the violation does.
-Everything else remains listed, not fixed.
+Everything else remains listed, not fixed. **(Out of date — see the verification sweep at the end of this file, 3 Sep 2026: all six CONFIRMED findings are now fixed and guarded.)**
 
 ### Rules added to `CLAUDE.md` (25–28)
 
@@ -1346,3 +1346,80 @@ first drafts, on a codebase whose own conventions file already had a rule about
 reading prose instead of code. The method is not "be careful". It is: point the
 instrument at a known answer before believing anything else it says.
 
+
+---
+
+## Verification sweep — 3 Sep 2026, against v10.3
+
+This document said *"Everything else remains listed, not fixed"* (line 1199) and
+carried "Not fixed" on individual rows. **That is out of date.** Every CONFIRMED
+finding in the P5 follow-up and the second verification pass was re-checked
+against the shipped code by five parallel agents. All five are **FIXED**, each
+with a regression test that fails if the fix is removed.
+
+| Finding | Status | The line that fixes it | Guarded by |
+|---|---|---|---|
+| `dismissOneEmail` — dismissal never recorded | **FIXED** | `index.html:8440` writes `seenMsgs`, `save()` at 8441 | `tests-cases.js:4677` |
+| `checkEmail` — stale "N waiting" after an empty check | **FIXED v9.64** | `index.html:8183` sets `pendingEmailCount = 0` before `save()` | `tests-cases.js:4694` |
+| `extractFromEmailPayload` — progress note filed as a failure | **FIXED** | `index.html:8269` a separate `notes` array; only real exceptions reach `problems` | `tests-cases.js:4889` |
+| `callAI` — fallback toast/log emitted before Anthropic answers | **FIXED v9.67** | `index.html:5018-5045` — `await callClaude` first, log and toast after | `tests-cases.js:4896` + `tests-modules.js:4374` |
+| `addKid` — colour by live count, collides after a delete | **FIXED** | `index.html:12948` picks the first palette colour no LIVE person holds | `tests-cases.js:4705` |
+| `citedEvents` — `\d{1,2}` capped citations at 99 | **FIXED** | `index.html:1822` now `\d{1,3}` | — |
+
+The `addKid` fix was re-proved by execution rather than by reading, on the
+finding's own sequence:
+
+```
+CURRENT  (first unused colour)   Ana=#7C3AED  Cy=#B45309  Dee=#0E7490   collision: no
+OLD form (live-count index)      Ana=#7C3AED  Cy=#B45309  Dee=#B45309   collision: YES
+```
+
+### One live item the sweep turned up
+
+`dismissEmailTrouble()` (`index.html:8422`) — the ✕ and the "Dismiss" button on
+the whole trouble box — clears `lastEmailProblems` and `emailReviews` and writes
+**nothing** to `seenMsgs`. It is the same shape as the `dismissOneEmail` defect
+that was deliberately fixed, at batch scale: the same emails return on the next
+watcher check.
+
+The table at line 942 records this as "session only" but does not say why the
+batch path should differ from the single-row path beside it.
+
+**What it actually costs, measured rather than asserted.** `autoReviewEmailTrouble`
+(`index.html:8606`) gates on `aiProvider() !== 'local' || !gordonSignedInEmail()`,
+so the automatic re-read runs on Gordon's own compute, not on paid Anthropic.
+The exception is the one EMAIL-AUTOREAD-PLAN §0 point 2 documents: a PDF
+attachment throws `UNSUPPORTED_BLOCK:document` on the local model and falls
+through to paid Anthropic. So the repeat cost is Gordon's time in general, and
+real Anthropic spend for any dismissed email carrying a PDF — every check,
+indefinitely.
+
+**~~Needs a ruling~~ — RULED AND BUILT, v10.4.** The two controls were doing the
+same thing, and they are not the same act. They are now separate:
+
+- **✕ → `closeEmailTrouble()`** — puts the panel away, records nothing. An ✕ in
+  a corner means "close this", everywhere, and it should not decide anything.
+- **"Dismiss these N" → `dismissAllEmailTrouble()`** — the batch form of the
+  per-row "Dismiss this", and it means the same thing. It writes every distinct
+  `msgId` to `seenMsgs`, so the watcher stops offering them.
+
+The button now names its own scope ("Dismiss these 3"), because a button that
+records a decision should say how big the decision is.
+
+Two details the tests pin, both about not overstating what happened:
+
+- The count is of **emails, not rows**. Two failure rows from one message are
+  one dismissal.
+- A row with **no `msgId`** cannot be recorded, so it is not counted and the
+  toast says "Cleared" rather than "they will not come back" — that sentence
+  would be false about the one coming back tomorrow.
+
+Suppression is as permanent as a delete (rule 26), so it has a way back at both
+timescales: an Undo in the toast for the mis-tap caught at once, and
+Settings → "Forget imported emails" for the one noticed later.
+
+**Seven mutations, all RED.** Two of them exposed weak assertions of mine first:
+deleting the write left the word `seenMsgs` behind in `const before = …` and in
+the Undo, so a loose `/seenMsgs/` guard passed on a function that recorded
+nothing; and the undo test passed vacuously, because "put it back" and "never
+wrote" look identical afterwards. Both now assert the write itself.

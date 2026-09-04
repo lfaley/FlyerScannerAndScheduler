@@ -5232,4 +5232,28 @@ module.exports = async function runModuleTests(test){
     assert.ok(/return;/.test(fn), 'it does not stop -- it carries on and writes something');
   });
 
+  test('the email box: closing it and dismissing it are wired apart (v10.4)', () => {
+    // The whole defect was ONE function serving both controls, so a guard that
+    // only read the functions would pass with the buttons still crossed. This
+    // reads the markup: which handler each control actually calls.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const x = html.match(/<button class="linkbtn" aria-label="Close this box" onclick="([^"]+)"/);
+    assert.ok(x, 'the X button is gone or renamed');
+    assert.strictEqual(x[1], 'closeEmailTrouble()', 'the X now makes a decision');
+    assert.ok(/onclick="dismissAllEmailTrouble\(\)">Dismiss /.test(html),
+      'the Dismiss button no longer records anything');
+    assert.ok(!/dismissEmailTrouble\(/.test(html),
+      'the old do-both function is still reachable: '
+      + (html.match(/dismissEmailTrouble\([^)]*\)/g) || []).join(' '));
+    // ...and only the deciding one writes the record.
+    const code = codeOf(html.split('function dismissAllEmailTrouble(')[1].split('\nfunction ')[0]);
+    const shut = codeOf(html.split('function closeEmailTrouble(')[1].split('\nfunction ')[0]);
+    // MEASURED: `/seenMsgs/` alone is not enough. Deleting the write leaves the
+    // word behind in `const before = ...` and in the Undo, so the loose test
+    // passed on a function that recorded nothing. Assert the ADD.
+    assert.ok(/seenMsgs\s*=\s*\[\.\.\.new Set\(before\.concat\(ids\)\)\]/.test(code),
+      'the deciding control no longer adds the dismissed ids to the record');
+    assert.ok(!/seenMsgs/.test(shut), 'closing the panel touches the record at all');
+  });
+
 };

@@ -6270,6 +6270,77 @@ function schoolFolder(){
 }
 const inFolder = (id) => S.notes.filter(n => n.folderId === id && !n.deleted).map(n => n.title).sort();
 
+// ---------------------------------------------------------------------------
+// The email trouble box: closing it and dismissing it are different acts
+// (v10.4). Both ran the same session-only function, so the button that reads as
+// a decision recorded nothing and the watcher offered the same emails on every
+// check -- the exact defect dismissOneEmail was fixed for on 28 Aug, left in
+// place at batch scale. Re-reading them runs on Gordon, but an email carrying a
+// PDF falls through to paid Anthropic every time (EMAIL-AUTOREAD-PLAN s0).
+// ---------------------------------------------------------------------------
+function troubleBox(){
+  boot(GOOD);
+  S.settings.seenMsgs = ['old-1'];
+  lastEmailProblems = [
+    { subject:'Field trip', reason:'no dates found', msgId:'m1', retriable:false },
+    { subject:'Book fair',  reason:'no dates found', msgId:'m2', retriable:false },
+    { subject:'Picture day', reason:'no dates found', msgId:'m2', retriable:false }, // same email, two rows
+  ];
+  emailReviews = { m1:{ gist:'x' } };
+  pendingEvents = [];
+}
+
+test('the X closes the box and decides nothing (v10.4)', () => {
+  troubleBox();
+  closeEmailTrouble();
+  assert.deepStrictEqual(lastEmailProblems, [], 'the box did not close');
+  assert.deepStrictEqual(S.settings.seenMsgs, ['old-1'],
+    'closing a panel recorded a decision the user did not make');
+});
+
+test('"Dismiss these" records them, so they stop coming back (v10.4)', () => {
+  troubleBox();
+  const seen = withToast(() => dismissAllEmailTrouble());
+  assert.deepStrictEqual(S.settings.seenMsgs.sort(), ['m1', 'm2', 'old-1'],
+    'the dismissed emails were not recorded: ' + JSON.stringify(S.settings.seenMsgs));
+  assert.deepStrictEqual(lastEmailProblems, [], 'the box did not close');
+  // Two rows, one email -- the count is of EMAILS, which is what "they will not
+  // come back" is a promise about.
+  assert.ok(/Dismissed 2 emails/.test(seen[0].msg), 'wrong count: ' + seen[0].msg);
+});
+
+test('dismissing them can be undone (v10.4)', () => {
+  // A suppression is as permanent as a delete (rule 26), so it needs a route
+  // back. Settings -> "Forget imported emails" covers the one noticed later;
+  // this covers the mis-tap noticed at once.
+  troubleBox();
+  const seen = withToast(() => dismissAllEmailTrouble());
+  assert.ok(seen[0].action, 'no Undo was offered');
+  // A CONTROL FIRST. Without it this test passes on a version that records
+  // nothing, because "put it back" and "never wrote" look identical afterwards
+  // -- measured, by deleting the write.
+  assert.deepStrictEqual(S.settings.seenMsgs.sort(), ['m1', 'm2', 'old-1'],
+    'nothing was recorded, so there is nothing for Undo to undo');
+  withToast(() => seen[0].action.fn());
+  assert.deepStrictEqual(S.settings.seenMsgs, ['old-1'],
+    'Undo did not put the record back as it was');
+});
+
+test('a row with no message id is not counted as dismissed (v10.4)', () => {
+  // It cannot be recorded, so it WILL be back. Counting it would make the
+  // sentence "they will not come back" false about one of them.
+  boot(GOOD);
+  S.settings.seenMsgs = [];
+  lastEmailProblems = [{ subject:'No id here', reason:'x', retriable:false }];
+  emailReviews = {};
+  pendingEvents = [];
+  const seen = withToast(() => dismissAllEmailTrouble());
+  assert.deepStrictEqual(S.settings.seenMsgs, [], 'it recorded an id it does not have');
+  assert.ok(/Cleared/.test(seen[0].msg) && !/will not come back/.test(seen[0].msg),
+    'it promised something it cannot deliver: ' + seen[0].msg);
+  assert.ok(!seen[0].action, 'an Undo was offered for a tap that recorded nothing');
+});
+
 test('a deleted note folder waits in Recently Deleted like everything else (v10.3)', () => {
   schoolFolder();
   withToast(() => delNoteGroup('noteFolders', 'f1'));

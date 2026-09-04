@@ -386,7 +386,7 @@ gets `Cannot find module 'playwright'` from those two tools and nothing else.
 `npm test`, `npm run audit` and `npm run preview` are aliases for the three
 commands below.
 
-- `node tests.js` — 903 tests: data safety, migrations, inline-handler
+- `node tests.js` — 908 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.

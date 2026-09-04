@@ -4915,7 +4915,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.3';
+const APP_VERSION = 'v10.4';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -8419,11 +8419,60 @@ async function openEmailReview(fresh){
 // The "couldn't be read" box is a notification the user must be able to clear.
 // If nothing else is left to review, leave the (now empty) review screen too,
 // rather than stranding them on "Found 0 items".
-function dismissEmailTrouble(){
+/**
+ * Close the box. THIS ONE DOES NOT DECIDE ANYTHING (v10.4).
+ *
+ * The ✕ in a panel's corner means "put this away", everywhere. It leaves no
+ * record, so the same emails come back on the next check -- which is the right
+ * answer for a control that only ever claimed to close a panel.
+ */
+function closeEmailTrouble(){
   lastEmailProblems = [];
   emailReviews = {};
   if(!pendingEvents.length){ nav('events'); return; }
   render();
+}
+
+/**
+ * "Dismiss these" — the batch form of the per-row "Dismiss this", and it means
+ * the same thing: I have dealt with them, stop offering them.
+ *
+ * Until v10.4 both this and the ✕ ran the same session-only function, so the
+ * button that reads as a decision recorded nothing and the watcher offered the
+ * same emails on every check. That is the defect dismissOneEmail was fixed for
+ * (28 Aug), left in place at batch scale.
+ *
+ * It costs more than a repeated screen. autoReviewEmailTrouble re-reads them
+ * unasked; that runs on Gordon, so usually it is only his time -- but an email
+ * carrying a PDF throws UNSUPPORTED_BLOCK:document on the local model and falls
+ * through to paid Anthropic (EMAIL-AUTOREAD-PLAN section 0), every check,
+ * indefinitely.
+ *
+ * Suppression needs a way back (rule 26): the toast carries an Undo for the
+ * mistake caught at once, and Settings → "Forget imported emails" clears the
+ * whole record for the one noticed later.
+ */
+function dismissAllEmailTrouble(){
+  const ids = [...new Set(lastEmailProblems.map(p => p && p.msgId).filter(Boolean))];
+  const before = (S.settings.seenMsgs || []).slice();
+  lastEmailProblems = [];
+  emailReviews = {};
+  if(ids.length){
+    S.settings.seenMsgs = [...new Set(before.concat(ids))].slice(-400);
+    save();
+  }
+  if(!pendingEvents.length) nav('events'); else render();
+  // An email with no id cannot be recorded, so it is not counted as dismissed.
+  // Saying "3" when one of them will be back tomorrow is the lie this whole
+  // change is about.
+  toast(ids.length
+      ? 'Dismissed ' + ids.length + ' email' + (ids.length === 1 ? '' : 's') + ' — they will not come back'
+      : 'Cleared',
+    ids.length ? { label:'Undo', fn:() => {
+      S.settings.seenMsgs = before;
+      save(); render();
+      toast('They can come back');
+    }} : null);
 }
 
 // Clear ONE email from the trouble list (act-on-a-single-brief). The rest stay so the
@@ -9628,7 +9677,7 @@ function renderReview(m){
             if(nRead) return `${ico('mail')}${nRead} of ${nAll} read — here’s what they say`;
             return `${ico('alert')}${nAll} email${nAll===1?'':'s'} couldn’t be read`;
           })()}</div>
-        <button class="linkbtn" aria-label="Dismiss" onclick="dismissEmailTrouble()">${ico('x')}</button>
+        <button class="linkbtn" aria-label="Close this box" onclick="closeEmailTrouble()">${ico('x')}</button>
       </div>
       ${emailAutoStop ? `<div class="meta" style="font-size:var(--t-cap);margin-top:4px;color:var(--amber)">${
           // One name for the model throughout (Gordon, never "your local
@@ -9662,7 +9711,7 @@ function renderReview(m){
           ? `<button class="btn sm" ${emailReviewBusy?'disabled':''} onclick="reviewEmailTrouble()">${emailReviewBusy ? 'Reviewing…' : (Object.keys(emailReviews).length ? esc(reviewRestLabel()) : `${ico('sparkles')}${esc(reviewRestLabel())}`)}</button>`
           : ''}
         ${nRetry ? `<button class="btn sm" onclick="retryEmailTrouble()">Try ${nRetry===probs.length?'':nRetry+' '}again</button>` : ''}
-        <button class="btn alt sm" style="width:auto" onclick="dismissEmailTrouble()">Dismiss</button>
+        <button class="btn alt sm" style="width:auto" onclick="dismissAllEmailTrouble()">Dismiss ${probs.length === 1 ? 'this' : 'these ' + probs.length}</button>
       </div>
       <div class="help" style="font-size:11px;margin-top:6px">${Object.keys(emailReviews).length ? `${esc(aiName())} skims each email so you can see what it was — act, keep, or bin it. ` : ''}Also saved in your Problem Log (Settings → Diagnostics).</div>
     </div>`;
@@ -13323,10 +13372,12 @@ Object.assign(window, {
   clearAllProblems,
   clearResolvedProblems,
   closeChoreForm,
+  closeEmailTrouble,
   closeLinkSheet,
   closeRecipeForm,
   delKid,
   deleteSelectedProblems,
+  dismissAllEmailTrouble,
   dismissGroup,
   dismissPendingEmail,
   downloadQuarantine,
