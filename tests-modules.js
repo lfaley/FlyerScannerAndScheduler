@@ -2926,7 +2926,13 @@ module.exports = async function runModuleTests(test){
     // failed -- only the two with no answer are. (This is the "74 failed" fix:
     // before, a fell-back call inflated the failure count on the menu.)
     assert.strictEqual(s.failed, 2);
-    assert.strictEqual(s.failureRate, 1 / 3);
+    // 2 failures over 5 OPERATIONS, not 6 rows (v10.6). The rescued call logs
+    // two rows for one thing the user asked for, and dividing an
+    // operation-count by a row-count understated the rate. Measured before the
+    // fix: 0.0769 against a true 0.0833 on a realistic log.
+    assert.strictEqual(s.operations, 5, 'six rows, one of them a rescue, is five operations');
+    assert.strictEqual(s.failureRate, 2 / 5);
+    assert.notStrictEqual(s.failureRate, 2 / 6, 'still dividing by log rows');
     assert.strictEqual(s.medianMs, 200, 'median ignores failed calls, which have no honest duration');
     assert.strictEqual(s.slowestMs, 300);
     assert.deepStrictEqual(s.byErrorType, { network:2, auth:1 });
@@ -2938,7 +2944,13 @@ module.exports = async function runModuleTests(test){
   test('an empty log summarises to zeros rather than NaN', () => {
     const s = ailog.summarize([]);
     assert.strictEqual(s.calls, 0);
+    assert.strictEqual(s.operations, 0);
     assert.strictEqual(s.failureRate, 0);
+    // A log of nothing but rescue rows would divide by zero. It cannot happen
+    // in practice -- the Anthropic row is written first -- but a summary that
+    // returns NaN is worse than one that returns 0.
+    const onlyRescues = ailog.summarize([ailog.makeEntry({ op:'a', ok:false, fellBackTo:'anthropic' })]);
+    assert.strictEqual(onlyRescues.failureRate, 0, 'divided by zero operations');
     assert.strictEqual(s.medianMs, null);
     assert.deepStrictEqual(ailog.summarize(null).byErrorType, {});
   });

@@ -215,18 +215,39 @@ export function summarize(log){
   const trueFail = bad.filter(r => !r.fellBackTo);
   const byType = {};
   bad.forEach(r => { byType[r.errorType || 'unknown'] = (byType[r.errorType || 'unknown'] || 0) + 1; });
+  const fellBack = rows.filter(r => r.fellBackTo).length;
   const times = ok.map(r => r.ms).filter(n => typeof n === 'number').sort((a, b) => a - b);
   const median = times.length ? times[Math.floor(times.length / 2)] : null;
   const slowest = times.length ? times[times.length - 1] : null;
+  // OPERATIONS, NOT ROWS, IN THE DENOMINATOR (v10.6).
+  //
+  // A rescued operation logs TWO rows -- the local attempt that failed with
+  // `fellBackTo`, and the Anthropic call that answered -- for one thing the
+  // user asked for. `failed` already counts operations (a fell-back row is
+  // excluded), so dividing it by rows mixed two units and quietly understated
+  // the rate. Measured: 12 operations, one of them rescued, one failed outright
+  // -> 0.0769 reported against a true 0.0833, understated by 7.7%. The error
+  // scales with how often the desktop is asleep, so it is worst exactly when
+  // someone is looking at this number to find out why.
+  //
+  // `calls` still counts ROWS, because two API calls really were made and that
+  // is what the word says. `operations` is the new one, and it is what the rate
+  // divides by.
+  //
+  // Only a SUCCESSFUL fallback carries `fellBackTo` (callAI sets it after the
+  // Anthropic call resolves), so a fallback that also failed logs two plain
+  // failures and is not double-counted here.
+  const operations = rows.length - fellBack;
   return {
     calls: rows.length,
+    operations,
     ok: ok.length,
     failed: trueFail.length,
-    failureRate: rows.length ? trueFail.length / rows.length : 0,
+    failureRate: operations > 0 ? trueFail.length / operations : 0,
     medianMs: median,
     slowestMs: slowest,
     byErrorType: byType,
-    fellBack: rows.filter(r => r.fellBackTo).length,
+    fellBack,
     inTokens: ok.reduce((n, r) => n + (r.inTokens || 0), 0),
     outTokens: ok.reduce((n, r) => n + (r.outTokens || 0), 0),
   };
