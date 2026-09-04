@@ -94,12 +94,111 @@ No code. This is the confirmed version of SECURITY-PLAN.md's separate-key idea. 
 > costs about **1.4¢** (≈2,430 input + 465 output tokens at $3/$15 per million),
 > so even $5/month is ~350 fallback pages.
 
-1. Open the Anthropic Console workspaces page: `https://console.anthropic.com/settings/workspaces`
-2. **Create workspace** (top-right) → name it e.g. `flyersnap-phone`. ✅ It appears in the workspace list.
-3. Open the new workspace → **Spend limits** tab → set a low **monthly** cap (e.g. \$10–20 — enough for a family's flyer reads, small enough that a lost phone can't run up a bill). Optionally set an alert threshold. ✅ The cap shows on the workspace.
-4. Still in that workspace → **API keys** → **Create key** → name it `flyersnap-phone-key`, copy it once. ✅ Key created, scoped to this workspace only (it cannot spend against any other workspace).
-5. In FlyerSnap → Settings → **Gordon and AI** → paste this key over the existing one → Save. ✅ "A key is saved on this device."
-6. Delete/retire whatever broader key was on the phone before, from the Console.
+> **RE-RESEARCHED 4 Sep 2026.** The steps below were rewritten against current
+> first-party docs. Three things had changed or were wrong in the earlier draft:
+>
+> - **The console has moved.** `console.anthropic.com/settings/workspaces` came
+>   from the launch blog; current docs give
+>   `https://platform.claude.com/settings/workspaces`.
+>   ([support.claude.com/en/articles/9796807](https://support.claude.com/en/articles/9796807-creating-and-managing-workspaces-in-the-claude-console))
+> - **The Default workspace cannot take a spend limit.** "You cannot set limits
+>   on the Default Workspace"
+>   ([platform.claude.com/docs/en/manage-claude/workspaces](https://platform.claude.com/docs/en/manage-claude/workspaces)).
+>   A named workspace has to be created first — this is the step that would have
+>   derailed the old instructions.
+> - **The tab is called "Limits", not "Spend limits"**, and the button inside it
+>   is "Change Limit".
+>   ([support.claude.com/en/articles/9796807](https://support.claude.com/en/articles/9796807-creating-and-managing-workspaces-in-the-claude-console))
+>
+> Labels below are **as documented, not as observed** — the Anthropic→Claude
+> rebrand is visibly mid-flight and the support article may lag the live UI.
+> Where a label differs, the step says what to look for rather than insisting on
+> exact text.
+
+### Facts this rests on, each with its source
+
+| Claim | Source |
+|---|---|
+| Monthly spend limits can be set per workspace | [claude.com/blog/workspaces](https://claude.com/blog/workspaces) |
+| Monthly only — no daily workspace limit is documented | [platform.claude.com/docs/en/manage-claude/workspaces](https://platform.claude.com/docs/en/manage-claude/workspaces) |
+| A workspace limit must be **lower** than the organisation limit | [support.claude.com/en/articles/9796807](https://support.claude.com/en/articles/9796807-creating-and-managing-workspaces-in-the-claude-console) |
+| Hitting the limit returns **HTTP 400** (`invalid_request_error`) | [platform.claude.com/docs/en/api/errors](https://platform.claude.com/docs/en/api/errors) |
+| Keys are tied to the workspace they are created in and **cannot be moved** | [support.claude.com/en/articles/9796807](https://support.claude.com/en/articles/9796807-creating-and-managing-workspaces-in-the-claude-console) |
+| Only Organisation Admins can create workspaces | [support.claude.com/en/articles/9796807](https://support.claude.com/en/articles/9796807-creating-and-managing-workspaces-in-the-claude-console) |
+| Disable and Delete are separate actions on a key | [support.claude.com/en/articles/9796807](https://support.claude.com/en/articles/9796807-creating-and-managing-workspaces-in-the-claude-console) |
+| Rotate keys on a schedule, e.g. every 90 days | [support.claude.com/en/articles/9767949](https://support.claude.com/en/articles/9767949-api-key-best-practices-keeping-your-keys-safe-and-secure) |
+
+### Not established — recorded rather than assumed
+
+- **How quickly a deleted key stops working.** No primary source states it. The
+  errors reference confirms a revoked key returns 401, but not *when*. Do not
+  promise "immediately"; verify by trying a scan.
+- **Whether a solo account holder is automatically Organisation Admin** of their
+  own one-person organisation. Strongly implied, never stated.
+- **Whether the notification threshold is a percentage or an amount.** The
+  article says only "a specific amount".
+
+### The steps
+
+**Part A — make a workspace that can be capped**
+
+1. Open <https://platform.claude.com/settings/workspaces> and sign in.
+   ✅ You are looking at a page listing your workspaces. One of them is called
+   **Default**.
+2. Click **Add Workspace** (the article's label; it may read "Create workspace").
+3. Name it `flyersnap-phone`. Pick any colour.
+4. Click **Create**.
+   ✅ `flyersnap-phone` now appears in the workspace list beside Default.
+
+**Part B — put a monthly ceiling on it**
+
+5. Click `flyersnap-phone` to open it.
+6. Open the **Limits** tab.
+7. Click **Change Limit** and set a **monthly** cap. **$5 is plenty** — measured
+   from Logan's own diagnostics, a flyer page costs about **1.4¢**
+   (≈2,430 input + 465 output tokens at \$3/\$15 per million), so \$5 is roughly
+   **350 fallback pages a month**. This key is only the fallback for when the
+   desktop running Gordon is asleep.
+8. Optionally click **Add notification** to get an email before the cap is hit.
+   ✅ The Limits tab shows the monthly cap.
+
+> If the Limits tab refuses the value, check the organisation-wide limit — a
+> workspace cap must be **lower** than the organisation's.
+
+**Part C — create the key inside that workspace**
+
+9. Still inside `flyersnap-phone`, open the **API Keys** tab.
+10. Click **Create Key**, name it `flyersnap-phone-key`, click **Create Key**.
+11. **Copy it now.** The console shows a key once.
+    ✅ You are holding a string starting `sk-ant-`.
+
+> It must start `sk-ant-` — FlyerSnap's `saveKey()` refuses anything else, which
+> is a deliberate guard, not a bug.
+
+**Part D — put it on the phone**
+
+12. On the iPhone, open FlyerSnap → **Settings** → **Gordon and AI**.
+13. Paste the new key over the old one → **Save**.
+    ✅ The screen reports a key is saved on this device.
+14. Scan or import something.
+    ✅ It reads normally. (Gordon does the work; the key is the fallback.)
+
+**Part E — retire the old key**
+
+15. Back in the console, find the OLD key — it will be in the **Default**
+    workspace, not the new one.
+16. Use the **⋯** menu beside it → **Disable API Key** first, not Delete.
+17. Use FlyerSnap again.
+    ✅ Still works — proving the phone is on the new key.
+18. Once satisfied, return and **Delete API Key**.
+
+> Disable before delete, because disable is reversible and delete is not. If
+> something breaks at step 17, re-enable and work out why before deleting.
+
+**Do this on every device that has FlyerSnap installed.** The key lives in each
+device's own browser storage. The Gmail watcher does **not** hold an Anthropic
+key (checked: `gmail-watcher.gs` contains no `sk-ant-` and no key constant), so
+there is nothing to change there.
 
 **Acceptance:** flyer scanning still works; the key on the phone can only ever spend up to the workspace cap; a lost phone is a capped, independently-revocable loss. **Honest caveat (unchanged from the review):** the key is still *on the phone* — this caps the blast radius, it does not remove the exposure. The full fix remains SECURITY-PLAN.md P1 (proxy), which is larger and deferred to its own effort.
 

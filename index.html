@@ -3451,6 +3451,10 @@ function classifyError(err, status){
      || /context_too_small/.test(msg))                                                       return 'context_too_small';
   if(/failed to fetch|networkerror|load failed|connection|unreachable|econnrefused/.test(msg))return 'network';
   if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
+  // Raised by the app itself, before any request goes out (v10.5). It must be
+  // told apart from Anthropic's OWN spend limit below: nothing failed here and
+  // the fix is in Settings, not in the console.
+  if(/^SPEND_CAP/.test(String(err && err.message || '')))                                     return 'spend_cap';
   if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
   if(/unsupported_block/.test(msg))                                                           return 'unsupported_input';
   // The spend cap, before the generic 400. Anthropic returns 400
@@ -3519,11 +3523,21 @@ function explainError(errorType, provider, detail){
       // is the instructions. It also has to say what STILL works: since v9.30
       // Anthropic is the fallback, not the main path, so a capped key means
       // "the safety net is out", not "the app is down".
+      // URL corrected v10.5: the console moved to platform.claude.com. The old
+      // console.anthropic.com came from the launch blog and is what this message
+      // had been telling people to visit.
       return 'Anthropic has hit the spending limit on your account.\n\n'
-        + 'This is the cap you set, not a fault. Raise it at '
-        + 'console.anthropic.com under the workspace this key belongs to, or wait '
-        + 'for it to reset on the 1st of the month.\n\n'
+        + 'This is a cap set at Anthropic, not a fault, and not the one in this app. '
+        + 'Raise it at platform.claude.com under the workspace this key belongs to, '
+        + 'or wait for it to reset on the 1st of the month.\n\n'
         + 'Your own model is unaffected — scanning still works whenever the desktop is awake.';
+    case 'spend_cap':
+      // THIS app's own limit, not Anthropic's -- and the difference is the whole
+      // point of the message. Nothing failed; FlyerSnap stopped itself.
+      return detail || 'FlyerSnap has reached the monthly Anthropic limit you set in Settings.\n\n'
+        + 'Nothing is broken and nothing was lost. Raise the limit in '
+        + 'Settings → Gordon and AI, or leave it — your own model is unaffected, '
+        + 'so scanning still works whenever the desktop is awake.';
     case 'context_too_small':
       // The detail carries the three numbers that decide this, and without
       // them the reader cannot tell which one to change.
@@ -4640,6 +4654,62 @@ const MODEL = 'claude-sonnet-4-6';
 // provenance line -- so a bad extraction can still be traced.
 const ASSISTANT_NAME = 'Gordon';
 
+// ---------------------------------------------------------------------------
+// FlyerSnap's own monthly ceiling on Anthropic spending (v10.5).
+//
+// WHAT THIS IS NOT. It is not the spend limit at Anthropic, and it does not
+// replace one. This is the app counting what IT has spent and stopping itself.
+// Anyone holding the key can spend without limit from anywhere -- curl, another
+// app, a phone someone else is holding -- because Anthropic has never heard of
+// this rule. A lock on the inside of the door.
+//
+// What it IS good for is the thing that actually happens: this app surprising
+// you. An automatic email pass that keeps falling back to Anthropic on PDFs, a
+// big import, a bug in a future version. Those all run through here.
+//
+// Prices for MODEL, read 4 Sep 2026 from
+// https://platform.claude.com/docs/en/about-claude/pricing
+//   input $3 / million, output $15 / million.
+// One band: 4.6 carries the full context window at standard pricing, so there
+// is no long-context premium to model. Images bill as input tokens at the same
+// rate, so a flyer photo needs no special case.
+//
+// A PRICE IN A CONSTANT GOES STALE. Everything built on it says "estimate" in
+// the interface for exactly that reason. It is a guardrail, not an invoice.
+const AI_PRICE_IN = 3 / 1e6;
+const AI_PRICE_OUT = 15 / 1e6;
+
+function spendMonth(){ return todayISO().slice(0, 7); }     // 'YYYY-MM'
+/** Estimated Anthropic spend so far this month. A new month reads as zero. */
+function spendThisMonth(){
+  const s = S.settings.aiSpend;
+  return (s && s.month === spendMonth() && Number.isFinite(s.usd)) ? s.usd : 0;
+}
+/** Charge a completed Anthropic call. Local calls never come through here. */
+function addSpend(inTok, outTok){
+  const usd = (Number(inTok) || 0) * AI_PRICE_IN + (Number(outTok) || 0) * AI_PRICE_OUT;
+  if(!(usd > 0)) return;
+  S.settings.aiSpend = { month: spendMonth(), usd: spendThisMonth() + usd };
+}
+/** The ceiling in whole dollars, or 0 for "no ceiling". */
+function spendCap(){
+  const n = Number(S.settings.aiCapUsd);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+function spendCapHit(){
+  const cap = spendCap();
+  return cap > 0 && spendThisMonth() >= cap;
+}
+/** Clear the running count. The cap itself is left alone. */
+function resetSpendCount(){
+  const before = S.settings.aiSpend;
+  S.settings.aiSpend = { month: spendMonth(), usd: 0 };
+  save(); render();
+  toast('Count reset to $0.00', { label:'Undo', fn:() => {
+    S.settings.aiSpend = before; save(); render(); toast('Put back');
+  }});
+}
+
 function aiName(){ return ASSISTANT_NAME; }
 
 // ---------- Routing benchmark (see js/route-score.js, js/bench-cases.js) ----
@@ -4915,7 +4985,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.4';
+const APP_VERSION = 'v10.5';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -5308,6 +5378,17 @@ async function callClaude(contentBlocks, maxTokens, system){
       errorType:'no_api_key', detail:'No API key saved' });
     throw new Error('NO_API_KEY');
   }
+  // BEFORE the fetch, because a check after the call has already spent the
+  // money it was meant to prevent. Every Anthropic call in the app funnels
+  // through this function, including the automatic email pass and every
+  // fallback from the local model -- which is exactly what makes one gate here
+  // enough.
+  if(spendCapHit()){
+    recordAiCall({ op: aiOp, provider:'anthropic', reqModel: MODEL, ok:false,
+      errorType:'spend_cap',
+      detail:'stopped by the app\'s own $' + spendCap() + ' monthly limit' });
+    throw new Error('SPEND_CAP');
+  }
   const started = Date.now();
   let res;
   try{
@@ -5339,6 +5420,9 @@ async function callClaude(contentBlocks, maxTokens, system){
   }
   const data = await res.json();
   const u = data.usage || {};
+  // Charged from what Anthropic SAYS it used, not from an estimate of the
+  // prompt -- the response carries the real token counts.
+  addSpend(u.input_tokens, u.output_tokens);
   recordAiCall({ op: aiOp, provider:'anthropic', reqModel: MODEL,
     resModel: data.model || null, ok:true, ms: Date.now() - started,
     inTokens: u.input_tokens, outTokens: u.output_tokens,
@@ -12085,6 +12169,33 @@ function renderSetAI(m){
     ${S.settings.apiKey ? `<button class="btn alt" style="margin-top:8px;border-color:var(--red-accent);color:var(--red-accent)"
       onclick="removeKey()">${ico('trash')}Remove key from this device</button>` : ''}
 
+    <div class="sect">Monthly limit on Anthropic</div>
+    <div class="help">FlyerSnap keeps a running estimate of what it has spent at Anthropic
+      this month and stops calling once it reaches your figure. ${esc(aiName())} is unaffected —
+      he runs on your own desktop and costs nothing — so scanning still works whenever it is awake.
+      Leave it at 0 for no limit.</div>
+    <div class="help" style="margin-top:6px"><b>This is a limit on this app, not on your key.</b>
+      Anthropic does not know about it, so it cannot help if the key itself ends up somewhere else.
+      For that, set a spend limit on the key's workspace at platform.claude.com. The two do
+      different jobs and it is worth having both.</div>
+    <div class="formrow">
+      <input type="number" id="aiCap" aria-label="Monthly limit in dollars" min="0" step="1"
+        inputmode="decimal" value="${esc(String(spendCap() || 0))}">
+      <button class="btn sm" onclick="saveSpendCap()">Save</button>
+    </div>
+    <div class="help" style="margin-top:6px">${(() => {
+      // An ESTIMATE, said plainly and every time. It is computed from a price
+      // written into the app, and a price in a constant goes stale.
+      const spent = spendThisMonth(), cap = spendCap();
+      const money = (n) => '$' + n.toFixed(2);
+      if(!cap) return `About ${money(spent)} estimated this month. No limit set.`;
+      if(spent >= cap) return `<b style="color:var(--red-accent)">Limit reached — about ${money(spent)} of ${money(cap)} estimated this month.</b>
+        FlyerSnap has stopped calling Anthropic. It resets on the 1st.`;
+      return `About ${money(spent)} of ${money(cap)} estimated this month. Resets on the 1st.`;
+    })()}</div>
+    ${spendThisMonth() > 0 ? `<button class="btn alt sm" style="width:auto;margin-top:6px"
+      onclick="resetSpendCount()">Reset the count</button>` : ''}
+
     <div class="card row" role="button" tabindex="0"
         aria-label="What ${esc(aiName())} can and cannot do"
         onclick="sub('setCapabilities')"
@@ -13057,6 +13168,25 @@ function removeKey(){
   toast('API key removed from this device');
 }
 
+/**
+ * Set the app's own monthly ceiling. 0 (or empty) means no ceiling.
+ *
+ * Refuses junk rather than storing NaN -- spendCap() would read that as "no
+ * limit", which is the failure direction that costs money.
+ */
+function saveSpendCap(){
+  const box = document.getElementById('aiCap');
+  const raw = box ? String(box.value).trim() : '';
+  const n = raw === '' ? 0 : Number(raw);
+  if(!Number.isFinite(n) || n < 0){
+    alert('Enter a whole number of dollars, or 0 for no limit.');
+    return;
+  }
+  S.settings.aiCapUsd = n;
+  save(); render();
+  toast(n > 0 ? 'Limit set to $' + n + ' a month' : 'No limit set');
+}
+
 function saveKey(){
   const v = document.getElementById('apiKey').value.trim();
   if(!v.startsWith('sk-ant-')){ alert('Anthropic API keys start with "sk-ant-".'); return; }
@@ -13373,6 +13503,8 @@ Object.assign(window, {
   clearResolvedProblems,
   closeChoreForm,
   closeEmailTrouble,
+  resetSpendCount,
+  saveSpendCap,
   closeLinkSheet,
   closeRecipeForm,
   delKid,

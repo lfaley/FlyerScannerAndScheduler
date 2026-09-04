@@ -69,6 +69,10 @@ export function classifyError(err, status){
      || /context_too_small/.test(msg))                                                       return 'context_too_small';
   if(/failed to fetch|networkerror|load failed|connection|unreachable|econnrefused/.test(msg))return 'network';
   if(/no_api_key/.test(msg))                                                                  return 'no_api_key';
+  // Raised by the app itself, before any request goes out (v10.5). It must be
+  // told apart from Anthropic's OWN spend limit below: nothing failed here and
+  // the fix is in Settings, not in the console.
+  if(/^SPEND_CAP/.test(String(err && err.message || '')))                                     return 'spend_cap';
   if(/could not read|unexpected token|json/.test(msg))                                        return 'bad_response';
   if(/unsupported_block/.test(msg))                                                           return 'unsupported_input';
   // The spend cap, before the generic 400. Anthropic returns 400
@@ -137,11 +141,21 @@ export function explainError(errorType, provider, detail){
       // is the instructions. It also has to say what STILL works: since v9.30
       // Anthropic is the fallback, not the main path, so a capped key means
       // "the safety net is out", not "the app is down".
+      // URL corrected v10.5: the console moved to platform.claude.com. The old
+      // console.anthropic.com came from the launch blog and is what this message
+      // had been telling people to visit.
       return 'Anthropic has hit the spending limit on your account.\n\n'
-        + 'This is the cap you set, not a fault. Raise it at '
-        + 'console.anthropic.com under the workspace this key belongs to, or wait '
-        + 'for it to reset on the 1st of the month.\n\n'
+        + 'This is a cap set at Anthropic, not a fault, and not the one in this app. '
+        + 'Raise it at platform.claude.com under the workspace this key belongs to, '
+        + 'or wait for it to reset on the 1st of the month.\n\n'
         + 'Your own model is unaffected — scanning still works whenever the desktop is awake.';
+    case 'spend_cap':
+      // THIS app's own limit, not Anthropic's -- and the difference is the whole
+      // point of the message. Nothing failed; FlyerSnap stopped itself.
+      return detail || 'FlyerSnap has reached the monthly Anthropic limit you set in Settings.\n\n'
+        + 'Nothing is broken and nothing was lost. Raise the limit in '
+        + 'Settings → Gordon and AI, or leave it — your own model is unaffected, '
+        + 'so scanning still works whenever the desktop is awake.';
     case 'context_too_small':
       // The detail carries the three numbers that decide this, and without
       // them the reader cannot tell which one to change.

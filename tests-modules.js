@@ -2838,12 +2838,24 @@ module.exports = async function runModuleTests(test){
     // down", and saying so is the difference between a shrug and a panic.
     const msg = ailog.explainError('spend_limit', 'anthropic');
     assert.ok(/spending limit/i.test(msg), msg);
-    assert.ok(/console\.anthropic\.com/.test(msg), 'does not say where to raise it: ' + msg);
+    // platform.claude.com, not console.anthropic.com. The console moved; the old
+    // address came from the launch blog and this message had been sending people
+    // to it (corrected v10.5, verified against current first-party docs).
+    assert.ok(/platform\.claude\.com/.test(msg), 'does not say where to raise it: ' + msg);
+    assert.ok(!/console\.anthropic\.com/.test(msg), 'still points at the old console address');
     assert.ok(/1st of the month|resets?/i.test(msg), 'does not say it resets: ' + msg);
     assert.ok(/cap you set|not a fault/i.test(msg),
       'reads like a fault rather than a limit the user chose: ' + msg);
     assert.ok(/your own model is unaffected/i.test(msg),
       'does not say the local model still works, which is the whole point since v9.30');
+    // ...and it must not be confused with the app's OWN cap, which is a
+    // different thing with a different fix.
+    assert.ok(/not the one in this app/i.test(msg),
+      'does not distinguish Anthropic\'s limit from FlyerSnap\'s own: ' + msg);
+    const mine = ailog.explainError('spend_cap', 'anthropic');
+    assert.ok(/Settings/.test(mine) && !/platform\.claude\.com/.test(mine),
+      'the app\'s own cap sends the user to the wrong place: ' + mine);
+    assert.ok(/Nothing is broken/i.test(mine), 'the app stopping itself reads as a failure: ' + mine);
   });
 
   test('thinking_only names the fix, because the fix is not in the app', () => {
@@ -5254,6 +5266,27 @@ module.exports = async function runModuleTests(test){
     assert.ok(/seenMsgs\s*=\s*\[\.\.\.new Set\(before\.concat\(ids\)\)\]/.test(code),
       'the deciding control no longer adds the dismissed ids to the record');
     assert.ok(!/seenMsgs/.test(shut), 'closing the panel touches the record at all');
+  });
+
+  test('the spend cap stops the app BEFORE the call, not after (v10.5)', () => {
+    // A check after the request has already spent the money it was meant to
+    // prevent. Read the shipped function, with comments stripped, rather than
+    // trusting the one sitting above the line.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const fn = codeOf(html.split('async function callClaude(')[1].split('\nfunction ')[0]);
+    const gate = fn.indexOf('spendCapHit()');
+    const call = fn.indexOf('fetch(API_URL');
+    const charge = fn.indexOf('addSpend(');
+    assert.ok(gate > 0, 'callClaude no longer consults the cap at all');
+    assert.ok(call > 0, 'the fetch has moved -- this guard can no longer tell');
+    assert.ok(gate < call, 'the cap is checked AFTER the money is spent');
+    assert.ok(charge > call, 'the call is charged before it has happened');
+    // And it must be the only door. Every Anthropic request in the app goes
+    // through callClaude; a second fetch to the API would walk straight past
+    // the gate.
+    const apiCalls = (codeOf(html).match(/fetch\(API_URL/g) || []).length;
+    assert.strictEqual(apiCalls, 1,
+      'there is more than one place calling the Anthropic endpoint, so the cap has a way round it');
   });
 
 };

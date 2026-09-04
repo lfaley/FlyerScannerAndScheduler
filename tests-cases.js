@@ -6290,6 +6290,81 @@ function troubleBox(){
   pendingEvents = [];
 }
 
+// ---------------------------------------------------------------------------
+// FlyerSnap's own monthly ceiling on Anthropic (v10.5).
+//
+// NOT a replacement for a spend limit at Anthropic, and the tests say so: this
+// one only binds calls that go through this app. It exists for the thing that
+// actually happens -- the app surprising you -- not for a key that has left it.
+// ---------------------------------------------------------------------------
+test('spend is charged from what Anthropic says it used (v10.5)', () => {
+  boot(GOOD);
+  S.settings.aiSpend = null;
+  assert.strictEqual(spendThisMonth(), 0, 'a fresh install is not at zero');
+  addSpend(1000000, 1000000);          // 1M in + 1M out
+  assert.ok(Math.abs(spendThisMonth() - 18) < 1e-9,
+    '$3/M in + $15/M out should be $18, got ' + spendThisMonth());
+  addSpend(0, 0);
+  assert.ok(Math.abs(spendThisMonth() - 18) < 1e-9, 'a zero-token call moved the total');
+  addSpend(null, undefined);
+  assert.ok(Math.abs(spendThisMonth() - 18) < 1e-9, 'a call with no usage figures moved the total');
+});
+
+test('the count is per month and a new month starts at zero (v10.5)', () => {
+  boot(GOOD);
+  S.settings.aiSpend = { month:'2020-01', usd: 999 };
+  assert.strictEqual(spendThisMonth(), 0, 'last January is still being counted against this month');
+  addSpend(1000000, 0);
+  assert.strictEqual(S.settings.aiSpend.month, todayISO().slice(0, 7), 'the new total is filed under the wrong month');
+  assert.ok(Math.abs(spendThisMonth() - 3) < 1e-9, 'the old total leaked into the new month');
+});
+
+test('the cap blocks Anthropic and nothing else (v10.5)', () => {
+  boot(GOOD);
+  S.settings.aiCapUsd = 5;
+  S.settings.aiSpend = { month: todayISO().slice(0, 7), usd: 4.99 };
+  assert.strictEqual(spendCapHit(), false, 'it stopped just under the limit');
+  addSpend(10000, 0);                                   // 3c more, now over
+  assert.strictEqual(spendCapHit(), true, 'it did not stop at the limit');
+  // 0 means no ceiling, and so does junk -- but junk must not read as a LOW
+  // ceiling either, which would block everything.
+  S.settings.aiCapUsd = 0;
+  assert.strictEqual(spendCapHit(), false, '0 was read as a limit of zero');
+  S.settings.aiCapUsd = 'abc';
+  assert.strictEqual(spendCap(), 0, 'a junk cap is not treated as "no limit"');
+  assert.strictEqual(spendCapHit(), false, 'a junk cap blocked every call');
+  // MEASURED: the isFinite check looks redundant, because NaN > 0 is already
+  // false. The case that separates them is Infinity -- `n > 0` keeps it, and
+  // the Settings line then reads "$Infinity". saveSpendCap refuses it at the
+  // keyboard, but importBackup writes whatever a file contains and never checks
+  // (the same door the API-key redaction test found), so it is reachable.
+  S.settings.aiCapUsd = Infinity;
+  assert.strictEqual(spendCap(), 0, 'an infinite cap survived into the interface');
+  assert.strictEqual(spendCapHit(), false, 'an infinite cap changed whether calls are blocked');
+});
+
+test('the cap is explained as this app stopping, not Anthropic failing (v10.5)', () => {
+  boot(GOOD);
+  const mine = explainError('spend_cap', 'anthropic');
+  const theirs = explainError('spend_limit', 'anthropic');
+  assert.ok(/Settings/.test(mine), 'it does not say where to change it: ' + mine);
+  assert.ok(!/platform\.claude\.com/.test(mine), 'it sends the user to Anthropic for the app\'s own limit');
+  assert.ok(/platform\.claude\.com/.test(theirs), 'Anthropic\'s own limit no longer names the console');
+  assert.notStrictEqual(mine, theirs, 'the two limits give the same message');
+  assert.strictEqual(classifyError(new Error('SPEND_CAP')), 'spend_cap',
+    'the app\'s own stop is classified as something else');
+});
+
+test('the running count can be reset, and the reset undone (v10.5)', () => {
+  boot(GOOD);
+  S.settings.aiSpend = { month: todayISO().slice(0, 7), usd: 7.5 };
+  const seen = withToast(() => resetSpendCount());
+  assert.strictEqual(spendThisMonth(), 0, 'the count was not reset');
+  assert.ok(seen[0].action, 'no Undo was offered for a number the user may need');
+  withToast(() => seen[0].action.fn());
+  assert.strictEqual(spendThisMonth(), 7.5, 'the reset could not be undone');
+});
+
 test('the X closes the box and decides nothing (v10.4)', () => {
   troubleBox();
   closeEmailTrouble();

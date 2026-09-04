@@ -467,9 +467,24 @@ checks its shape (`saveKey` does, but that is the other door). A
 
 ### Still outstanding, and it needs Logan
 
-Backup files already written to disk by versions before v9.90 **still contain
-the API key**. Nothing in the app can reach them. The key should be rotated at
-the Anthropic console, and old exports deleted.
+~~Backup files already written to disk by versions before v9.90 **still contain
+the API key**.~~ **Logan deleted all backups, 4 Sep 2026.** The on-disk exposure
+is closed.
+
+Rotating the key is still worth doing, and the cheapest way to make the *next*
+exposure survivable is the low-cap workspace key: keys are tied to the workspace
+they are created in and cannot be moved, and a workspace takes a monthly spend
+cap. A stolen phone then caps at that figure and the key is revocable on its own.
+
+**Click-by-click steps: `FLYERSNAP-FIXES-PLAN.md` Phase 1**, re-researched
+against current first-party docs on 4 Sep 2026. Note two things that changed
+since the original draft: the console is now `platform.claude.com`, and **the
+Default workspace cannot take a spend limit** — a named workspace must be
+created first.
+
+Checked while writing those steps: `gmail-watcher.gs` holds **no** Anthropic
+key, so the phone (and any other device with FlyerSnap installed) is the only
+place a key lives.
 
 ### Sweeping the class, not just the instance
 
@@ -515,3 +530,64 @@ forever, and rule 29 exists because that has shipped here before.
 
 Mutation-proved by adding a fresh raw-dump path to `downloadQuarantine`: two
 guards went red and both named it.
+
+---
+
+## Two limits, and they are not substitutes (v10.5)
+
+Logan asked whether an in-app limit removes the need for the console one. It
+does not, and the difference is worth writing down because the two protect
+against different things.
+
+| | FlyerSnap's limit (v10.5) | Anthropic's workspace limit |
+|---|---|---|
+| Who enforces it | this app, in `callClaude` | Anthropic's servers |
+| Stops a runaway auto-read pass | **yes** | yes |
+| Stops a bug in a future version of this app | **yes** | yes |
+| Stops someone who has the KEY but not the app | **no** | **yes** |
+| Needs a console visit | no | yes, once |
+
+The app's limit is a lock on the inside of the door. The key works from
+anywhere — `curl`, another app, a phone in someone else's hands — and Anthropic
+has never heard of FlyerSnap's rule.
+
+**For the risk Logan actually lives with, the in-app one is the more useful of
+the two**: the realistic bad outcome is this app surprising him, not theft. The
+automatic email pass falls back to paid Anthropic on any PDF
+(EMAIL-AUTOREAD-PLAN §0), and that runs without being asked. The console cap
+remains the backstop for the day the key leaves the app, and the steps are in
+FLYERSNAP-FIXES-PLAN.md Phase 1.
+
+### How the app's limit works
+
+- `S.settings.aiCapUsd` — whole dollars a month, 0 for none.
+- `S.settings.aiSpend = { month, usd }` — a running estimate, reset by month.
+- Charged in `callClaude` from `data.usage`, which is what Anthropic **says**
+  it used, not an estimate of the prompt.
+- Checked in `callClaude` **before the fetch** — a check after the request has
+  already spent what it was meant to prevent. A guard reads the shipped function
+  and asserts the order, and also asserts `fetch(API_URL)` appears exactly once
+  in the file, because a second call site would walk straight past the gate.
+- Local calls never reach `callClaude`, so Gordon is never blocked. That is
+  said on the settings screen, because "the app stopped" reads as broken.
+
+Prices are `$3`/`$15` per million, read 4 Sep 2026 from
+[platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing) —
+one band (4.6 has no long-context premium), and images bill as input tokens at
+the same rate. **A price in a constant goes stale, so every figure the app shows
+says "estimate".** It is a guardrail, not an invoice.
+
+`explainError` now distinguishes the two: `spend_cap` (this app stopped itself,
+fix it in Settings) from `spend_limit` (Anthropic refused, fix it in the
+console). The console URL in the latter was also corrected — it had been telling
+people to visit `console.anthropic.com`, which has moved to
+`platform.claude.com`.
+
+### Mutation tests — eight reverts, one at a time
+
+All RED except one, which found a weak test of mine. `Number.isFinite` in
+`spendCap()` looked redundant, because `NaN > 0` is already false. The case that
+separates them is **Infinity**: without it the settings line reads "$Infinity".
+`saveSpendCap` refuses that at the keyboard, but `importBackup` writes whatever
+a file contains and never checks — the same unguarded door the API-key redaction
+test found. Test added; the mutation then went red.
