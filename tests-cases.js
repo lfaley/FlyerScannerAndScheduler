@@ -6309,6 +6309,76 @@ function troubleBox(){
 // A REFERENCE, NOT A COPY: id, subject, sender, date. The body stays in Gmail
 // and fetchMessage() brings it back on demand.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// The local model path (v10.8). Researched against Ollama's own docs and source
+// before any of this was written; every claim below has a citation in the code.
+// ---------------------------------------------------------------------------
+test('an image type Ollama refuses is named, not sent (v10.8)', () => {
+  // decodeImageURL matches the data-URI prefix against exactly
+  // {jpeg,jpg,png,webp}, case-sensitively. Everything else is a 400
+  // "invalid image input" -- a bare number the user cannot act on.
+  // A text block too: blocksToOpenAI refuses a prompt with no text at all,
+  // which is a different guard and not the one under test here.
+  const send = (mt) => blocksToOpenAI([
+    { type:'image', source:{ type:'base64', media_type:mt, data:'AAAA' } },
+    { type:'text', text:'read this' }]);
+  ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'].forEach(mt => {
+    const img = send(mt).find(p => p.type === 'image_url');
+    assert.ok(img && /^data:/.test(img.image_url.url), mt + ' was refused');
+  });
+  // HEIC is the one that matters: pickImage's catch falls back to the file's own
+  // type, and that catch fires exactly when the browser could not decode it --
+  // which on iOS is exactly when it is HEIC.
+  assert.throws(() => send('image/heic'), /UNSUPPORTED_BLOCK:image\/heic/,
+    'HEIC would still reach the endpoint and come back as a bare 400');
+  assert.throws(() => send('image/gif'), /UNSUPPORTED_BLOCK/);
+  assert.throws(() => send(''), /UNSUPPORTED_BLOCK/);
+  // Case and stray parameters are normalised rather than refused -- the prefix
+  // has to match exactly, but that is our job to fix, not the user's.
+  const url = (mt) => send(mt).find(p => p.type === 'image_url').image_url.url;
+  assert.ok(/^data:image\/png;base64,/.test(url('IMAGE/PNG')),
+    'an upper-case type was refused instead of normalised');
+  assert.ok(/^data:image\/png;base64,/.test(url('image/png; charset=utf-8')),
+    'a media-type parameter was refused instead of stripped');
+});
+
+test('/api/ps says whether the model is awake, not just how big it is (v10.8)', () => {
+  // keep_alive defaults to 5 minutes and cannot be set from the OpenAI
+  // endpoint, so a phone used a few times a day gets a cold ~9.8 GB load nearly
+  // every time -- against a 180-second abort. The app was already fetching this
+  // response and reading only context_length.
+  const ps = { models: [{ model:'qwen3-vl:8b-instruct-q4_K_M', context_length: 16384 }] };
+  assert.strictEqual(modelIsLoaded(ps, 'qwen3-vl:8b-instruct-q4_K_M'), true);
+  assert.strictEqual(modelIsLoaded({ models: [] }, 'qwen3-vl:8b-instruct-q4_K_M'), false,
+    'an empty list should read as asleep');
+  // Another model being resident does NOT mean ours is -- the shared card makes
+  // this the normal case, not an edge one.
+  assert.strictEqual(modelIsLoaded({ models: [{ model:'llama3:70b' }] }, 'qwen3-vl:8b-instruct-q4_K_M'), false,
+    'someone else being loaded read as ours being loaded');
+  // "Could not tell" is not "asleep" and must not be reported as it.
+  assert.strictEqual(modelIsLoaded(null, 'x'), null);
+  assert.strictEqual(modelIsLoaded({}, 'x'), null);
+});
+
+test('the self-test is reachable from the screen people look on (v10.8)', () => {
+  // Logan went to Settings -> Gordon and AI and it was not there: it lived at
+  // the bottom of "When something goes wrong", gated on the local provider. A
+  // screen the audit renders by setting `view` directly is not a screen anyone
+  // can find.
+  boot(GOOD);
+  S.settings.aiProvider = 'local';
+  const m = { innerHTML:'' };
+  renderSetAI(m);
+  assert.ok(/runLocalSelfTest\(\)/.test(m.innerHTML),
+    'Gordon and AI still has no way to run the self-test');
+  // ...and it stays out of the way when the local model is not in use.
+  S.settings.aiProvider = 'anthropic';
+  const m2 = { innerHTML:'' };
+  renderSetAI(m2);
+  assert.ok(!/runLocalSelfTest\(\)/.test(m2.innerHTML),
+    'an Anthropic-only user is offered a local-model self-test');
+});
+
 test('every email seen is recorded, including one that produced nothing (v10.7)', () => {
   boot(GOOD);
   S.emails = [];

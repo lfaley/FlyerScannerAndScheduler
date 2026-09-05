@@ -5301,4 +5301,24 @@ module.exports = async function runModuleTests(test){
       'there is more than one place calling the Anthropic endpoint, so the cap has a way round it');
   });
 
+  test('the self-test image clears the size that panics the model (v10.8)', () => {
+    // RULE 28, and the clearest case of it yet. TINY_PNG was a 1x1, described in
+    // its own comment as "small enough to send anywhere". qwen3-vl's SmartResize
+    // PANICS below 32px in either dimension (ollama/ollama #13044, #13113), and
+    // a panic mid-response reaches the browser as a dropped connection -- so the
+    // self-test's vision stage reported FAILURE on a server whose vision was
+    // fine. The instrument was the thing that was wrong.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const b64 = (html.match(/const TINY_PNG = '([A-Za-z0-9+/=]+)'/) || [])[1];
+    assert.ok(b64, 'TINY_PNG is gone or no longer a base64 literal');
+    const png = Buffer.from(b64, 'base64');
+    assert.strictEqual(png.slice(1, 4).toString(), 'PNG', 'TINY_PNG is not a PNG any more');
+    // IHDR width/height are big-endian uint32 at byte 16 and byte 20.
+    const w = png.readUInt32BE(16), h = png.readUInt32BE(20);
+    const floor = Number((html.match(/const MIN_IMAGE_PX = (\d+)/) || [])[1]);
+    assert.ok(floor >= 32, 'the documented panic floor has been lowered below 32: ' + floor);
+    assert.ok(w >= floor && h >= floor,
+      'the self-test still sends an image the model will panic on: ' + w + 'x' + h);
+  });
+
 };

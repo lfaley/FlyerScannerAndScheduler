@@ -511,6 +511,49 @@ const eq = (got, want, what) => {
     if(saved.held) throw new Error('the restored folder still carries heldNoteIds in the SAVED file');
   });
 
+  await check('a tiny image is scaled UP to clear the panic floor (v10.8)', async () => {
+    // readImageDownscaled uses Image + canvas, so the vm harness cannot reach
+    // it at all -- MEASURED: removing the floor left every test green. qwen3-vl
+    // panics server-side below 32px in either dimension (ollama/ollama #13044,
+    // #13113) and a panic reads to the browser as a dropped connection, i.e.
+    // "the local model did not answer". A cropped strip gets there honestly.
+    const out = await pg.evaluate(async () => {
+      // A real 8x8 PNG, built in the page so this is the actual code path.
+      const c = document.createElement('canvas');
+      c.width = 8; c.height = 8;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 8, 8);
+      const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      const file = new File([blob], 'tiny.png', { type:'image/png' });
+      const res = await readImageDownscaled(file);
+      // Measure what actually came back, by decoding it again.
+      const img = new Image();
+      await new Promise((ok, no) => { img.onload = ok; img.onerror = no;
+        img.src = 'data:' + res.mediaType + ';base64,' + res.base64; });
+      return { w: img.width, h: img.height, mediaType: res.mediaType, floor: MIN_IMAGE_PX };
+    });
+    if(out.w < out.floor || out.h < out.floor)
+      throw new Error('an 8x8 image was sent at ' + out.w + 'x' + out.h +
+        ', below the ' + out.floor + 'px floor the model panics on');
+    if(out.mediaType !== 'image/jpeg')
+      throw new Error('the re-encode stopped producing jpeg: ' + out.mediaType);
+    // ...and a normal photo is NOT stretched -- the floor must not become a
+    // resize of everything.
+    const big = await pg.evaluate(async () => {
+      const c = document.createElement('canvas');
+      c.width = 800; c.height = 600;
+      c.getContext('2d').fillRect(0, 0, 800, 600);
+      const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      const res = await readImageDownscaled(new File([blob], 'big.png', { type:'image/png' }));
+      const img = new Image();
+      await new Promise((ok, no) => { img.onload = ok; img.onerror = no;
+        img.src = 'data:' + res.mediaType + ';base64,' + res.base64; });
+      return { w: img.width, h: img.height };
+    });
+    if(big.w !== 800 || big.h !== 600)
+      throw new Error('an ordinary photo was resized to ' + big.w + 'x' + big.h);
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;

@@ -46,6 +46,36 @@ export function psUrlFrom(base){
  * builds do not report it, and a made-up number here would produce confident
  * wrong advice, which is worse than none.
  */
+/**
+ * Is the model actually resident right now? (v10.8)
+ *
+ * Free information the app was already fetching and throwing away: contextFromPs
+ * reads `context_length` off the same /api/ps response and discards the fact
+ * that an entry EXISTS. It matters more than the context does.
+ *
+ * Ollama's keep_alive defaults to 5 minutes and CANNOT be set from the
+ * OpenAI-compatible endpoint (grep keep_alive in openai/openai.go: nothing), so
+ * a phone used a few times a day gets a cold load almost every time. This model
+ * is ~9.8 GB and shares one card with the recipe app, so a cold load is a ~9 GB
+ * read. The app's own ceiling is a 180-second abort.
+ *
+ * Returns true / false / null, and null means "could not tell" -- which is not
+ * the same as cold and must not be reported as it.
+ */
+export function modelIsLoaded(json, model){
+  // A MISSING list and an EMPTY list are different answers. Empty means nothing
+  // is resident -- asleep, and the next call pays for a load. Missing means the
+  // response was not the shape we expected, and saying "asleep" about that
+  // would be inventing a fact. Only the first is a finding.
+  if(!json || typeof json !== 'object') return null;
+  const models = json.models || json.data;
+  if(!Array.isArray(models)) return null;
+  const want = String(model || '').trim();
+  if(!want) return models.length > 0;
+  return models.some(m => m && (m.model === want || m.name === want ||
+    String(m.model || m.name || '').split(':')[0] === want.split(':')[0]));
+}
+
 export function contextFromPs(json, model){
   const models = (json && (json.models || json.data)) || [];
   if(!Array.isArray(models) || !models.length) return null;
