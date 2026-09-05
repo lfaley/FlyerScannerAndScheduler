@@ -554,6 +554,36 @@ const eq = (got, want, what) => {
       throw new Error('an ordinary photo was resized to ' + big.w + 'x' + big.h);
   });
 
+  await check('the Emails screen is reachable by a real tap (v10.10)', async () => {
+    // The guard in tests-modules.js reads the SOURCE for the screen's name. This
+    // taps the actual row, because a name in a string is not a control anyone
+    // can press -- and the row only exists once there is something on it.
+    await pg.evaluate(() => {
+      S.emails = [{ id:'m1', subject:'Yearbook orders close Friday',
+        from:'office@school.org', at:'2026-09-03T10:00:00Z' }];
+      save(); nav('events');
+    });
+    await pg.waitForTimeout(220);
+    await pg.getByRole('button', { name: /Emails .* has read/ }).click();
+    await pg.waitForTimeout(220);
+    const text = await pg.evaluate(() => document.body.innerText);
+    if(!/Yearbook orders close Friday/.test(text))
+      throw new Error('tapping the row did not open the Emails screen:\n' + text.slice(0, 300));
+    // ...and tapping the email opens its detail screen, unread.
+    await pg.getByRole('button', { name: /What did this email say/ }).first().click();
+    await pg.waitForTimeout(220);
+    const detail = await pg.evaluate(() => document.body.innerText);
+    if(!/Not read yet/.test(detail))
+      throw new Error('the detail screen did not open:\n' + detail.slice(0, 300));
+    // With no emails, the row must NOT be there -- a row leading to an empty
+    // screen is a worse answer than no row.
+    await pg.evaluate(() => { S.emails = []; save(); nav('events'); });
+    await pg.waitForTimeout(220);
+    const bare = await pg.evaluate(() => document.body.innerText);
+    if(/Emails .* has read/.test(bare))
+      throw new Error('the row is offered with nothing behind it');
+  });
+
   console.log('');
   pageErrors.forEach(e => { console.log('  FAIL  uncaught page error\n        ' + e); results.push({ ok: false }); });
   const bad = results.filter(r => !r.ok).length;

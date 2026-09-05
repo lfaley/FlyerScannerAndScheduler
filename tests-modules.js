@@ -5321,4 +5321,27 @@ module.exports = async function runModuleTests(test){
       'the self-test still sends an image the model will panic on: ' + w + 'x' + h);
   });
 
+  test('every sub-screen the app registers can actually be reached (v10.10)', () => {
+    // MEASURED, and it caught me one turn after I fixed the same thing for the
+    // self-test: `emails` was in the subs map, rendered fine, audited fine --
+    // and NOTHING navigated to it. The a11y audit cannot see this, because it
+    // opens each screen by setting `view` directly; that is what makes it able
+    // to audit them at all, and it is exactly why it is blind here.
+    //
+    // The rule is the loosest one that still works: the screen's name must
+    // appear as a string literal SOMEWHERE outside its own registration. That
+    // covers a direct `sub('x')` and a name handed to a navigation helper --
+    // the six Settings screens are reached the second way, through
+    // settingsRow(..., 'setPeople'), and are not orphans.
+    const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+    const map = html.match(/const subs = \{[\s\S]*?\n\s*ask:renderAsk\};/);
+    assert.ok(map, 'the subs map has moved or been renamed -- this guard is now blind');
+    const keys = [...map[0].matchAll(/([a-zA-Z]+):render/g)].map(x => x[1]);
+    assert.ok(keys.length >= 30, 'only ' + keys.length + ' screens found -- the parse has stopped working');
+    const body = html.replace(map[0], '');
+    const orphans = keys.filter(k => !new RegExp("['\"]" + k + "['\"]").test(body));
+    assert.deepStrictEqual(orphans, [],
+      'screens nothing can navigate to: ' + orphans.join(', '));
+  });
+
 };

@@ -187,6 +187,21 @@ const SCREENS = [
   { key:'eventEdit-new', setup:`openNewEvent()` },
   { key:'listDetail', setup:`view = { tab:'notes', sub:'listDetail', data:{ id:'l1' } }` },
   { key:'noteDetail', setup:`S.notes = [{ id:'n1', title:'Uniform sizes', body:'Braelyn medium', pinned:false, personIds:[], created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteDetail', data:{ id:'n1' } }` },
+  { key:'emails', setup:`S.emails = [
+      { id:'m1', subject:'Yearbook orders close Friday', from:'office@school.org', at:'2026-09-03T10:00:00Z' },
+      { id:'m2', subject:'PTO newsletter', from:'pto@school.org', at:'2026-09-02T10:00:00Z' }];
+      view = { tab:'events', sub:'emails', data:null }` },
+  { key:'emails-empty', setup:`S.emails = []; view = { tab:'events', sub:'emails', data:null }` },
+  // Both states of the detail screen: read, and not read yet. The answer lives
+  // in a module-level object, never in S, so it is seeded directly.
+  { key:'emailDetail', setup:`S.emails = [{ id:'m1', subject:'Yearbook orders close Friday', from:'office@school.org', at:'2026-09-03T10:00:00Z' }];
+      emailHowTo = { m1: { ok:true, what:'Order a yearbook before Friday.',
+        steps:['Go to the order page','Enter the student ID','Pay by card or send cash to the office'],
+        links:['jostens.com/12345'], cost:'$28', codes:['Student ID'], deadline:'Friday 12 September',
+        contact:'office@school.org', subject:'Yearbook orders close Friday', from:'office@school.org' } };
+      view = { tab:'events', sub:'emailDetail', data:{ msgId:'m1' } }` },
+  { key:'emailDetail-unread', setup:`S.emails = [{ id:'m1', subject:'Yearbook orders close Friday', from:'office@school.org', at:'2026-09-03T10:00:00Z' }];
+      emailHowTo = {}; view = { tab:'events', sub:'emailDetail', data:{ msgId:'m1' } }` },
   { key:'noteGroups', setup:`S.noteFolders = [{ id:'f1', name:'School', deleted:false }]; S.noteLabels = [{ id:'l1', name:'forms', deleted:false }]; S.notes = [{ id:'n1', title:'Supply list', body:'2 binders', pinned:false, personIds:[], folderId:'f1', labelIds:['l1'], color:'', archived:false, created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteGroups', data:null }` },
   { key:'noteArchive', setup:`S.notes = [{ id:'n1', title:'Old form', body:'- [x] signed\\n- [ ] returned', pinned:false, personIds:[], folderId:null, labelIds:[], color:'#7C3AED', archived:true, created:'2026-08-27T10:00:00.000Z', updated:'2026-08-27T10:00:00.000Z', deleted:false }]; view = { tab:'notes', sub:'noteArchive', data:null }` },
   { key:'rewards',    setup:`sub('rewards')` },

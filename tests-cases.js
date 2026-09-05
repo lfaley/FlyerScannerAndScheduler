@@ -6313,6 +6313,124 @@ function troubleBox(){
 // The local model path (v10.8). Researched against Ollama's own docs and source
 // before any of this was written; every claim below has a citation in the code.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// "What did this email say?" (v10.9) — Phase 2 of EMAIL-QUESTIONS-PLAN.md.
+// A different question from the triage brief: that one asks whether an email
+// matters, this one assumes it does and asks HOW TO ACT.
+// ---------------------------------------------------------------------------
+test('the how-to answer copies links, amounts and codes as written (v10.9)', () => {
+  const a = parseEmailHowTo(JSON.stringify({
+    what:'Order a yearbook before Friday.',
+    steps:['Go to the order page', 'Enter the student ID'],
+    links:['https://jostens.com/order?school=12345&y=2026'],
+    cost:'$28', codes:['STU-88231'], deadline:'Friday 12 September', contact:'office@school.org' }));
+  assert.strictEqual(a.ok, true);
+  assert.deepStrictEqual(a.links, ['https://jostens.com/order?school=12345&y=2026'],
+    'the link was tidied — a wrong order link is worse than no link');
+  assert.strictEqual(a.cost, '$28');
+  assert.deepStrictEqual(a.codes, ['STU-88231']);
+  assert.strictEqual(a.deadline, 'Friday 12 September');
+});
+
+test('a junk answer says nothing rather than something wrong (v10.9)', () => {
+  const a = parseEmailHowTo('I could not read that, sorry!');
+  assert.strictEqual(a.ok, false, 'unparseable text was treated as a real answer');
+  assert.deepStrictEqual(a.links, [], 'it invented a link from prose');
+  assert.strictEqual(a.cost, null);
+  assert.ok(/could not read/i.test(a.raw), 'the raw reply was thrown away, so the user sees nothing at all');
+  // A model that answers with a fenced object is still a real answer.
+  const b = parseEmailHowTo('```json\n{"what":"Pay $5","links":[],"steps":[]}\n```');
+  assert.strictEqual(b.ok, true, 'a fenced reply was rejected');
+  assert.strictEqual(b.what, 'Pay $5');
+});
+
+test('the answer is never written to the save file (v10.9)', () => {
+  // The whole shape of Phase 1 was to keep email contents out of backups. An
+  // answer that persisted would put them straight back in.
+  boot(GOOD);
+  S.emails = [{ id:'m1', subject:'Yearbook', from:'office@school.org', at:'2026-09-03T10:00:00Z' }];
+  emailHowTo = { m1: { ok:true, what:'Order a yearbook.', steps:[], links:['jostens.com/12345'],
+    cost:'$28', codes:[], deadline:null, contact:null } };
+  save();
+  const written = JSON.stringify(JSON.parse(localStorage.getItem('flyersnap')));
+  assert.ok(!/jostens/.test(written), 'the email answer was persisted into the save file');
+  assert.ok(!/Order a yearbook/.test(written), 'the email answer was persisted into the save file');
+  // ...and the index row itself is still there, because that IS meant to persist.
+  assert.ok(/Yearbook/.test(written), 'the email index row was lost');
+});
+
+atest('reading an email really does not persist it (v10.9)', async () => {
+  // THE REAL PATH. MEASURED: adding an S.emailAnswers write inside
+  // askAboutEmail left the seeded-state test GREEN, because that test never
+  // runs askAboutEmail -- it puts the answer in the module variable itself and
+  // calls save(). The only way to prove nothing is persisted is to drive the
+  // function that would do the persisting.
+  boot(GOOD);
+  S.emails = [];
+  emailHowTo = {};
+  const realFetch = fetchMessage, realAI = callAI, realSub = sub, realRender = render;
+  fetchMessage = (msgId) => Promise.resolve({ ok:true, msgId, subject:'Yearbook orders',
+    from:'office@school.org', received:'2026-09-03T10:00:00Z',
+    text:'Order at jostens.com/12345 for $28 by Friday.', attachments:[] });
+  callAI = () => Promise.resolve(JSON.stringify({ what:'Order a yearbook before Friday.',
+    steps:['Go to the order page'], links:['jostens.com/12345'], cost:'$28',
+    codes:['STU-88231'], deadline:'Friday', contact:null }));
+  sub = () => {}; render = () => {};
+  try {
+    await askAboutEmail('m1');
+  } finally {
+    fetchMessage = realFetch; callAI = realAI; sub = realSub; render = realRender;
+  }
+  // The answer is in memory...
+  assert.strictEqual(emailHowTo['m1'].cost, '$28', 'the answer was not produced at all');
+  // ...and reading it recorded the email in the index, which IS meant to persist.
+  assert.deepStrictEqual(S.emails.map(e => e.id), ['m1'], 'reading an email did not record it');
+  // ...but none of the CONTENT reached the save file.
+  const written = localStorage.getItem('flyersnap');
+  ['jostens', '\$28', 'STU-88231', 'Order a yearbook'].forEach(needle => {
+    assert.ok(!new RegExp(needle).test(written),
+      'the email answer was persisted into the save file: ' + needle);
+  });
+});
+
+test('the detail screen shows only what the email actually said (v10.9)', () => {
+  // An empty "Cost: none" row reads as a fact about the email and is not one.
+  boot(GOOD);
+  S.emails = [{ id:'m1', subject:'Yearbook', from:'office@school.org', at:'2026-09-03T10:00:00Z' }];
+  emailHowTo = { m1: { ok:true, what:'Order a yearbook before Friday.', steps:['Go to the order page'],
+    links:['jostens.com/12345'], cost:null, codes:[], deadline:'Friday', contact:null } };
+  emailHowToBusy = '';
+  view = { tab:'events', sub:'emailDetail', data:{ msgId:'m1' } };
+  const m = { innerHTML:'' };
+  renderEmailDetail(m);
+  assert.ok(/jostens\.com\/12345/.test(m.innerHTML), 'the link is not shown');
+  assert.ok(/Friday/.test(m.innerHTML), 'the deadline is not shown');
+  assert.ok(!/Cost/.test(m.innerHTML), 'it shows a Cost heading for an email that named no cost');
+  assert.ok(!/Codes and reference/.test(m.innerHTML), 'it shows a Codes heading with nothing in it');
+  assert.ok(/Nothing from the email is saved/.test(m.innerHTML),
+    'it does not say that the content was not kept');
+});
+
+test('the email question is offered only where it can work (v10.9)', () => {
+  // An event typed in by hand has no message to go back to, so offering the
+  // button would be offering something that cannot work.
+  boot(GOOD);
+  S.events = [
+    { id:'e1', title:'Yearbook deadline', date:dayAhead(5), kind:'deadline', deleted:false, msgId:'m1' },
+    { id:'e2', title:'Typed by hand',     date:dayAhead(6), kind:'event',    deleted:false, msgId:null },
+  ];
+  const labels = (id) => {
+    const real = showSheet; let btns = [];
+    showSheet = (t, sub2, b) => { btns = b || []; };
+    try { eventActions(id); } finally { showSheet = real; }
+    return btns.map(b => b.label);
+  };
+  assert.ok(labels('e1').some(l => /What did this email say/.test(l)),
+    'an event from an email is not offering the question');
+  assert.ok(!labels('e2').some(l => /What did this email say/.test(l)),
+    'an event with no email is offering a button that cannot work');
+});
+
 test('an image type Ollama refuses is named, not sent (v10.8)', () => {
   // decodeImageURL matches the data-URI prefix against exactly
   // {jpeg,jpg,png,webp}, case-sensitively. Everything else is a 400

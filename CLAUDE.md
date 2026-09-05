@@ -386,14 +386,21 @@ gets `Cannot find module 'playwright'` from those two tools and nothing else.
 `npm test`, `npm run audit` and `npm run preview` are aliases for the three
 commands below.
 
-- `node tests.js` — 926 tests: data safety, migrations, inline-handler
+- `node tests.js` — 933 tests: data safety, migrations, inline-handler
   resolution, module drift, CSS drift, icon-sprite integrity, no-emoji-chrome,
   fixed-position safety, accessibility, WCAG contrast in both themes,
   and the self-contained-boot guard.
-- `node tools/a11y-audit.js` — ALL 48 entries in its `SCREENS` table, in the
+- `node tools/a11y-audit.js` — ALL 52 entries in its `SCREENS` table, in the
   RENDERED DOM: accessible names, tap targets, ARIA state, horizontal
   overflow, **whether anything is sitting on top of a control** (v10.1), and
   exactly one `<h1>`.
+  **IT CANNOT TELL YOU A SCREEN IS REACHABLE.** It opens each one by setting
+  `view` directly — which is what lets it audit them at all, and exactly why it
+  is blind to a screen nothing navigates to. That has now happened twice: the
+  local-model self-test (fixed v10.8) and the Emails screen (v10.9, orphaned
+  the same day it was written, caught in v10.10). `tests-modules.js` now fails
+  the build on any sub-screen whose name appears nowhere but its own
+  registration.
   The source tests cannot see a name that computes to nothing at runtime;
   this found exactly that in v9.1, and a 24px back button in v9.15.
   `--only=<key>` for one screen. **Adding a sub-screen means adding it to the
@@ -419,7 +426,7 @@ commands below.
   does not cover it — **it renders the 48 SCREENS, and a sheet is not a screen.**
   The vm harness has no layout at all. If a control's problem is *where it is*,
   only this harness can tell you.
-  27 checks as of v10.8. Two of them exist because the vm harness structurally
+  28 checks as of v10.10. Two of them exist because the vm harness structurally
   cannot reach the code: `saveEventEdit` opens with `syncEventForm()`, which
   re-reads the live inputs (every stub reports `value:''`), and the assistant's
   second "which one did you mean?" is pushed from inside `confirmPendingAction`

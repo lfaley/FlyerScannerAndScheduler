@@ -5059,7 +5059,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.8';
+const APP_VERSION = 'v10.10';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -6073,6 +6073,7 @@ function render(){
     busy:renderBusy, eventEdit:renderEventEdit, ledger:renderLedger,
     shareEvents:renderShareEvents, dedupe:renderDedupe, senders:renderSenders, pickExport:renderPickExport, exportQueue:renderExportQueue,
     problems:renderProblems,     selfTest:renderSelfTest, compare:renderCompare, bench:renderBench,
+    emails:renderEmails, emailDetail:renderEmailDetail,
     setPeople:renderSetPeople, setAI:renderSetAI, setCapabilities:renderSetCapabilities,
     setReminders:renderSetReminders, setAppearance:renderSetAppearance,
     setBackup:renderSetBackup, setTrouble:renderSetTrouble,
@@ -6348,6 +6349,23 @@ function renderEvents(m){
     <span>${evts.length ? `<button class="linkbtn" style="padding:2px 8px" onclick="toggleSelectMode()">${selectMode?'Cancel':'Select'}</button>` : ''}
     <span class="meta" style="font-size:12px">${past.length} past${filtered ? ' · filtered' : ''}</span></span>
   </div>`;
+
+  // The way in to the Emails screen (v10.10). It was registered, rendered by the
+  // audit -- which sets `view` directly -- and reachable by nothing. Shown only
+  // once there is something on it, because a row leading to an empty screen is
+  // a worse answer than no row.
+  if((S.emails || []).length){
+    const n = S.emails.length;
+    html += `<div class="card row" role="button" tabindex="0"
+        aria-label="Emails ${esc(aiName())} has read"
+        onclick="sub('emails')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sub('emails')}">
+      ${ico('mail', {cls:'rowicon'})}
+      <div class="grow"><div class="title" style="font-size:15px">Emails ${esc(aiName())} has read</div>
+        <div class="meta" style="font-size:12px">${n} kept · ask what one said, even if it had no dates</div></div>
+      ${ico('chevron-right', {cls:'rowicon'})}
+    </div>`;
+  }
 
   const people = allPeople();
   if(people.length){
@@ -8894,6 +8912,169 @@ async function reviewOneEmail(payload, msgId){
   return parseEaReviewOne(raw, msgId, payload.from);
 }
 
+// ---------------------------------------------------------------------------
+// "What did this email say?" (v10.9)
+//
+// A DIFFERENT QUESTION from the review brief above. That one triages -- does
+// this matter, is there a date, should I bin it. This one assumes it matters
+// and asks HOW TO ACT: the link, the amount, the code, what to bring, who to
+// pay. Logan's case: an email said yearbooks were due Friday, the app captured
+// the deadline and threw the ordering instructions away.
+//
+// The answer is NOT stored. It is re-fetched and re-read each time, which keeps
+// email contents out of the save file and therefore out of every backup -- the
+// same reason the email index holds four fields and no body.
+// ---------------------------------------------------------------------------
+let emailHowTo = {};      // msgId -> parsed answer, this session only
+let emailHowToBusy = '';  // msgId being read right now, or ''
+
+function emailHowToPrompt(){
+  return `You are helping a busy parent ACT on this email. They already know it matters and roughly when it is due. What they need is the practical detail, which is easy to lose in a long email or a flyer image.
+
+Read EVERYTHING above -- the body and any attached flyer image or PDF -- and respond with ONLY a JSON object (no markdown, no commentary):
+{"what":"ONE sentence: what this is asking the parent to do","steps":["each concrete step, in order, max 12 words each"],"links":["any web address exactly as written"],"cost":"any amount of money, exactly as written, else null","codes":["any order number, student ID, reference or coupon code, exactly as written"],"deadline":"any date or cut-off it names, else null","contact":"who to ask, with email or phone if given, else null"}
+
+RULES:
+- Copy links, amounts and codes EXACTLY. Do not tidy, shorten or guess them. These are the whole point.
+- If the email does not say something, use null or an empty list. Never invent a link, a price or a code.
+- steps: only what the email actually says to do. If it says nothing to do, use an empty list.`;
+}
+
+const EMAIL_HOWTO_GROUNDING = 'Be literal. Copy web addresses, amounts and reference codes character for character from the source. If a detail is not present, leave it out rather than guessing -- a wrong order link is worse than no link.';
+
+/** Tolerant parse. Never throws; a junk reply becomes an honest empty answer. */
+function parseEmailHowTo(raw){
+  const arr = (v) => Array.isArray(v) ? v.map(x => String(x)).filter(Boolean).slice(0, 12) : [];
+  try{
+    let t = String(raw || '').replace(/```json|```/g, '').trim();
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if(a >= 0 && b > a) t = t.slice(a, b + 1);
+    const o = JSON.parse(t);
+    return {
+      what: (o && o.what) ? String(o.what) : '',
+      steps: arr(o && o.steps),
+      links: arr(o && o.links),
+      cost: (o && o.cost) ? String(o.cost) : null,
+      codes: arr(o && o.codes),
+      deadline: (o && o.deadline) ? String(o.deadline) : null,
+      contact: (o && o.contact) ? String(o.contact) : null,
+      ok: true,
+    };
+  }catch(e){
+    // Say nothing rather than something wrong. The raw text is still offered
+    // on screen, so the user can read it themselves.
+    return { what:'', steps:[], links:[], cost:null, codes:[], deadline:null, contact:null,
+      ok:false, raw: String(raw || '').slice(0, 2000) };
+  }
+}
+
+/**
+ * Fetch the email again and read it for what to DO.
+ *
+ * Re-fetched every time on purpose: the body is not kept anywhere, and
+ * fetchMessage goes straight to Gmail by id, so this works for any message
+ * still in the mailbox -- not only the last 60 the watcher queued.
+ */
+async function askAboutEmail(msgId){
+  if(!msgId || emailHowToBusy) return;
+  const setupErr = aiSetupError();
+  if(setupErr){ alert(setupErr); return; }
+  emailHowToBusy = msgId;
+  sub('emailDetail', { msgId });
+  try{
+    const payload = await fetchMessage(msgId);
+    noteEmailSeen(msgId, payload.subject, payload.from, payload.received);
+    const blocks = emailBlocks(payload, true);
+    if(!blocks.length){
+      blocks.push({ type:'text', text:'From: ' + (payload.from || 'unknown') +
+        '\nSubject: ' + (payload.subject || '') + '\n(No readable text and no attachment.)' });
+    }
+    blocks.push({ type:'text', text: emailHowToPrompt() });
+    const raw = await callAI(blocks, 700, EMAIL_HOWTO_GROUNDING, 'email.howto');
+    emailHowTo[msgId] = Object.assign(parseEmailHowTo(raw),
+      { subject: payload.subject || '', from: payload.from || '' });
+    save();
+  }catch(err){
+    emailHowTo[msgId] = { error: explainError(classifyError(err), aiProvider(), err && err.message) };
+  }finally{
+    emailHowToBusy = '';
+    render();
+  }
+}
+
+function renderEmailDetail(m){
+  const msgId = (view.data && view.data.msgId) || '';
+  const row = (S.emails || []).find(e => e && e.id === msgId);
+  setHeader(row ? (row.subject || 'Email') : 'Email', true);
+  const a = emailHowTo[msgId];
+  if(emailHowToBusy === msgId){
+    m.innerHTML = `<div class="spin" style="padding:24px"><div class="spinner"></div>
+      <div class="meta">${esc(aiName())} is reading it…</div></div>`;
+    return;
+  }
+  const head = row ? `<div class="help">${esc(row.from || '')}${row.at ? ' · ' + friendly(String(row.at).slice(0,10)) : ''}</div>` : '';
+  if(!a){
+    m.innerHTML = head + `<div class="card"><div class="eb">Not read yet.</div></div>
+      <button class="btn" onclick="askAboutEmail('${esc(msgId)}')">${ico('sparkles')}What did this email say?</button>`;
+    return;
+  }
+  if(a.error){
+    m.innerHTML = head + `<div class="card" style="border-left:5px solid var(--red-accent)">
+      <div style="white-space:pre-wrap">${esc(a.error)}</div></div>
+      <button class="btn alt" onclick="askAboutEmail('${esc(msgId)}')">Try again</button>`;
+    return;
+  }
+  // Sections appear only when the email actually said something. An empty
+  // "Cost: none" line reads as a fact about the email and is not one.
+  const list = (label, items) => items && items.length
+    ? `<div class="sect">${label}</div><div class="card">` +
+      items.map(x => `<div style="margin-bottom:6px;word-break:break-word;-webkit-user-select:text;user-select:text">${esc(x)}</div>`).join('') + `</div>` : '';
+  const one = (label, v) => v
+    ? `<div class="sect">${label}</div><div class="card" style="-webkit-user-select:text;user-select:text">${esc(v)}</div>` : '';
+  let html = head;
+  if(a.what) html += `<div class="card"><div style="font-weight:700">${esc(a.what)}</div></div>`;
+  html += list('Steps', a.steps);
+  // Selectable, never auto-opened: a link out of an email is exactly the thing
+  // not to make one tap away from a mis-read.
+  html += list('Links', a.links);
+  html += one('Cost', a.cost);
+  html += list('Codes and reference numbers', a.codes);
+  html += one('Deadline', a.deadline);
+  html += one('Who to ask', a.contact);
+  if(!a.ok){
+    html += `<div class="sect">Could not read it as a list</div>
+      <div class="card"><div class="help">${esc(aiName())} did not answer in the expected shape, so here is what he said:</div>
+      <div style="white-space:pre-wrap;-webkit-user-select:text;user-select:text">${esc(a.raw || '')}</div></div>`;
+  } else if(!a.what && !a.steps.length && !a.links.length && !a.cost && !a.codes.length){
+    html += `<div class="card"><div class="eb">Nothing to act on — this one just tells you something.</div></div>`;
+  }
+  html += `<div class="help" style="margin-top:10px">Read fresh from your mailbox just now. Nothing from the email is saved on this phone.</div>
+    <button class="btn alt" style="margin-top:6px" onclick="askAboutEmail('${esc(msgId)}')">${ico('sparkles')}Read it again</button>`;
+  m.innerHTML = html;
+}
+
+function renderEmails(m){
+  setHeader('Emails', true);
+  const rows = (S.emails || []).slice().reverse();
+  if(!rows.length){
+    m.innerHTML = `<div class="empty"><div class="et">No emails yet</div>
+      <div class="eb">Emails from your watched senders appear here once ${esc(aiName())} has read them,
+      so you can go back and ask what one actually said.</div></div>`;
+    return;
+  }
+  m.innerHTML = `<div class="help">Every email ${esc(aiName())} has read, newest first — including the ones
+    that had no dates in them. Tap one to ask what it says.</div>` +
+    rows.map(e => `<div class="card row" role="button" tabindex="0"
+        aria-label="What did this email say: ${esc(e.subject || 'no subject')}"
+        onclick="sub('emailDetail', { msgId:'${esc(e.id)}' })"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sub('emailDetail', { msgId:'${esc(e.id)}' })}">
+      ${ico('mail', {cls:'rowicon'})}
+      <div class="grow"><div class="title" style="font-size:15px">${esc(e.subject || '(no subject)')}</div>
+        <div class="meta" style="font-size:12px">${esc(e.from || '')}${e.at ? ' · ' + friendly(String(e.at).slice(0,10)) : ''}</div></div>
+      ${ico('chevron-right', {cls:'rowicon'})}
+    </div>`).join('');
+}
+
 // EA persona + strict single-object JSON contract for one email (may include a flyer image).
 function eaReviewOnePrompt(){
   return `You are a sharp, trusted executive assistant for a busy parent. This email was scanned for calendar dates and none were imported. Read EVERYTHING above — the email body AND any attached flyer image or PDF — and write a one-glance brief so the parent can decide fast whether it matters.
@@ -9521,6 +9702,10 @@ function eventActions(id){
   showSheet(e.title, friendly(e.date) + (e.time?' · '+fmt12(e.time):''), [
     {label: e.exported ? '📆 Calendar file again' : '📆 Add to calendar (with alerts)', fn:()=>downloadICS(e)},
     {label:'Edit event', icon:'edit', fn:()=>openEventEdit(e.id)},
+    // Only when this event came from an email we can still fetch. Offering it
+    // on a hand-typed event would be a button that cannot work.
+    ...(e.msgId ? [{ label:'What did this email say?', icon:'mail',
+                     fn:()=>askAboutEmail(e.msgId) }] : []),
     // softDelete, not markDeleted+save+render: this open-coded three of its four
     // steps and left out the fourth, so removing an event from here was the one
     // delete in the app that said nothing and offered nothing (v9.99).
@@ -13689,6 +13874,7 @@ Object.assign(window, {
   closeRecipeForm,
   delKid,
   deleteSelectedProblems,
+  askAboutEmail,
   dismissAllEmailTrouble,
   dismissGroup,
   dismissPendingEmail,
