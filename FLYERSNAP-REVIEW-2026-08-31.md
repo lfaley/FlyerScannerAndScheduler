@@ -840,3 +840,67 @@ Test-Path .git\index.lock
 `False` means you are clear to retry.
 
 **No code was changed by this review.** Nothing needs pushing except this file, if you want it kept.
+
+---
+
+## Routing self-check, 4 Sep 2026 — checking my own v9.96 change
+
+v9.96 narrowed `quickRoute`'s `TOPIC` regex (word boundaries, `s?` suffixes) and
+widened its change-verb denylist by 17 verbs. **Neither was re-measured against
+the corpus afterwards.** This is that measurement. Everything below runs with no
+network and no cost.
+
+### What quickRoute does with the 36-case corpus today
+
+```
+node tools/eval-router.js --offline   ->  passes: nothing short-circuits into a
+                                          write, every expected intent validates
+node tools/eval-router.js --dry       ->  36/36, intent accuracy 100%
+node tools/eval-extraction.js --dry   ->  precision 1.000 recall 1.000 f1 1.000
+```
+
+Per-case, driven through the shipped `quickRoute` in a real browser:
+
+| | count |
+|---|---|
+| read cases | 13 |
+| **answered locally — no model round-trip, no cost** | **9** |
+| sent to the model instead | 4 |
+| **write/other cases short-circuited locally** | **0** — correct, quickRoute is read-only |
+
+All nine local answers matched the corpus's expected intent. Zero writes were
+short-circuited, which is the property that actually matters.
+
+### The four that go to the model, and why each one should
+
+| sentence | expected | the word that sends it |
+|---|---|---|
+| `"What did Olivia do today?"` | `ask_chores` | `did` |
+| `"Open settings"` | `open_screen` | `open` |
+| `"Take me to the shopping list"` | `open_screen` | `take me` |
+| `"Braelyn's events at the school next month"` | `find_events` | not a question — no verb, no question word |
+
+**`did` is proven load-bearing by the corpus itself.** Searching all 36 cases
+for it returns two:
+
+```
+[read ] "What did Olivia do today?"  -> ask_chores
+[write] "Olivia did the bins"        -> complete_chore
+```
+
+One read and one **write**, sharing the word. Taking `did` off the denylist to
+save a round-trip on the first would short-circuit the second — a write turned
+into a read answer, which is the exact defect the denylist exists to prevent.
+**Do not remove it.**
+
+**`open` and `take me` are the arguable pair.** In this corpus the only
+sentences containing them are the two `open_screen` reads, so today they cost a
+round-trip and prevent nothing. But 36 curated cases are not the space of what
+someone might type: "open a new list" and "add and open it" are ordinary
+phrasings that create data. A corpus with no counter-example is not proof that
+none exists, and the saving is one round-trip on a rare sentence.
+
+**Conclusion: no change.** The behaviour is deliberate and correct; it simply
+had not been measured since v9.96. Recorded here so the next reader who notices
+"Open settings" taking a model call knows it is a decision, not an oversight,
+and knows which of the four verbs is the one that must never move.

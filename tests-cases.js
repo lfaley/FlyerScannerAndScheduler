@@ -6297,6 +6297,139 @@ function troubleBox(){
 // one only binds calls that go through this app. It exists for the thing that
 // actually happens -- the app surprising you -- not for a key that has left it.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// The email index (v10.7). Phase 1 of "ask Gordon about an email".
+//
+// MEASURED before: an email that produced no event left NO trace. The body is
+// fetched into a local variable, read for dates and dropped; the only durable
+// residue was extracted events, the bare ids in seenMsgs, and Problem Log rows.
+// So "order yearbooks at this link by Friday" contributed a deadline and threw
+// the ordering instructions away, and a dateless email vanished entirely.
+//
+// A REFERENCE, NOT A COPY: id, subject, sender, date. The body stays in Gmail
+// and fetchMessage() brings it back on demand.
+// ---------------------------------------------------------------------------
+test('every email seen is recorded, including one that produced nothing (v10.7)', () => {
+  boot(GOOD);
+  S.emails = [];
+  noteEmailSeen('m1', 'Yearbook orders close Friday', 'office@school.org', '2026-09-03T10:00:00Z');
+  noteEmailSeen('m2', 'No dates in this one at all', 'pto@school.org', '2026-09-03T11:00:00Z');
+  assert.deepStrictEqual(S.emails.map(e => e.id), ['m1', 'm2'],
+    'an email that yields no event was not recorded');
+  assert.strictEqual(S.emails[0].subject, 'Yearbook orders close Friday');
+  assert.strictEqual(S.emails[0].from, 'office@school.org');
+});
+
+test('the email index holds no message body (v10.7)', () => {
+  // The point of the design. Anything stored here rides along in every backup
+  // export, so it is deliberately four short fields and nothing else.
+  boot(GOOD);
+  S.emails = [];
+  noteEmailSeen('m1', 'Subject', 'a@b.c', '2026-09-03T10:00:00Z');
+  assert.deepStrictEqual(Object.keys(S.emails[0]).sort(), ['at', 'from', 'id', 'subject'],
+    'the index grew a field: ' + JSON.stringify(S.emails[0]));
+});
+
+test('seeing the same email twice updates it rather than duplicating (v10.7)', () => {
+  boot(GOOD);
+  S.emails = [];
+  noteEmailSeen('m1', 'First read', 'a@b.c', '2026-09-03T10:00:00Z');
+  noteEmailSeen('m1', 'Subject corrected', 'a@b.c', '2026-09-03T10:00:00Z');
+  assert.strictEqual(S.emails.length, 1, 'a retry added a second row for the same message');
+  assert.strictEqual(S.emails[0].subject, 'Subject corrected', 'the newer read did not win');
+});
+
+test('the index is bounded by count AND by age (v10.7)', () => {
+  // Two bounds doing different work: age stops a reference outliving any use
+  // for it, count stops a heavy month filling the save file.
+  boot(GOOD);
+  S.emails = [];
+  for(let i = 0; i < MAX_EMAIL_INDEX + 20; i++){
+    noteEmailSeen('m' + i, 'Subject ' + i, 'a@b.c', new Date().toISOString());
+  }
+  assert.strictEqual(S.emails.length, MAX_EMAIL_INDEX, 'the count bound did not hold');
+  assert.strictEqual(S.emails[S.emails.length - 1].id, 'm' + (MAX_EMAIL_INDEX + 19),
+    'it dropped the NEWEST rather than the oldest');
+  // ...and the age bound, which only prune applies.
+  S.emails = [
+    { id:'old', subject:'Two years ago', from:'a@b.c', at:'2024-01-01T10:00:00Z' },
+    { id:'new', subject:'This morning', from:'a@b.c', at: new Date().toISOString() },
+  ];
+  pruneData();
+  assert.deepStrictEqual(S.emails.map(e => e.id), ['new'], 'an ancient reference survived the cleanup');
+});
+
+test('a saved event remembers WHICH email it came from (v10.7)', () => {
+  // extractFromRawItems has always put msgId on the pending row and saveReview
+  // has always dropped it, so an event knew it came from "Email" and from whom
+  // but not which message -- no way back to the thing that produced it.
+  boot(GOOD);
+  S.events = [];
+  pendingEvents = [
+    // `selected`, not `include` -- that is the field saveReview filters on.
+    { title:'Yearbook order deadline', date: dayAhead(5), kind:'deadline', selected:true,
+      msgId:'m1', from:'office@school.org', personIds:[], notes:null, time:null, endTime:null, location:null },
+    { title:'Typed in by hand', date: dayAhead(6), kind:'event', selected:true,
+      personIds:[], notes:null, time:null, endTime:null, location:null },
+  ];
+  pendingSource = 'Email';
+  saveReview();
+  const fromEmail = S.events.find(e => e.title === 'Yearbook order deadline');
+  const byHand = S.events.find(e => e.title === 'Typed in by hand');
+  assert.ok(fromEmail, 'the event was not saved at all');
+  assert.strictEqual(fromEmail.msgId, 'm1', 'the saved event lost its link to the email');
+  assert.strictEqual(byHand.msgId, null, 'an event with no email got a msgId anyway');
+});
+
+test('a junk emails collection is coerced on load, like every other one (v10.7)', () => {
+  // arrayKeys is derived from blank(), so a NEW collection is covered the day
+  // it is added -- no list to keep in step. This proves that held for this one.
+  // `events` must be present and an array or adoptParsed rejects the whole
+  // file -- that is its shape check, not something this test is about.
+  const out = adoptParsed({ schemaVersion: 10, events: [], emails: 'not an array' });
+  assert.ok(Array.isArray(out.emails), 'a hand-edited save could reach the app with emails as a string');
+  assert.deepStrictEqual(out.emails, []);
+});
+
+atest('reading an email records it, even when it yields nothing (v10.7)', async () => {
+  // THE WIRING, not the unit. MEASURED: deleting the noteEmailSeen call from
+  // extractFromRawItems left every other test in this group GREEN, because they
+  // all call the function directly. The feature IS the wiring.
+  boot(GOOD);
+  S.emails = [];
+  const realFetch = fetchMessage, realExtract = extractFromEmailPayload;
+  fetchMessage = (msgId) => Promise.resolve({
+    ok:true, msgId, subject:'Yearbook orders close Friday', from:'office@school.org',
+    received:'2026-09-03T10:00:00Z', text:'Order at example.com for $28.', attachments:[] });
+  // No events and no problems: the case that used to vanish without trace.
+  extractFromEmailPayload = () => Promise.resolve({ events:[], problems:[], notes:[] });
+  try {
+    await extractFromRawItems([{ msgId:'m-wired', subject:'Yearbook orders close Friday' }]);
+  } finally { fetchMessage = realFetch; extractFromEmailPayload = realExtract; }
+  assert.deepStrictEqual(S.emails.map(e => e.id), ['m-wired'],
+    'reading an email did not record it: ' + JSON.stringify(S.emails));
+  assert.strictEqual(S.emails[0].subject, 'Yearbook orders close Friday',
+    'it recorded the id but not enough to recognise the email later');
+  assert.strictEqual(S.emails[0].from, 'office@school.org');
+});
+
+atest('an email that FAILS to read is still recorded (v10.7)', async () => {
+  // Recorded before extraction, on purpose: an email that throws is exactly the
+  // one worth being able to go back to.
+  boot(GOOD);
+  S.emails = [];
+  const realFetch = fetchMessage, realExtract = extractFromEmailPayload;
+  fetchMessage = (msgId) => Promise.resolve({
+    ok:true, msgId, subject:'A PDF Gordon cannot read', from:'pto@school.org',
+    received:'2026-09-03T10:00:00Z', text:'', attachments:[] });
+  extractFromEmailPayload = () => { throw new Error('UNSUPPORTED_BLOCK:document'); };
+  try {
+    await extractFromRawItems([{ msgId:'m-failed', subject:'A PDF Gordon cannot read' }]);
+  } finally { fetchMessage = realFetch; extractFromEmailPayload = realExtract; }
+  assert.deepStrictEqual(S.emails.map(e => e.id), ['m-failed'],
+    'an email that could not be read left no trace at all');
+});
+
 test('spend is charged from what Anthropic says it used (v10.5)', () => {
   boot(GOOD);
   S.settings.aiSpend = null;

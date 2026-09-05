@@ -1164,7 +1164,7 @@ let saveFailed = null;
 let storagePersisted = null;
 
 function blank(){ return { events:[], kids:[], chores:[], completions:[], rewards:[], problems:[],
-  redemptions:[], lists:[], listItems:[], notes:[], noteFolders:[], noteLabels:[],
+  redemptions:[], lists:[], listItems:[], notes:[], noteFolders:[], noteLabels:[], emails:[],
   ask:{ turns:[] }, aiLog:[],
   settings:{ apiKey:'', alerts:{ deadline:[7,1], event:[2,0] }, extraReminders:false,
     watcherUrl:'', watcherToken:'', seenMsgs:[], starCarry:{}, senderTags:{},
@@ -4235,6 +4235,15 @@ const KEEP_COMPLETIONS_DAYS = 365;   // a year of chore history stays browsable
 // live blob plus three snapshots), settles it. See DATA-LOSS-PLAN.md 1.4.
 const KEEP_SOFT_DELETED_DAYS = 30;   // tombstones for deleted rows
 const KEEP_PAST_EVENTS_DAYS = 730;   // two years of past events
+// The email index (v10.7). A REFERENCE, not a copy: msgId, subject, sender and
+// date, so an email can be re-fetched from Gmail on demand and asked about.
+// The body is never stored -- see noteEmailSeen.
+//
+// A year, and 300 entries, because both bounds do different work: the age bound
+// stops a mailbox reference outliving any use for it, and the count bound stops
+// a heavy month filling the save file. Whichever bites first wins.
+const KEEP_EMAIL_INDEX_DAYS = 365;
+const MAX_EMAIL_INDEX = 300;
 
 function daysAgoISO(n){
   const d = new Date();
@@ -4297,6 +4306,15 @@ function pruneData(){
   // v10.3: these two never aged out at all, so a deleted folder sat in the save
   // file forever. Now that they are in Recently Deleted they follow its
   // countdown like every other row.
+  // The email index: two bounds, and whichever bites first wins. These are
+  // references to messages, not soft-deleted rows, so they age by their own
+  // date rather than by a tombstone.
+  const emailCutoff = daysAgoISO(KEEP_EMAIL_INDEX_DAYS);
+  const emailsBefore = (S.emails || []).length;
+  S.emails = (S.emails || [])
+    .filter(e => e && (!e.at || String(e.at).slice(0, 10) >= emailCutoff))
+    .slice(-MAX_EMAIL_INDEX);
+  removed += emailsBefore - S.emails.length;
   S.noteFolders = (S.noteFolders || []).filter(f => !oldDeleted(f));
   S.noteLabels = (S.noteLabels || []).filter(l => !oldDeleted(l));
   removed += before - (S.events.length + S.listItems.length + S.lists.length +
@@ -5006,7 +5024,7 @@ function aiWorkingHint(){
 // One source of truth for the build stamp. The footer and the diagnostics
 // file both read it, so a bug report can never name a build that is not the
 // one that produced it.
-const APP_VERSION = 'v10.6';
+const APP_VERSION = 'v10.7';
 const APP_TAGLINE = 'somewhere to change your mind';
 
 /**
@@ -8444,6 +8462,34 @@ async function extractFromEmailPayload(payload){
   return { events: merged, problems, notes };
 }
 
+/**
+ * Record that this email was seen, whatever came of it.
+ *
+ * WHY THIS EXISTS. Until v10.7 an email that produced no event left no trace at
+ * all: the body is fetched into a local variable, read for dates, and dropped
+ * (measured -- nothing about it reaches S). So a school email saying "order
+ * yearbooks at this link, $28, by Friday" contributed a deadline and threw the
+ * ordering instructions away, and an email with no date at all vanished
+ * completely.
+ *
+ * A REFERENCE, NOT A COPY. Only msgId, subject, sender and date are kept. The
+ * body stays in Gmail, where it already is, and fetchMessage() can bring it
+ * back by id at any time -- that call goes straight to Gmail, so it is not
+ * bounded by the watcher's 60-entry queue. This keeps the save file small and
+ * keeps the email's contents out of every backup export.
+ *
+ * Newest last, one row per message id.
+ */
+function noteEmailSeen(msgId, subject, from, received){
+  if(!msgId) return;
+  if(!Array.isArray(S.emails)) S.emails = [];
+  const row = { id: String(msgId),
+    subject: String(subject || '').slice(0, 160),
+    from: String(from || '').slice(0, 160),
+    at: received || new Date().toISOString() };
+  S.emails = S.emails.filter(e => e && e.id !== row.id).concat([row]).slice(-MAX_EMAIL_INDEX);
+}
+
 async function extractFromRawItems(items){
   const out = [];
   const failures = [];
@@ -8455,6 +8501,9 @@ async function extractFromRawItems(items){
     sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…', hint: label});
     try{
       const payload = await fetchMessage(it.msgId);
+      // Recorded here, not after extraction: an email that yields nothing is
+      // exactly the one worth being able to ask about later.
+      noteEmailSeen(it.msgId, payload.subject || it.subject, payload.from || it.from, payload.received || it.received);
       if(payload.attachments && payload.attachments.length){
         sub('busy', {msg:'Reading email ' + (i+1) + ' of ' + items.length + '…',
                      hint: label + ' (+' + payload.attachments.length + ' attachment)'});
@@ -9920,8 +9969,12 @@ function saveReview(){
     return;
   }
   for(const e of chosen){
+    // msgId rides along (v10.7). extractFromRawItems has always put it on the
+    // pending row and this line has always dropped it, so a saved event knew it
+    // came from "Email" and from whom, but not WHICH email -- there was no way
+    // back to the message that produced it. Null for anything not from email.
     S.events.push({ id:uid(), title:e.title, date:e.date, time:e.time, location:e.location,
-      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, aiSource:e.aiSource||null, exported:false, unread:true, deleted:false });
+      kind:e.kind, notes:e.notes, endTime:(e.time?e.endTime:null)||null, personIds:(e.personIds||(e.kidId?[e.kidId]:[])), kidId:e.kidId||null, source:pendingSource, from:e.from||null, msgId:e.msgId||null, aiSource:e.aiSource||null, exported:false, unread:true, deleted:false });
   }
   // Only mark emails handled once they've actually been reviewed — abandoning
   // the screen leaves them in the queue for next time. Derived from the rows ON
